@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!-- 1. 锁定 Spring Boot 3.5.x 父版本 -->
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>3.5.5</version> <!-- 确保是 3.5.x 系列 -->
+		<relativePath/>
+	</parent>
+
+	<groupId>com.mobileagent</groupId>
+	<artifactId>mobile-ai-demo</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>mobile-ai-demo</name>
+	<description>Demo project for Spring AI Alibaba</description>
+
+	<properties>
+		<java.version>17</java.version>
+		<!-- 2. 定义 SAA 版本变量 -->
+		<spring-ai-alibaba.version>1.1.2.0</spring-ai-alibaba.version>
+	</properties>
+
+	<!-- 3. 【关键】引入 BOM 统一版本管理 -->
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>com.alibaba.cloud.ai</groupId>
+				<artifactId>spring-ai-alibaba-bom</artifactId>
+				<version>${spring-ai-alibaba.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<dependencies>
+		<!-- Spring Boot 基础依赖 -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<!-- 4. 核心：Spring AI Alibaba 通义千问 Starter -->
+		<dependency>
+			<groupId>com.alibaba.cloud.ai</groupId>
+			<artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
+			<version>${spring-ai-alibaba.version}</version>
+		</dependency>
+
+		<!-- Spring AI Alibaba Graph Core (StateGraph, CompiledGraph, OverAllState, MemorySaver) -->
+		<dependency>
+			<groupId>com.alibaba.cloud.ai</groupId>
+			<artifactId>spring-ai-alibaba-graph-core</artifactId>
+			<version>${spring-ai-alibaba.version}</version>
+		</dependency>
+
+		<!-- Spring WebFlux for SSE streaming support -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webflux</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<optional>true</optional>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+</project>
