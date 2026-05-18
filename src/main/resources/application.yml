@@ -1,0 +1,54 @@
+spring:
+  application:
+    name: mobile-ai-demo
+  ai:
+    dashscope:
+      api-key: sk-b545467bbc0f4270a842519ca69d9860
+      chat:
+        options:
+          model: qwen-plus
+
+routing:
+  deterministic:
+    cancel-keywords: ["算了", "不转了", "取消", "不要了", "放弃"]
+    short-answer-pattern: "^\\d+(\\.\\d+)?(元|块|万)?$|^(确认|好的|是的|对|继续|可以)$"
+  model:
+    routing-model: qwen-turbo
+    rewrite-model: qwen-turbo
+    planning-model: qwen-plus
+    confidence-threshold: 0.6
+  verification:
+    max-retries: 1
+
+intents:
+  - name: TRANSFER
+    description: "转账给他人"
+    param-schema: "收款人名称, 转账金额, 用途(可选)"
+    is-write-op: true
+  - name: BILL_QUERY
+    description: "查询账单明细"
+    param-schema: "时间范围, 支出/收入类型(可选)"
+    is-write-op: false
+
+session:
+  pending-agents:
+    max-depth: 3
+    expire-minutes: 30
+    prompt-max-times: 2
+    prompt-timeout-seconds: 30
+  last-agent:
+    expire-minutes: 5
+
+tool-timeout:
+  read-seconds: 30
+  write-seconds: 60
+
+memory:
+  conversation:
+    recent-days: 30
+  domain:
+    top-k: 5
+
+logging:
+  level:
+    com.mobileagent: DEBUG
