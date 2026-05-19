@@ -29,11 +29,12 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  * 子Graph共享的模式:
  * - extractJson / getLatestInput / getStringValue 等工具方法
  * - callExtractModel (buildExtractPrompt + LLM call + parseExtractResult)
- * - 取消信号处理 (isCancelled / cancelExecutionNode / onCleanup)
- *   - cancelAwareExtractParams: 自动拦截_cancelSignal, 子类无需关心
+ * - 取消信号处理:
+ *   - cancelAwareExtractParams: 自动拦截_cancelSignal + LLM取消意图检测, 子类无需关心
  *   - cancelAwareParamRouter: 自动拦截_cancelSignal, 子类只需关心业务路由
  *   - addCancelNode: 一行代码添加cancelExecution节点+END边
  *   - addCancelEdge: 一行代码给paramRouter的edges map添加CANCEL路由
+ *   - detectCancelFromInput: LLM检测用户输入是否表达取消意图(流程统一,提示词可定制)
  * - 公共KeyStrategy注册 (messages, _latestUserInput, _question, _cancelSignal等)
  * - SaverConfig + CompileConfig构建
  * - ask节点条件路由 (CONTINUE→paramRouter / WAIT→END)
@@ -43,6 +44,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  * - buildExtractPrompt(): 提取参数的prompt
  * - parseExtractResult(): 解析LLM返回的JSON
  * - registerCustomKeys(): 注册Graph专用的state keys
+ * - getCancelDetectionContext(): 取消检测的上下文描述(如"正在询问收款人")
  *
  * 子类可覆盖:
  * - onCleanup(): 取消时的自定义清理逻辑 (如释放资源、回滚等)
@@ -71,6 +73,17 @@ public abstract class AbstractGraphConfig {
 
     /** 注册Graph专用的state keys (如transfer.receiver, bill.timePeriod等) */
     protected abstract void registerCustomKeys(Map<String, KeyStrategy> strategies);
+
+    /**
+     * 取消检测上下文 - 子类必须实现, 描述当前Graph正在做什么
+     *
+     * 用于LLM判断用户是否想取消, 例如:
+     * - TransferGraph: "正在向用户询问转账收款人"
+     * - BillQueryGraph: "正在向用户询问账单查询时间范围"
+     * - WealthConsultGraph: "正在向用户询问风险偏好"
+     * - WealthInterpretGraph: "正在向用户询问理财产品名称"
+     */
+    protected abstract String getCancelDetectionContext();
 
     // ==================== 公共工具方法 ====================
 
@@ -124,6 +137,54 @@ public abstract class AbstractGraphConfig {
     }
 
     /**
+     * 使用LLM检测用户输入是否表达取消意图
+     *
+     * 流程统一在基类: LLM调用 + 结果解析
+     * 提示词可定制: 子类通过getCancelDetectionContext()提供上下文
+     *
+     * @param state 当前Graph状态
+     * @return true表示用户想取消当前操作
+     */
+    protected boolean detectCancelFromInput(OverAllState state) {
+        String userInput = getLatestInput(state);
+        if (userInput == null || userInput.isBlank()) return false;
+
+        // 已有cancel信号则无需再检测
+        if (isCancelled(state)) return true;
+
+        String context = getCancelDetectionContext();
+        String prompt = String.format("""
+            你是手机银行智能助手。判断用户是否想取消/放弃/中断当前操作。
+
+            当前场景: %s
+            用户输入: %s
+
+            判断标准:
+            - 用户明确表达不想继续(如"取消""算了""不要了""不查了""不转了""别转了")
+            - 用户表达的否定意图针对当前操作, 而非回答问题
+            - 简单的否定回答(如"不是""不对")不算取消
+
+            只输出JSON:
+            {"cancel": true或false}
+            """, context, userInput);
+
+        try {
+            ChatResponse response = chatModel.call(new Prompt(prompt));
+            String content = response.getResult().getOutput().getText().trim();
+            String json = extractJson(content);
+            var node = objectMapper.readTree(json);
+            boolean cancel = node.has("cancel") && node.get("cancel").asBoolean();
+            if (cancel) {
+                log.info("[{}.detectCancel] LLM detected cancel intent: input={}", getGraphName(), userInput);
+            }
+            return cancel;
+        } catch (Exception e) {
+            log.warn("[{}.detectCancel] LLM call failed, defaulting to no cancel", getGraphName(), e);
+            return false;
+        }
+    }
+
+    /**
      * 取消时的自定义清理逻辑 - 子类可覆盖
      *
      * 典型场景: 释放锁、回滚临时数据、记录审计日志等
@@ -154,22 +215,31 @@ public abstract class AbstractGraphConfig {
     }
 
     /**
-     * 带取消检查的extractParams - 自动拦截_cancelSignal,子类无需关心
+     * 带取消检查的extractParams - 自动拦截_cancelSignal + LLM取消检测,子类无需关心
      *
      * 子类的extractParamsNode实现应使用此方法包装:
      *   private Map<String, Object> extractParamsNode(OverAllState state) {
-     *       if (cancelAwareExtractParams(state)) return Map.of();
+     *       Map<String, Object> cancelResult = cancelAwareExtractParams(state);
+     *       if (cancelResult != null) return cancelResult;
      *       // ... 原有extractParams逻辑 ...
      *   }
      *
-     * @return true表示检测到取消信号(子类应直接return Map.of()), false表示正常执行
+     * 检测逻辑:
+     * 1. 检查_cancelSignal信号(由cancelGraph()注入)
+     * 2. 调用LLM检测用户输入是否表达取消意图, 若是则注入_cancelSignal
+     *
+     * @return 非null表示检测到取消(子类应直接return此结果), null表示正常执行
      */
-    protected boolean cancelAwareExtractParams(OverAllState state) {
+    protected Map<String, Object> cancelAwareExtractParams(OverAllState state) {
         if (isCancelled(state)) {
             log.info("[{}.extractParams] Cancel signal detected, skipping LLM", getGraphName());
-            return true;
+            return Map.of("_cancelSignal", true);
         }
-        return false;
+        if (detectCancelFromInput(state)) {
+            log.info("[{}.extractParams] Cancel intent detected from user input, injecting _cancelSignal", getGraphName());
+            return Map.of("_cancelSignal", true);
+        }
+        return null;
     }
 
     /**

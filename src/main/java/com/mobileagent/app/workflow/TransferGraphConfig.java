@@ -44,6 +44,11 @@ public class TransferGraphConfig extends AbstractGraphConfig {
     }
 
     @Override
+    protected String getCancelDetectionContext() {
+        return "正在向用户询问转账信息(收款人/金额)";
+    }
+
+    @Override
     protected void registerCustomKeys(Map<String, KeyStrategy> strategies) {
         strategies.put("transfer.receiver", new ReplaceStrategy());
         strategies.put("transfer.amount", new ReplaceStrategy());
@@ -85,7 +90,8 @@ public class TransferGraphConfig extends AbstractGraphConfig {
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
-        if (cancelAwareExtractParams(state)) return Map.of();
+        Map<String, Object> cancelResult = cancelAwareExtractParams(state);
+        if (cancelResult != null) return cancelResult;
 
         String userInput = getLatestInput(state);
         log.info("[TransferGraph.extractParams] userInput={}", userInput);

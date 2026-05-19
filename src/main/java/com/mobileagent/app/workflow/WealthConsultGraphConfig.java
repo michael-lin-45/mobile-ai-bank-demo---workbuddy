@@ -43,6 +43,11 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
     }
 
     @Override
+    protected String getCancelDetectionContext() {
+        return "正在向用户询问理财咨询的风险偏好";
+    }
+
+    @Override
     protected void registerCustomKeys(Map<String, KeyStrategy> strategies) {
         strategies.put("wealthConsult.riskLevel", new ReplaceStrategy());
     }
@@ -79,7 +84,8 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
-        if (cancelAwareExtractParams(state)) return Map.of();
+        Map<String, Object> cancelResult = cancelAwareExtractParams(state);
+        if (cancelResult != null) return cancelResult;
 
         String userInput = getLatestInput(state);
         log.info("[WealthConsultGraph.extractParams] userInput={}", userInput);

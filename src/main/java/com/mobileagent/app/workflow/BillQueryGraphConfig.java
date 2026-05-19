@@ -43,6 +43,11 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
     }
 
     @Override
+    protected String getCancelDetectionContext() {
+        return "正在向用户询问账单查询条件(时间范围/支出类型)";
+    }
+
+    @Override
     protected void registerCustomKeys(Map<String, KeyStrategy> strategies) {
         strategies.put("bill.timePeriod", new ReplaceStrategy());
         strategies.put("bill.expenseType", new ReplaceStrategy());
@@ -83,7 +88,8 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
-        if (cancelAwareExtractParams(state)) return Map.of();
+        Map<String, Object> cancelResult = cancelAwareExtractParams(state);
+        if (cancelResult != null) return cancelResult;
 
         String userInput = getLatestInput(state);
         log.info("[BillQueryGraph.extractParams] userInput={}", userInput);

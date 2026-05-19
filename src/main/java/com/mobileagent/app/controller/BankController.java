@@ -83,6 +83,15 @@ public class BankController {
                 return handleCancel(sessionId);
             }
 
+            // ========== CANCEL during disambiguation ==========
+            // Phase1不再判断CANCEL, 消歧中的取消意图由Controller直接检测
+            if (phase1.isFollowUp() && stateManager.isInDisambiguation(sessionId)) {
+                if (isCancelExpression(userInput)) {
+                    log.info("[BankController] Cancel detected during disambiguation");
+                    return handleCancel(sessionId);
+                }
+            }
+
             // ========== FOLLOW_UP + activeThread → 直接resume (消歧中除外) ==========
             if (phase1.isFollowUp() && !stateManager.isInDisambiguation(sessionId)) {
                 AgentStateManager.ActiveThreadInfo activeThread = stateManager.getActiveThread(sessionId);
@@ -107,7 +116,16 @@ public class BankController {
             // ========== 根据决议执行Phase3 ==========
             return switch (resolution.getStatus()) {
                 case RESOLVED -> executeRoute(sessionId, resolution);
-                case DISAMBIGUATION -> WorkflowOutput.disambiguation(resolution.getQuestion(), resolution.getCandidateIntents());
+                case DISAMBIGUATION -> {
+                    // 进入消歧时suspend activeThread, 防止消歧取消误杀正在进行的子Graph
+                    AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
+                    if (active != null) {
+                        stateManager.suspendAgent(sessionId, active.getIntent(), active.getThreadId());
+                        stateManager.clearActiveThread(sessionId);
+                        log.info("[BankController] Disambiguation: suspended activeThread intent={}", active.getIntent());
+                    }
+                    yield WorkflowOutput.disambiguation(resolution.getQuestion(), resolution.getCandidateIntents());
+                }
                 case REJECTED -> WorkflowOutput.completed(null, "不支持该功能");
             };
 
@@ -197,6 +215,20 @@ public class BankController {
     }
 
     // ==================== 调试接口 ====================
+
+    /**
+     * 轻量取消意图检测 - 仅用于消歧场景(Controller层无子Graph上下文)
+     *
+     * 子Graph内部的取消检测由AbstractGraphConfig.detectCancelFromInput()负责(LLM方式)
+     * 这里只做简单模式匹配,覆盖常见的取消表达
+     */
+    private boolean isCancelExpression(String input) {
+        if (input == null) return false;
+        String trimmed = input.trim();
+        // 精确匹配常见取消短句
+        return trimmed.matches("^(取消|算了|不要了|不转了|不查了|不了|放弃|别转了|别查了|算了不问了|取消查询|取消转账)$")
+            || trimmed.matches(".*(取消|算了|放弃|不要了|不想).*$") && trimmed.length() <= 8;
+    }
 
     @PostMapping("/debug/route")
     public Map<String, Object> debugRoute(@RequestParam String sessionId,

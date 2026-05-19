@@ -43,6 +43,11 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
     }
 
     @Override
+    protected String getCancelDetectionContext() {
+        return "正在向用户询问理财产品名称";
+    }
+
+    @Override
     protected void registerCustomKeys(Map<String, KeyStrategy> strategies) {
         strategies.put("wealthInterpret.productName", new ReplaceStrategy());
     }
@@ -79,7 +84,8 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
-        if (cancelAwareExtractParams(state)) return Map.of();
+        Map<String, Object> cancelResult = cancelAwareExtractParams(state);
+        if (cancelResult != null) return cancelResult;
 
         String userInput = getLatestInput(state);
         log.info("[WealthInterpretGraph.extractParams] userInput={}", userInput);

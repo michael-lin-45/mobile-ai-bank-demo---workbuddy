@@ -22,9 +22,10 @@ import java.nio.charset.StandardCharsets;
  *
  * 规则:
  * - 只看用户最后一句 + 上下文，不做改写
- * - FOLLOW_UP: 用户在追问当前或上一个agent
+ * - FOLLOW_UP: 用户在回答当前agent的问题(包括取消/放弃等否定回答,由子Graph检测)
  * - SWITCH_NEW: 用户表达了新的意图
  * - RESUME: 用户想恢复之前挂起的操作
+ * - 取消意图: 不在Phase1判断, 由子Graph通过detectCancelFromInput()自行检测
  */
 @Slf4j
 @Service
@@ -94,16 +95,7 @@ public class IntentRouter {
                     .build();
         }
 
-        // 2. 取消关键词 → CANCEL
-        if (userInput.matches(".*(算了|不转了|取消|不要了|放弃|不了).*$")) {
-            return RoutingResult.builder()
-                    .routeType("CANCEL")
-                    .confidence(0.95)
-                    .reasoning("取消关键词")
-                    .build();
-        }
-
-        // 3. 明确恢复指令 → RESUME
+        // 2. 明确恢复指令 → RESUME
         if (userInput.matches(".*(回到|继续|恢复).*(转账|账单|查询|理财).*$") ||
             userInput.matches(".*(转账|账单|查询|理财).*(回到|继续|恢复).*$")) {
             return RoutingResult.builder()
@@ -113,9 +105,11 @@ public class IntentRouter {
                     .build();
         }
 
-        // 4. 短回答+有活跃线程 → FOLLOW_UP (避免LLM将简单回答误判为新意图)
+        // 3. 短回答+有活跃线程 → FOLLOW_UP (避免LLM将简单回答误判为新意图)
+        //    包括取消意图的短句(如"不查了""算了")也走FOLLOW_UP,由子Graph自行检测
         AgentStateManager.ActiveThreadInfo activeThread = stateManager.getActiveThread(sessionId);
-        if (activeThread != null && userInput.length() <= 6) {
+        boolean hasActiveContext = activeThread != null || stateManager.isInDisambiguation(sessionId);
+        if (hasActiveContext && userInput.length() <= 8) {
             if (!userInput.matches(".*(转账|查账|查一下|汇款|理财|理财推荐|理财解读).*$")) {
                 return RoutingResult.builder()
                         .routeType("FOLLOW_UP")
@@ -125,7 +119,7 @@ public class IntentRouter {
             }
         }
 
-        return null; // 无确定性匹配,需要LLM判断
+        return null; // 无确定性匹配,需要LLM判断(包括CANCEL)
     }
 
     private String buildRoutingPrompt(String sessionId, String userInput, AgentStateManager stateManager) {
@@ -184,7 +178,7 @@ public class IntentRouter {
             case "CONTINUE_FOLLOWUP", "FOLLOW_UP" -> "FOLLOW_UP";
             case "SWITCH_DIRECT", "SWITCH_COMPLEX", "SWITCH_NEW" -> "SWITCH_NEW";
             case "CONTINUE_RESUME", "RESUME_PENDING", "RESUME" -> "RESUME";
-            case "CANCEL" -> "CANCEL";
+            case "CANCEL" -> "FOLLOW_UP"; // CANCEL降级为FOLLOW_UP,由子Graph检测
             default -> "SWITCH_NEW";
         };
     }
@@ -234,7 +228,7 @@ public class IntentRouter {
             用户输入: {message}
             
             判断路由类型:
-            1. FOLLOW_UP: 用户在追问当前agent (如回答问题、追问)
+            1. FOLLOW_UP: 用户在回答当前agent的问题或追问(包括取消/放弃等否定回答)
             2. SWITCH_NEW: 用户表达了新的意图
             3. RESUME: 用户想恢复之前挂起的操作
             
