@@ -24,6 +24,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  * 节点流程:
  * START → extractParams → paramRouter → askReceiver/askAmount (interruptBefore)
  *                                         ↘ executeTransfer → END
+ *                                         ↘ cancelExecution → END (_cancelSignal)
  * askReceiver/askAmount → paramRouter (循环)
  */
 @Slf4j
@@ -57,19 +58,24 @@ public class TransferGraphConfig extends AbstractGraphConfig {
                 .addNode("askReceiver", node_async(this::askReceiverNode))
                 .addNode("askAmount", node_async(this::askAmountNode))
                 .addNode("executeTransfer", node_async(this::executeTransferNode))
+                .addNode("cancelExecution", node_async(this::cancelExecutionNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
                 .addConditionalEdges("paramRouter",
                         edge_async(state -> {
+                            // 取消信号优先
+                            if (isCancelled(state)) return "CANCEL";
                             Object param = state.value("_paramName").orElse("ALL_GOOD");
                             return param.toString();
                         }),
                         Map.of(
                                 "ASK_RECEIVER", "askReceiver",
                                 "ASK_AMOUNT", "askAmount",
-                                "ALL_GOOD", "executeTransfer"
+                                "ALL_GOOD", "executeTransfer",
+                                "CANCEL", "cancelExecution"
                         ))
-                .addEdge("executeTransfer", END);
+                .addEdge("executeTransfer", END)
+                .addEdge("cancelExecution", END);
 
         // ask节点条件路由
         addAskConditionalEdges(graph, "askReceiver");
@@ -84,6 +90,12 @@ public class TransferGraphConfig extends AbstractGraphConfig {
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
+        // 取消信号: 跳过LLM调用,直接返回空
+        if (isCancelled(state)) {
+            log.info("[TransferGraph.extractParams] Cancel signal detected, skipping LLM");
+            return Map.of();
+        }
+
         String userInput = getLatestInput(state);
         log.info("[TransferGraph.extractParams] userInput={}", userInput);
 
@@ -99,6 +111,12 @@ public class TransferGraphConfig extends AbstractGraphConfig {
     }
 
     private Map<String, Object> paramRouterNode(OverAllState state) {
+        // 取消信号: 直接路由到cancelExecution
+        if (isCancelled(state)) {
+            log.info("[TransferGraph.paramRouter] Cancel signal → CANCEL");
+            return Map.of("_paramName", "CANCEL");
+        }
+
         String receiver = getStringValue(state, "transfer.receiver");
         Object amountObj = state.value("transfer.amount").orElse(null);
         String amount = amountObj != null ? amountObj.toString() : null;

@@ -179,11 +179,27 @@ public class BankController {
 
     private WorkflowOutput handleCancel(String sessionId) {
         AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
-        if (active != null) {
-            stateManager.completeAgent(sessionId, active.getIntent());
+
+        // 无活跃线程且不在消歧中 → 提示无操作
+        if (active == null && !stateManager.isInDisambiguation(sessionId)) {
+            return WorkflowOutput.completed(null, "当前没有进行中的操作。有什么可以帮您的吗？");
         }
-        stateManager.clearActiveThread(sessionId);
-        stateManager.clearDisambiguationState(sessionId); // 修复: CANCEL时清除消歧状态
+
+        // 有活跃线程 → 通知子Graph自行清理
+        if (active != null) {
+            String intent = active.getIntent();
+            // TRANSFER和BILL_QUERY支持_cancelSignal, 让Graph自行清理
+            if ("TRANSFER".equals(intent) || "BILL_QUERY".equals(intent)) {
+                stateManager.clearDisambiguationState(sessionId);
+                return graphExecutionService.cancelGraph(intent, active.getThreadId(), sessionId);
+            }
+            // 其他意图: 直接清理(Controller层面取消)
+            stateManager.completeAgent(sessionId, intent);
+            stateManager.clearActiveThread(sessionId);
+        }
+
+        // 清除消歧状态
+        stateManager.clearDisambiguationState(sessionId);
         return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
     }
 

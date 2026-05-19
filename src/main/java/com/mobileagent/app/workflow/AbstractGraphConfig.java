@@ -23,7 +23,8 @@ import java.util.Map;
  * 子Graph共享的模式:
  * - extractJson / getLatestInput / getStringValue 等工具方法
  * - callExtractModel (buildExtractPrompt + LLM call + parseExtractResult)
- * - 公共KeyStrategy注册 (messages, _latestUserInput, _question等)
+ * - isCancelled / cancelExecutionNode 取消信号处理
+ * - 公共KeyStrategy注册 (messages, _latestUserInput, _question, _cancelSignal等)
  * - SaverConfig + CompileConfig构建
  * - ask节点条件路由 (CONTINUE→paramRouter / WAIT→END)
  *
@@ -101,6 +102,28 @@ public abstract class AbstractGraphConfig {
         return trimmed;
     }
 
+    // ==================== 取消信号处理 ====================
+
+    /** 检查是否收到取消信号 */
+    protected boolean isCancelled(OverAllState state) {
+        Object signal = state.value("_cancelSignal").orElse(null);
+        return Boolean.TRUE.equals(signal);
+    }
+
+    /**
+     * 默认的取消执行节点 - 子Graph可直接使用
+     * 设置取消输出内容并终止Graph
+     */
+    protected Map<String, Object> cancelExecutionNode(OverAllState state) {
+        log.info("[{}.cancelExecution] Cancel signal received, terminating", getGraphName());
+        Map<String, Object> result = new HashMap<>();
+        result.put("_outputContent", "操作已取消");
+        result.put("_outputType", "TEXT");
+        result.put("_isFinal", true);
+        result.put("_cancelSignal", null);
+        return result;
+    }
+
     // ==================== 公共构建方法 ====================
 
     /** 创建包含公共keys + 子类自定义keys的KeyStrategyFactory */
@@ -115,6 +138,7 @@ public abstract class AbstractGraphConfig {
             strategies.put("_outputContent", new ReplaceStrategy());
             strategies.put("_outputType", new ReplaceStrategy());
             strategies.put("_isFinal", new ReplaceStrategy());
+            strategies.put("_cancelSignal", new ReplaceStrategy());
             // 子类自定义keys
             registerCustomKeys(strategies);
             return strategies;

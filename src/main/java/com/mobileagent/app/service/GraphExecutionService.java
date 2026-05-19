@@ -245,4 +245,73 @@ public class GraphExecutionService {
         }
         return params;
     }
+
+    /**
+     * 取消Graph执行 - 注入_cancelSignal让子Graph自行清理并终止
+     *
+     * 流程: 重新执行Graph(注入_cancelSignal=true + 已收集参数)
+     *       → extractParams跳过LLM → paramRouter路由到cancelExecution → END
+     *
+     * @param intent 意图名称
+     * @param threadId 当前活跃线程ID(用于提取累积参数)
+     * @param sessionId 会话ID
+     * @return 取消结果
+     */
+    public WorkflowOutput cancelGraph(String intent, String threadId, String sessionId) {
+        CompiledGraph graph = intentRegistry.getGraph(intent);
+        if (graph == null) {
+            log.warn("[GraphExec.cancelGraph] Graph not found for intent={}", intent);
+            stateManager.completeAgent(sessionId, intent);
+            stateManager.clearActiveThread(sessionId);
+            return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
+        }
+
+        try {
+            // 获取已收集的参数
+            Map<String, Object> accumulatedParams = new HashMap<>();
+            AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
+            if (active != null && active.getIntent().equals(intent)) {
+                accumulatedParams.putAll(active.getAccumulatedParams());
+            }
+
+            // 生成新threadId(每次重新执行)
+            String newThreadId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+            stateManager.setActiveThread(sessionId, newThreadId, intent);
+            // 恢复累积参数到新的activeThread
+            AgentStateManager.ActiveThreadInfo newActive = stateManager.getActiveThread(sessionId);
+            if (newActive != null) {
+                newActive.setAccumulatedParams(accumulatedParams);
+            }
+
+            // 构建输入: 注入取消信号 + 累积参数
+            Map<String, Object> input = new HashMap<>();
+            input.put("messages", "取消");
+            input.put("_latestUserInput", "取消");
+            input.put("_question", null);
+            input.put("_cancelSignal", true);
+            if (!accumulatedParams.isEmpty()) {
+                input.putAll(accumulatedParams);
+            }
+
+            log.info("[GraphExec.cancelGraph] Cancel graph: intent={}, oldThread={}, newThread={}, params={}",
+                    intent, threadId, newThreadId, accumulatedParams);
+
+            RunnableConfig config = RunnableConfig.builder().threadId(newThreadId).build();
+            graph.stream(input, config).blockLast();
+
+            // 清理状态
+            stateManager.completeAgent(sessionId, intent);
+            stateManager.clearActiveThread(sessionId);
+
+            log.info("[GraphExec.cancelGraph] Graph cancelled successfully: intent={}", intent);
+            return WorkflowOutput.completed(intent, "好的,已取消当前操作。还有什么可以帮您的吗？");
+
+        } catch (Exception e) {
+            log.error("[GraphExec.cancelGraph] Cancel graph failed", e);
+            // 即使失败也要清理状态
+            stateManager.completeAgent(sessionId, intent);
+            stateManager.clearActiveThread(sessionId);
+            return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
+        }
+    }
 }

@@ -23,6 +23,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  * 节点流程:
  * START → extractParams → paramRouter → askTime/askType (interruptBefore)
  *                                         ↘ executeBillQuery → END
+ *                                         ↘ cancelExecution → END (_cancelSignal)
  * askTime/askType → paramRouter (循环)
  */
 @Slf4j
@@ -55,19 +56,24 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
                 .addNode("askTime", node_async(this::askTimeNode))
                 .addNode("askType", node_async(this::askTypeNode))
                 .addNode("executeBillQuery", node_async(this::executeBillQueryNode))
+                .addNode("cancelExecution", node_async(this::cancelExecutionNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
                 .addConditionalEdges("paramRouter",
                         edge_async(state -> {
+                            // 取消信号优先
+                            if (isCancelled(state)) return "CANCEL";
                             Object param = state.value("_paramName").orElse("ALL_GOOD");
                             return param.toString();
                         }),
                         Map.of(
                                 "ASK_TIME", "askTime",
                                 "ASK_TYPE", "askType",
-                                "ALL_GOOD", "executeBillQuery"
+                                "ALL_GOOD", "executeBillQuery",
+                                "CANCEL", "cancelExecution"
                         ))
-                .addEdge("executeBillQuery", END);
+                .addEdge("executeBillQuery", END)
+                .addEdge("cancelExecution", END);
 
         // ask节点条件路由
         addAskConditionalEdges(graph, "askTime");
@@ -82,6 +88,12 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
+        // 取消信号: 跳过LLM调用,直接返回空
+        if (isCancelled(state)) {
+            log.info("[BillQueryGraph.extractParams] Cancel signal detected, skipping LLM");
+            return Map.of();
+        }
+
         String userInput = getLatestInput(state);
         log.info("[BillQueryGraph.extractParams] userInput={}", userInput);
 
@@ -97,6 +109,12 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
     }
 
     private Map<String, Object> paramRouterNode(OverAllState state) {
+        // 取消信号: 直接路由到cancelExecution
+        if (isCancelled(state)) {
+            log.info("[BillQueryGraph.paramRouter] Cancel signal → CANCEL");
+            return Map.of("_paramName", "CANCEL");
+        }
+
         String timePeriod = getStringValue(state, "bill.timePeriod");
         String expenseType = getStringValue(state, "bill.expenseType");
 
