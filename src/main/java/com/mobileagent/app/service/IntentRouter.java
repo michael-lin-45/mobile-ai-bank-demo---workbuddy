@@ -104,8 +104,8 @@ public class IntentRouter {
         }
 
         // 3. 明确恢复指令 → RESUME
-        if (userInput.matches(".*(回到|继续|恢复).*(转账|账单|查询).*") ||
-            userInput.matches(".*(转账|账单|查询).*(回到|继续|恢复).*")) {
+        if (userInput.matches(".*(回到|继续|恢复).*(转账|账单|查询|理财).*$") ||
+            userInput.matches(".*(转账|账单|查询|理财).*(回到|继续|恢复).*$")) {
             return RoutingResult.builder()
                     .routeType("RESUME")
                     .confidence(0.9)
@@ -114,11 +114,9 @@ public class IntentRouter {
         }
 
         // 4. 短回答+有活跃线程 → FOLLOW_UP (避免LLM将简单回答误判为新意图)
-        //    当用户正在回答子智能体提问时,短回答(≤6字)应视为FOLLOW_UP
         AgentStateManager.ActiveThreadInfo activeThread = stateManager.getActiveThread(sessionId);
         if (activeThread != null && userInput.length() <= 6) {
-            // 排除明确的意图表达(包含"转账"/"查"/"账单"等关键词)
-            if (!userInput.matches(".*(转账|查账|查一下|汇款).*$")) {
+            if (!userInput.matches(".*(转账|查账|查一下|汇款|理财|理财推荐|理财解读).*$")) {
                 return RoutingResult.builder()
                         .routeType("FOLLOW_UP")
                         .confidence(0.85)

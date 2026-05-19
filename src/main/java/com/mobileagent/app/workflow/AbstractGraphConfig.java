@@ -1,0 +1,151 @@
+package com.mobileagent.app.workflow;
+
+import com.alibaba.cloud.ai.graph.*;
+import com.alibaba.cloud.ai.graph.checkpoint.config.SaverConfig;
+import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
+import com.alibaba.cloud.ai.graph.CompileConfig;
+import com.alibaba.cloud.ai.graph.exception.GraphStateException;
+import com.alibaba.cloud.ai.graph.state.strategy.AppendStrategy;
+import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Graph配置基类 - 提取4个子Graph共享的基础设施代码
+ *
+ * 子Graph共享的模式:
+ * - extractJson / getLatestInput / getStringValue 等工具方法
+ * - callExtractModel (buildExtractPrompt + LLM call + parseExtractResult)
+ * - 公共KeyStrategy注册 (messages, _latestUserInput, _question等)
+ * - SaverConfig + CompileConfig构建
+ * - ask节点条件路由 (CONTINUE→paramRouter / WAIT→END)
+ *
+ * 子类只需实现:
+ * - getGraphName(): Graph名称 (用于日志)
+ * - buildExtractPrompt(): 提取参数的prompt
+ * - parseExtractResult(): 解析LLM返回的JSON
+ * - registerCustomKeys(): 注册Graph专用的state keys
+ */
+@Slf4j
+public abstract class AbstractGraphConfig {
+
+    protected final ChatModel chatModel;
+    protected final ObjectMapper objectMapper;
+
+    protected AbstractGraphConfig(ChatModel chatModel) {
+        this.chatModel = chatModel;
+        this.objectMapper = new ObjectMapper();
+    }
+
+    // ==================== 子类必须实现 ====================
+
+    /** Graph名称, 用于日志 */
+    protected abstract String getGraphName();
+
+    /** 构建参数提取prompt */
+    protected abstract String buildExtractPrompt(String userInput);
+
+    /** 解析LLM返回的提取结果JSON */
+    protected abstract Map<String, Object> parseExtractResult(String content);
+
+    /** 注册Graph专用的state keys (如transfer.receiver, bill.timePeriod等) */
+    protected abstract void registerCustomKeys(Map<String, KeyStrategy> strategies);
+
+    // ==================== 公共工具方法 ====================
+
+    /** 从OverAllState获取最新的用户输入 */
+    protected String getLatestInput(OverAllState state) {
+        Object input = state.value("_latestUserInput").orElse(null);
+        if (input != null && !input.toString().isEmpty()) {
+            return input.toString();
+        }
+        // fallback: 从messages取最后一条
+        Object messages = state.value("messages").orElse(null);
+        if (messages instanceof List<?> list && !list.isEmpty()) {
+            return String.valueOf(list.get(list.size() - 1));
+        }
+        return "";
+    }
+
+    /** 从OverAllState获取字符串值 */
+    protected String getStringValue(OverAllState state, String key) {
+        Object value = state.value(key).orElse(null);
+        return value != null ? value.toString() : null;
+    }
+
+    /** 调用LLM提取参数: buildExtractPrompt → LLM call → parseExtractResult */
+    protected Map<String, Object> callExtractModel(String userInput) {
+        String prompt = buildExtractPrompt(userInput);
+        ChatResponse response = chatModel.call(new Prompt(prompt));
+        String content = response.getResult().getOutput().getText();
+        return parseExtractResult(content);
+    }
+
+    /** 从LLM返回内容中提取JSON */
+    protected String extractJson(String content) {
+        String trimmed = content.trim();
+        if (trimmed.startsWith("```json")) trimmed = trimmed.substring(7);
+        else if (trimmed.startsWith("```")) trimmed = trimmed.substring(3);
+        if (trimmed.endsWith("```")) trimmed = trimmed.substring(0, trimmed.length() - 3);
+        trimmed = trimmed.trim();
+        int start = trimmed.indexOf('{');
+        int end = trimmed.lastIndexOf('}');
+        if (start >= 0 && end > start) return trimmed.substring(start, end + 1);
+        return trimmed;
+    }
+
+    // ==================== 公共构建方法 ====================
+
+    /** 创建包含公共keys + 子类自定义keys的KeyStrategyFactory */
+    protected KeyStrategyFactory createKeyStrategyFactory() {
+        return () -> {
+            Map<String, KeyStrategy> strategies = new HashMap<>();
+            // 公共keys
+            strategies.put("messages", new AppendStrategy());
+            strategies.put("_latestUserInput", new ReplaceStrategy());
+            strategies.put("_question", new ReplaceStrategy());
+            strategies.put("_paramName", new ReplaceStrategy());
+            strategies.put("_outputContent", new ReplaceStrategy());
+            strategies.put("_outputType", new ReplaceStrategy());
+            strategies.put("_isFinal", new ReplaceStrategy());
+            // 子类自定义keys
+            registerCustomKeys(strategies);
+            return strategies;
+        };
+    }
+
+    /** 构建带MemorySaver的SaverConfig */
+    protected SaverConfig createSaverConfig() {
+        return SaverConfig.builder()
+                .register(new MemorySaver())
+                .build();
+    }
+
+    /** 构建CompileConfig: saverConfig + interruptBefore + recursionLimit */
+    protected CompileConfig createCompileConfig(String... interruptBeforeNodes) {
+        return CompileConfig.builder()
+                .saverConfig(createSaverConfig())
+                .interruptBefore(interruptBeforeNodes)
+                .recursionLimit(50)
+                .build();
+    }
+
+    /** 创建ask节点的条件路由 (有用户输入→paramRouter, 无→END) */
+    protected void addAskConditionalEdges(StateGraph graph, String askNodeName) throws GraphStateException {
+        graph.addConditionalEdges(askNodeName,
+                com.alibaba.cloud.ai.graph.action.AsyncEdgeAction.edge_async(state -> {
+                    String input = getLatestInput(state);
+                    boolean hasInput = input != null && !input.isEmpty();
+                    log.info("[{}.{}→route] hasInput={} → {}", getGraphName(), askNodeName, hasInput, hasInput ? "CONTINUE" : "WAIT");
+                    return hasInput ? "CONTINUE" : "WAIT";
+                }),
+                Map.of("CONTINUE", "paramRouter", "WAIT", StateGraph.END));
+    }
+}

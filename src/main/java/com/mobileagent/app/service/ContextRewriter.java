@@ -92,6 +92,18 @@ public class ContextRewriter {
                 ? String.join(", ", stateManager.getAllSuspended(sessionId).keySet())
                 : "无";
 
+        // 消歧上下文
+        String disambigContext = "无";
+        AgentStateManager.DisambiguationState disambigState = stateManager.getDisambiguationState(sessionId);
+        if (disambigState != null) {
+            IntentRegistry.IntentGroup group = intentRegistry.getGroup(disambigState.getGroupId());
+            disambigContext = String.format("用户正在消歧: 意图组=%s, 候选意图=%s, 原始输入=%s, 已追问%d次",
+                    disambigState.getGroupId(),
+                    group != null ? group.getIntentNames() : "?",
+                    disambigState.getOriginalInput(),
+                    disambigState.getAttemptCount());
+        }
+
         // 根据Phase1判断确定改写模式
         String mode = phase1Result.isResume() ? "RESUME" : "SWITCH";
 
@@ -103,7 +115,8 @@ public class ContextRewriter {
                 .replace("{last_agent_description}", currentIntent)
                 .replace("{last_agent_summary}", sessionState)
                 .replace("{session_state}", sessionState)
-                .replace("{pending_agents}", pendingList);
+                .replace("{pending_agents}", pendingList)
+                .replace("{disambig_context}", disambigContext);
     }
 
     private RoutingResult parseRewriteResponse(String content, RoutingResult phase1Result) {
@@ -125,6 +138,20 @@ public class ContextRewriter {
                         ? node.get("resume_target").asText() : intentName;
             }
 
+            // 提取消歧字段
+            boolean ambiguous = node.has("is_ambiguous") && node.get("is_ambiguous").asBoolean();
+            java.util.List<String> candidateIntents = null;
+            String groupId = null;
+            if (node.has("candidate_intents") && node.get("candidate_intents").isArray()) {
+                candidateIntents = new java.util.ArrayList<>();
+                for (var candidate : node.get("candidate_intents")) {
+                    candidateIntents.add(candidate.asText());
+                }
+            }
+            if (node.has("group_id") && !node.get("group_id").isNull()) {
+                groupId = node.get("group_id").asText();
+            }
+
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
                     .refinedRouteType(refinedRouteType)
@@ -133,6 +160,9 @@ public class ContextRewriter {
                     .confidence(confidence)
                     .reasoning(phase1Result.getReasoning())
                     .resumeTarget(resumeTarget)
+                    .ambiguous(ambiguous)
+                    .candidateIntents(candidateIntents)
+                    .groupId(groupId)
                     .build();
         } catch (Exception e) {
             log.warn("[ContextRewriter] Failed to parse rewrite response: {}", content, e);

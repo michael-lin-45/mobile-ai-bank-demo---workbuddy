@@ -11,10 +11,10 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 智能体状态管理器 - 管理多意图对话的线程状态
  *
- * 三张核心数据表:
+ * 核心数据表:
  * 1. activeThreads: 当前活跃线程 (sessionId → ActiveThreadInfo)
  * 2. suspendedAgents: 挂起的意图线程 (sessionId → {intent → SuspendedInfo})
- * 3. (graphRegistry 已移至 IntentRegistry)
+ * 3. disambiguationStates: 消歧状态 (sessionId → DisambiguationState)
  */
 @Slf4j
 @Component
@@ -25,6 +25,9 @@ public class AgentStateManager {
 
     /** 挂起的意图线程表 */
     private final Map<String, Map<String, SuspendedInfo>> suspendedAgents = new ConcurrentHashMap<>();
+
+    /** 消歧状态表 */
+    private final Map<String, DisambiguationState> disambiguationStates = new ConcurrentHashMap<>();
 
     /** 最大挂起深度 */
     private static final int MAX_SUSPENDED_DEPTH = 3;
@@ -122,6 +125,14 @@ public class AgentStateManager {
         return !sessionMap.isEmpty();
     }
 
+    /** 清除会话所有状态 */
+    public void clearSession(String sessionId) {
+        activeThreads.remove(sessionId);
+        suspendedAgents.remove(sessionId);
+        disambiguationStates.remove(sessionId);
+        log.debug("[StateMgr] Cleared all session state: session={}", sessionId);
+    }
+
     /** 任务完成时清理: 清空activeThread + 从suspended移除 */
     public void completeAgent(String sessionId, String intent) {
         activeThreads.remove(sessionId);
@@ -132,10 +143,36 @@ public class AgentStateManager {
         log.debug("[StateMgr] Completed agent: session={}, intent={}", sessionId, intent);
     }
 
-    public void clearSession(String sessionId) {
-        activeThreads.remove(sessionId);
-        suspendedAgents.remove(sessionId);
-        log.debug("[StateMgr] Cleared entire session: {}", sessionId);
+    // --- 消歧状态管理 ---
+
+    public void setDisambiguationState(String sessionId, DisambiguationState state) {
+        disambiguationStates.put(sessionId, state);
+        log.debug("[StateMgr] Set disambiguation state: session={}, groupId={}, attempt={}",
+                sessionId, state.getGroupId(), state.getAttemptCount());
+    }
+
+    public DisambiguationState getDisambiguationState(String sessionId) {
+        return disambiguationStates.get(sessionId);
+    }
+
+    public void clearDisambiguationState(String sessionId) {
+        disambiguationStates.remove(sessionId);
+        log.debug("[StateMgr] Cleared disambiguation state: session={}", sessionId);
+    }
+
+    public boolean isInDisambiguation(String sessionId) {
+        DisambiguationState state = disambiguationStates.get(sessionId);
+        return state != null;
+    }
+
+    /** 增加消歧尝试次数 */
+    public DisambiguationState incrementDisambiguationAttempt(String sessionId) {
+        DisambiguationState state = disambiguationStates.get(sessionId);
+        if (state != null) {
+            state.setAttemptCount(state.getAttemptCount() + 1);
+            log.debug("[StateMgr] Disambiguation attempt: session={}, count={}", sessionId, state.getAttemptCount());
+        }
+        return state;
     }
 
     /** 生成当前会话状态描述(供LLM使用) */
@@ -143,8 +180,12 @@ public class AgentStateManager {
         StringBuilder sb = new StringBuilder();
         ActiveThreadInfo active = getActiveThread(sessionId);
         Map<String, SuspendedInfo> suspended = getAllSuspended(sessionId);
+        DisambiguationState disambiguation = disambiguationStates.get(sessionId);
 
-        if (active != null) {
+        if (disambiguation != null) {
+            sb.append("当前在消歧模式: 意图组=").append(disambiguation.getGroupId())
+              .append(", 已追问次数=").append(disambiguation.getAttemptCount());
+        } else if (active != null) {
             sb.append("当前活跃意图: ").append(active.getIntent())
               .append(" (线程: ").append(active.getThreadId().substring(0, 8)).append("...)");
         } else {
@@ -200,6 +241,25 @@ public class AgentStateManager {
 
         public void setAccumulatedParams(Map<String, Object> params) {
             this.accumulatedParams = params != null ? new HashMap<>(params) : new HashMap<>();
+        }
+    }
+
+    /**
+     * 消歧状态 - Controller层追问用户明确意图时使用
+     * 不是Graph,是轻量级的Controller层状态
+     */
+    @Data
+    public static class DisambiguationState {
+        private String groupId;
+        private int attemptCount;
+        private String originalInput;
+        private Instant createdAt;
+
+        public DisambiguationState(String groupId, String originalInput) {
+            this.groupId = groupId;
+            this.originalInput = originalInput;
+            this.attemptCount = 1;
+            this.createdAt = Instant.now();
         }
     }
 }
