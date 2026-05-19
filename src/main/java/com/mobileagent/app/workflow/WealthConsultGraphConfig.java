@@ -9,7 +9,9 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static com.alibaba.cloud.ai.graph.StateGraph.END;
@@ -45,6 +47,13 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
     @Override
     protected String getCancelDetectionContext() {
         return "正在向用户询问理财咨询的风险偏好";
+    }
+
+    @Override
+    protected List<String> getCancelKeywords() {
+        List<String> keywords = new ArrayList<>(super.getCancelKeywords());
+        keywords.addAll(List.of("不想咨询了", "取消咨询", "不用推荐了"));
+        return keywords;
     }
 
     @Override

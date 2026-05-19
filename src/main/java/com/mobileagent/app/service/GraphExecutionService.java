@@ -21,6 +21,8 @@ import java.util.UUID;
  * 方法职责:
  * - executeGraph: 执行graph + 检查结果(完成/中断)
  * - resumeGraph: 重新执行graph(注入累积参数)
+ * - cancelGraph: 注入取消信号让子Graph自行清理
+ * - prepareReExecution: 准备重新执行的上下文(提取累积参数+生成新threadId+恢复参数)
  * - extractAccumulatedParams: 从graph state提取已收集的参数
  */
 @Slf4j
@@ -87,24 +89,13 @@ public class GraphExecutionService {
             return WorkflowOutput.error("Graph not found for intent: " + intent);
         }
 
-        // 获取累积参数
-        Map<String, Object> accumulatedParams = new HashMap<>();
-        AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
-        if (active != null && active.getIntent().equals(intent)) {
-            accumulatedParams.putAll(active.getAccumulatedParams());
-        }
+        // 先保存累积参数(在setActiveThread覆盖前)
+        Map<String, Object> accumulatedParams = getAccumulatedParamsFromActive(sessionId, intent);
+        // 重新执行准备: 生成新threadId + 恢复累积参数
+        String newThreadId = prepareReExecution(sessionId, intent, accumulatedParams);
 
-        // 生成新threadId(每次重新执行)
-        String newThreadId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-        stateManager.setActiveThread(sessionId, newThreadId, intent);
-        // 恢复累积参数到新的activeThread
-        AgentStateManager.ActiveThreadInfo newActive = stateManager.getActiveThread(sessionId);
-        if (newActive != null) {
-            newActive.setAccumulatedParams(accumulatedParams);
-        }
-
-        log.info("[GraphExec] Resume graph (new execution): intent={}, oldThread={}, newThread={}, userInput={}, params={}",
-                intent, threadId, newThreadId, userInput, accumulatedParams);
+        log.info("[GraphExec] Resume graph (new execution): intent={}, oldThread={}, newThread={}, userInput={}",
+                intent, threadId, newThreadId, userInput);
 
         return executeGraph(graph, intent, newThreadId, userInput, sessionId, accumulatedParams);
     }
@@ -267,21 +258,10 @@ public class GraphExecutionService {
         }
 
         try {
-            // 获取已收集的参数
-            Map<String, Object> accumulatedParams = new HashMap<>();
-            AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
-            if (active != null && active.getIntent().equals(intent)) {
-                accumulatedParams.putAll(active.getAccumulatedParams());
-            }
-
-            // 生成新threadId(每次重新执行)
-            String newThreadId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-            stateManager.setActiveThread(sessionId, newThreadId, intent);
-            // 恢复累积参数到新的activeThread
-            AgentStateManager.ActiveThreadInfo newActive = stateManager.getActiveThread(sessionId);
-            if (newActive != null) {
-                newActive.setAccumulatedParams(accumulatedParams);
-            }
+            // 先保存累积参数(在setActiveThread覆盖前)
+            Map<String, Object> accumulatedParams = getAccumulatedParamsFromActive(sessionId, intent);
+            // 重新执行准备: 生成新threadId + 恢复累积参数
+            String newThreadId = prepareReExecution(sessionId, intent, accumulatedParams);
 
             // 构建输入: 注入取消信号 + 累积参数
             Map<String, Object> input = new HashMap<>();
@@ -313,5 +293,46 @@ public class GraphExecutionService {
             stateManager.clearActiveThread(sessionId);
             return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
         }
+    }
+
+    // ==================== 公共辅助方法 ====================
+
+    /**
+     * 准备重新执行 - 生成新threadId + 恢复累积参数到新activeThread
+     *
+     * resumeGraph和cancelGraph共享的逻辑:
+     * 1. 生成新的threadId(因为每次都重新执行graph)
+     * 2. 设置新activeThread
+     * 3. 恢复累积参数到新activeThread
+     *
+     * 注意: 调用此方法前必须先从旧activeThread提取accumulatedParams,
+     *       因为setActiveThread会覆盖旧的activeThread引用
+     *
+     * @param sessionId 会话ID
+     * @param intent 意图名称
+     * @param accumulatedParams 要恢复的累积参数
+     * @return 新的threadId
+     */
+    private String prepareReExecution(String sessionId, String intent, Map<String, Object> accumulatedParams) {
+        String newThreadId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        stateManager.setActiveThread(sessionId, newThreadId, intent);
+        // 恢复累积参数到新的activeThread
+        AgentStateManager.ActiveThreadInfo newActive = stateManager.getActiveThread(sessionId);
+        if (newActive != null && accumulatedParams != null && !accumulatedParams.isEmpty()) {
+            newActive.setAccumulatedParams(accumulatedParams);
+        }
+        return newThreadId;
+    }
+
+    /**
+     * 从当前activeThread获取累积参数
+     */
+    private Map<String, Object> getAccumulatedParamsFromActive(String sessionId, String intent) {
+        Map<String, Object> params = new HashMap<>();
+        AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
+        if (active != null && active.getIntent().equals(intent)) {
+            params.putAll(active.getAccumulatedParams());
+        }
+        return params;
     }
 }

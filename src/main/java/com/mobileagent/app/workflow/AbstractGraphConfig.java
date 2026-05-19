@@ -15,6 +15,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,7 +35,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  *   - cancelAwareParamRouter: 自动拦截_cancelSignal, 子类只需关心业务路由
  *   - addCancelNode: 一行代码添加cancelExecution节点+END边
  *   - addCancelEdge: 一行代码给paramRouter的edges map添加CANCEL路由
- *   - detectCancelFromInput: LLM检测用户输入是否表达取消意图(流程统一,提示词可定制)
+ *   - detectCancelFromInput: 关键字+LLM分层检测取消意图(流程统一,关键字和提示词均可定制)
  * - 公共KeyStrategy注册 (messages, _latestUserInput, _question, _cancelSignal等)
  * - SaverConfig + CompileConfig构建
  * - ask节点条件路由 (CONTINUE→paramRouter / WAIT→END)
@@ -84,6 +85,22 @@ public abstract class AbstractGraphConfig {
      * - WealthInterpretGraph: "正在向用户询问理财产品名称"
      */
     protected abstract String getCancelDetectionContext();
+
+    /**
+     * 子Graph专属取消关键字 - 子类可覆盖以添加领域特定的取消关键词
+     *
+     * 基类提供通用取消关键词, 子类调用super后追加自己的关键词:
+     *   protected List<String> getCancelKeywords() {
+     *       List<String> keywords = new ArrayList<>(super.getCancelKeywords());
+     *       keywords.addAll(List.of("不转了", "别转了", "取消转账"));
+     *       return keywords;
+     *   }
+     *
+     * 匹配流程: 先匹配关键字(0ms), 不匹配再调LLM(200-500ms)
+     */
+    protected List<String> getCancelKeywords() {
+        return List.of("取消", "算了", "不要了", "放弃", "不了");
+    }
 
     // ==================== 公共工具方法 ====================
 
@@ -137,10 +154,15 @@ public abstract class AbstractGraphConfig {
     }
 
     /**
-     * 使用LLM检测用户输入是否表达取消意图
+     * 使用关键字+LLM检测用户输入是否表达取消意图
      *
-     * 流程统一在基类: LLM调用 + 结果解析
-     * 提示词可定制: 子类通过getCancelDetectionContext()提供上下文
+     * 检测策略 (分层优化):
+     * 1. 关键字匹配 (0ms): 常见取消表达如"取消""算了""不转了"等直接命中
+     * 2. LLM判断 (200-500ms): 关键字未命中时, 由LLM理解上下文判断
+     *
+     * 子类定制:
+     * - getCancelKeywords(): 配置领域特定关键词 (如Transfer: "不转了""别转了")
+     * - getCancelDetectionContext(): LLM判断时的上下文描述
      *
      * @param state 当前Graph状态
      * @return true表示用户想取消当前操作
@@ -152,6 +174,16 @@ public abstract class AbstractGraphConfig {
         // 已有cancel信号则无需再检测
         if (isCancelled(state)) return true;
 
+        // 第1层: 关键字匹配 (0ms, 快速路径)
+        List<String> keywords = getCancelKeywords();
+        for (String keyword : keywords) {
+            if (userInput.contains(keyword)) {
+                log.info("[{}.detectCancel] Keyword matched: keyword={}, input={}", getGraphName(), keyword, userInput);
+                return true;
+            }
+        }
+
+        // 第2层: LLM判断 (200-500ms, 兜底路径)
         String context = getCancelDetectionContext();
         String prompt = String.format("""
             你是手机银行智能助手。判断用户是否想取消/放弃/中断当前操作。
@@ -215,7 +247,7 @@ public abstract class AbstractGraphConfig {
     }
 
     /**
-     * 带取消检查的extractParams - 自动拦截_cancelSignal + LLM取消检测,子类无需关心
+     * 带取消检查的extractParams - 自动拦截_cancelSignal + 关键字/LLM取消检测,子类无需关心
      *
      * 子类的extractParamsNode实现应使用此方法包装:
      *   private Map<String, Object> extractParamsNode(OverAllState state) {
@@ -224,9 +256,10 @@ public abstract class AbstractGraphConfig {
      *       // ... 原有extractParams逻辑 ...
      *   }
      *
-     * 检测逻辑:
+     * 检测逻辑 (分层优化):
      * 1. 检查_cancelSignal信号(由cancelGraph()注入)
-     * 2. 调用LLM检测用户输入是否表达取消意图, 若是则注入_cancelSignal
+     * 2. 关键字匹配 (0ms) - 常见取消表达直接命中
+     * 3. LLM判断 (200-500ms) - 关键字未命中时的兜底
      *
      * @return 非null表示检测到取消(子类应直接return此结果), null表示正常执行
      */

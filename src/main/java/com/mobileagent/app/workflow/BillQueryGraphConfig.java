@@ -9,7 +9,9 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static com.alibaba.cloud.ai.graph.StateGraph.END;
@@ -45,6 +47,13 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
     @Override
     protected String getCancelDetectionContext() {
         return "正在向用户询问账单查询条件(时间范围/支出类型)";
+    }
+
+    @Override
+    protected List<String> getCancelKeywords() {
+        List<String> keywords = new ArrayList<>(super.getCancelKeywords());
+        keywords.addAll(List.of("不查了", "别查了", "取消查询", "不想查了", "不用查了"));
+        return keywords;
     }
 
     @Override

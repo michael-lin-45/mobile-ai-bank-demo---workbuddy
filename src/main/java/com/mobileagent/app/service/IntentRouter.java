@@ -178,7 +178,6 @@ public class IntentRouter {
             case "CONTINUE_FOLLOWUP", "FOLLOW_UP" -> "FOLLOW_UP";
             case "SWITCH_DIRECT", "SWITCH_COMPLEX", "SWITCH_NEW" -> "SWITCH_NEW";
             case "CONTINUE_RESUME", "RESUME_PENDING", "RESUME" -> "RESUME";
-            case "CANCEL" -> "FOLLOW_UP"; // CANCEL降级为FOLLOW_UP,由子Graph检测
             default -> "SWITCH_NEW";
         };
     }

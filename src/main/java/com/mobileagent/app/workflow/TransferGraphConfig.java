@@ -10,7 +10,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static com.alibaba.cloud.ai.graph.StateGraph.END;
@@ -46,6 +48,13 @@ public class TransferGraphConfig extends AbstractGraphConfig {
     @Override
     protected String getCancelDetectionContext() {
         return "正在向用户询问转账信息(收款人/金额)";
+    }
+
+    @Override
+    protected List<String> getCancelKeywords() {
+        List<String> keywords = new ArrayList<>(super.getCancelKeywords());
+        keywords.addAll(List.of("不转了", "别转了", "取消转账", "不想转了", "不用转了"));
+        return keywords;
     }
 
     @Override

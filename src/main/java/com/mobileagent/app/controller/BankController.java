@@ -56,8 +56,8 @@ public class BankController {
      * 主聊天接口
      *
      * 流程:
-     * 1. Phase1 (IntentRouter): 判断路由类型 FOLLOW_UP/SWITCH_NEW/RESUME/CANCEL
-     * 2. CANCEL → handleCancel
+     * 1. Phase1 (IntentRouter): 判断路由类型 FOLLOW_UP/SWITCH_NEW/RESUME
+     * 2. 消歧取消检测 → handleCancel
      * 3. FOLLOW_UP + activeThread (且不在消歧中) → 直接resume
      * 4. RoutingService.resolve(): Phase2 + 消歧 + 模糊匹配 → 路由决议
      * 5. 根据决议执行Phase3
@@ -78,13 +78,8 @@ public class BankController {
             log.info("[BankController] Phase1: routeType={}, confidence={}",
                     phase1.getRouteType(), phase1.getConfidence());
 
-            // ========== CANCEL ==========
-            if ("CANCEL".equals(phase1.getRouteType())) {
-                return handleCancel(sessionId);
-            }
-
             // ========== CANCEL during disambiguation ==========
-            // Phase1不再判断CANCEL, 消歧中的取消意图由Controller直接检测
+            // Phase1不判断CANCEL, 消歧中的取消意图由Controller检测
             if (phase1.isFollowUp() && stateManager.isInDisambiguation(sessionId)) {
                 if (isCancelExpression(userInput)) {
                     log.info("[BankController] Cancel detected during disambiguation");
