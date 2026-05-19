@@ -97,11 +97,9 @@ public class ContextRewriter {
         AgentStateManager.DisambiguationState disambigState = stateManager.getDisambiguationState(sessionId);
         if (disambigState != null) {
             IntentRegistry.IntentGroup group = intentRegistry.getGroup(disambigState.getGroupId());
-            disambigContext = String.format("用户正在消歧: 意图组=%s, 候选意图=%s, 原始输入=%s, 已追问%d次",
+            disambigContext = String.format("用户正在消歧: 意图组=%s, 候选意图=%s",
                     disambigState.getGroupId(),
-                    group != null ? group.getIntentNames() : "?",
-                    disambigState.getOriginalInput(),
-                    disambigState.getAttemptCount());
+                    group != null ? group.getIntentNames() : "?");
         }
 
         // 根据Phase1判断确定改写模式

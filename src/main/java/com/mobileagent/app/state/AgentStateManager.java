@@ -147,8 +147,8 @@ public class AgentStateManager {
 
     public void setDisambiguationState(String sessionId, DisambiguationState state) {
         disambiguationStates.put(sessionId, state);
-        log.debug("[StateMgr] Set disambiguation state: session={}, groupId={}, attempt={}",
-                sessionId, state.getGroupId(), state.getAttemptCount());
+        log.debug("[StateMgr] Set disambiguation state: session={}, groupId={}",
+                sessionId, state.getGroupId());
     }
 
     public DisambiguationState getDisambiguationState(String sessionId) {
@@ -165,16 +165,6 @@ public class AgentStateManager {
         return state != null;
     }
 
-    /** 增加消歧尝试次数 */
-    public DisambiguationState incrementDisambiguationAttempt(String sessionId) {
-        DisambiguationState state = disambiguationStates.get(sessionId);
-        if (state != null) {
-            state.setAttemptCount(state.getAttemptCount() + 1);
-            log.debug("[StateMgr] Disambiguation attempt: session={}, count={}", sessionId, state.getAttemptCount());
-        }
-        return state;
-    }
-
     /** 生成当前会话状态描述(供LLM使用) */
     public String getSessionStateDescription(String sessionId) {
         StringBuilder sb = new StringBuilder();
@@ -183,8 +173,7 @@ public class AgentStateManager {
         DisambiguationState disambiguation = disambiguationStates.get(sessionId);
 
         if (disambiguation != null) {
-            sb.append("当前在消歧模式: 意图组=").append(disambiguation.getGroupId())
-              .append(", 已追问次数=").append(disambiguation.getAttemptCount());
+            sb.append("当前在消歧模式: 意图组=").append(disambiguation.getGroupId());
         } else if (active != null) {
             sb.append("当前活跃意图: ").append(active.getIntent())
               .append(" (线程: ").append(active.getThreadId().substring(0, 8)).append("...)");
@@ -246,20 +235,14 @@ public class AgentStateManager {
 
     /**
      * 消歧状态 - Controller层追问用户明确意图时使用
-     * 不是Graph,是轻量级的Controller层状态
+     * 最小状态: 只保留groupId, 用于下次回答时知道消歧哪个意图组
      */
     @Data
     public static class DisambiguationState {
-        private String groupId;
-        private int attemptCount;
-        private String originalInput;
-        private Instant createdAt;
+        private final String groupId;
 
-        public DisambiguationState(String groupId, String originalInput) {
+        public DisambiguationState(String groupId) {
             this.groupId = groupId;
-            this.originalInput = originalInput;
-            this.attemptCount = 1;
-            this.createdAt = Instant.now();
         }
     }
 }

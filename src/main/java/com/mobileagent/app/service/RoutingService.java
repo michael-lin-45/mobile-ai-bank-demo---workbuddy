@@ -15,11 +15,10 @@ import java.util.List;
  * 核心设计:
  * - 一个方法(resolve)，一次调用，一个结果
  * - Controller不需要知道消歧细节，只看RoutingResolution.status
- * - 内部逻辑清晰分层: resolve → resolveNewIntent / handleDisambiguationAnswer
- * - 未来可替换内部实现为RoutingGraph，接口不变
+ * - 消歧1次追问，回答仍模糊则直接拒绝（手机银行用户不会反复给模糊答案）
  *
  * 职责边界:
- * - 负责: Phase2意图识别 + 消歧追问/3次拒绝 + 模糊匹配
+ * - 负责: Phase2意图识别 + 消歧追问(1次) + 模糊匹配
  * - 不负责: Phase1路由类型判断(IntentRouter) / Graph执行(GraphExecutionService) / 线程管理(BankController)
  */
 @Slf4j
@@ -29,9 +28,6 @@ public class RoutingService {
     private final ContextRewriter contextRewriter;
     private final IntentRegistry intentRegistry;
     private final AgentStateManager stateManager;
-
-    /** 最大消歧追问次数 */
-    private static final int MAX_DISAMBIGUATION_ATTEMPTS = 3;
 
     public RoutingService(ContextRewriter contextRewriter,
                           IntentRegistry intentRegistry,
@@ -130,7 +126,7 @@ public class RoutingService {
     // ==================== 消歧处理 ====================
 
     /**
-     * 触发消歧 - 保存状态，返回DISAMBIGUATION
+     * 触发消歧 - 保存groupId，返回DISAMBIGUATION
      */
     private RoutingResolution triggerDisambiguation(String sessionId, String groupId, RoutingResult phase2) {
         IntentRegistry.IntentGroup group = intentRegistry.getGroup(groupId);
@@ -140,22 +136,21 @@ public class RoutingService {
         }
 
         stateManager.setDisambiguationState(sessionId,
-                new AgentStateManager.DisambiguationState(groupId, phase2.getRewrittenInput()));
-        log.info("[RoutingService] Entering disambiguation: groupId={}, attempt=1", groupId);
+                new AgentStateManager.DisambiguationState(groupId));
+        log.info("[RoutingService] Entering disambiguation: groupId={}", groupId);
 
         return RoutingResolution.disambiguation(group.getDisambiguationQuestion(), group.getIntentNames());
     }
 
     /**
-     * 处理消歧回答 - 重新Phase2识别
+     * 处理消歧回答 - 重新Phase2识别，1次追问后仍模糊则直接拒绝
      *
      * 决策链:
      * 1. 重新识别 → 如果明确 → RESOLVED
-     * 2. 仍然模糊 → 增加尝试次数
-     * 3. 达到上限 → REJECTED
+     * 2. 仍然模糊 → REJECTED (不做多轮追问)
      */
     private RoutingResolution handleDisambiguationAnswer(String sessionId, String userInput,
-                                                          RoutingResult phase1Result) {
+                                                           RoutingResult phase1Result) {
         AgentStateManager.DisambiguationState disambigState = stateManager.getDisambiguationState(sessionId);
         if (disambigState == null) {
             stateManager.clearDisambiguationState(sessionId);
@@ -190,20 +185,10 @@ public class RoutingService {
             return RoutingResolution.resolved(identifiedIntent, rewrittenInput, routeType);
         }
 
-        // 仍然模糊 → 增加尝试次数
-        disambigState = stateManager.incrementDisambiguationAttempt(sessionId);
-        int attempt = disambigState.getAttemptCount();
-
-        // 达到上限 → 拒绝
-        if (attempt >= MAX_DISAMBIGUATION_ATTEMPTS) {
-            stateManager.clearDisambiguationState(sessionId);
-            log.info("[RoutingService] Disambiguation max attempts ({}) → rejected", attempt);
-            return RoutingResolution.rejected();
-        }
-
-        // 继续追问
-        log.info("[RoutingService] Disambiguation attempt {}: still ambiguous, asking again", attempt);
-        return RoutingResolution.disambiguation(group.getDisambiguationQuestion(), group.getIntentNames());
+        // 1次追问后仍模糊 → 直接拒绝
+        stateManager.clearDisambiguationState(sessionId);
+        log.info("[RoutingService] Disambiguation answer still ambiguous → rejected");
+        return RoutingResolution.rejected();
     }
 
     // ==================== 工具方法 ====================
