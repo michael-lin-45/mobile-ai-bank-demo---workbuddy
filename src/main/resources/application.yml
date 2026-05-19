@@ -16,7 +16,11 @@ routing:
     routing-model: qwen-turbo
     rewrite-model: qwen-turbo
     planning-model: qwen-plus
-    confidence-threshold: 0.6
+  confidence:
+    # 消歧置信度阈值 - confidence低于此值且意图属于歧义组时,补充触发消歧
+    disambiguation-threshold: 0.7
+    # 高置信度豁免 - confidence高于此值时,即使LLM标ambiguous也信任首选意图
+    high-confidence-bypass: 0.85
   verification:
     max-retries: 1
 

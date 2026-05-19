@@ -5,6 +5,7 @@ import com.mobileagent.app.model.RoutingResolution;
 import com.mobileagent.app.model.RoutingResult;
 import com.mobileagent.app.state.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -17,6 +18,12 @@ import java.util.List;
  * - Controller不需要知道消歧细节，只看RoutingResolution.status
  * - 消歧1次追问，回答仍模糊则直接拒绝（手机银行用户不会反复给模糊答案）
  *
+ * 置信度增强消歧:
+ * - 不完全依赖LLM的is_ambiguous自标记，结合confidence量化判断
+ * - 高置信度 + LLM标ambiguous → 信任LLM首选意图，不消歧（LLM自己都不确定才标记ambiguous）
+ * - 低置信度 + 未标ambiguous + 意图属于歧义组 → 补充触发消歧（LLM不够自信）
+ * - 阈值可配置: routing.confidence.disambiguation-threshold
+ *
  * 职责边界:
  * - 负责: Phase2意图识别 + 消歧追问(1次) + 模糊匹配
  * - 不负责: Phase1路由类型判断(IntentRouter) / Graph执行(GraphExecutionService) / 线程管理(BankController)
@@ -28,6 +35,14 @@ public class RoutingService {
     private final ContextRewriter contextRewriter;
     private final IntentRegistry intentRegistry;
     private final AgentStateManager stateManager;
+
+    /** 消歧置信度阈值 - confidence低于此值且意图属于歧义组时,补充触发消歧 */
+    @Value("${routing.confidence.disambiguation-threshold:0.7}")
+    private double disambiguationThreshold;
+
+    /** 高置信度豁免阈值 - confidence高于此值时,即使LLM标ambiguous也信任首选意图 */
+    @Value("${routing.confidence.high-confidence-bypass:0.85}")
+    private double highConfidenceBypass;
 
     public RoutingService(ContextRewriter contextRewriter,
                           IntentRegistry intentRegistry,
@@ -60,10 +75,14 @@ public class RoutingService {
     // ==================== 新意图识别 ====================
 
     /**
-     * 识别新意图 - Phase2 + 消歧检查 + 模糊匹配
+     * 识别新意图 - Phase2 + 置信度增强消歧 + 模糊匹配
      *
-     * 决策链:
-     * 1. Phase2识别 → ambiguous? → 消歧
+     * 决策链 (置信度增强):
+     * 1. Phase2识别 → 量化消歧判断:
+     *    a. ambiguous + 低置信度 → 消歧 (LLM自己不确定)
+     *    b. ambiguous + 高置信度(≥bypass) → 信任首选意图,不消歧
+     *    c. 非ambiguous + 低置信度(<threshold) + 属于歧义组 → 补充消歧
+     *    d. 非ambiguous + 高置信度 → 直接RESOLVED
      * 2. UNKNOWN? → 拒绝
      * 3. isGroupName? → 消歧
      * 4. !hasIntent? → fuzzyMatch → 可能消歧或拒绝
@@ -72,19 +91,35 @@ public class RoutingService {
     private RoutingResolution resolveNewIntent(String sessionId, String userInput, RoutingResult phase1Result) {
         // Phase2: 上下文改写 + 意图识别
         RoutingResult phase2 = contextRewriter.rewriteAndIdentify(sessionId, userInput, phase1Result, stateManager);
-        log.info("[RoutingService] Phase2: intent={}, ambiguous={}, candidates={}",
-                phase2.getIntentName(), phase2.isAmbiguous(), phase2.getCandidateIntents());
+        log.info("[RoutingService] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
+                phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence(), phase2.getCandidateIntents());
 
-        // 1. LLM明确标记为ambiguous + 有候选意图 → 消歧
+        // 1. 置信度增强的消歧判断
         if (phase2.isAmbiguous() && phase2.getCandidateIntents() != null && !phase2.getCandidateIntents().isEmpty()) {
-            String groupId = resolveGroupId(phase2.getGroupId(), phase2.getCandidateIntents());
-            if (groupId != null && intentRegistry.getGroup(groupId) != null) {
-                return triggerDisambiguation(sessionId, groupId, phase2);
+            // 1a. LLM标ambiguous + 低置信度 → 消歧
+            if (phase2.getConfidence() < highConfidenceBypass) {
+                String groupId = resolveGroupId(phase2.getGroupId(), phase2.getCandidateIntents());
+                if (groupId != null && intentRegistry.getGroup(groupId) != null) {
+                    log.info("[RoutingService] Disambiguation: ambiguous + low confidence ({}) < bypass ({})",
+                            phase2.getConfidence(), highConfidenceBypass);
+                    return triggerDisambiguation(sessionId, groupId, phase2);
+                }
             }
-            log.info("[RoutingService] Ambiguous but no matching group, falling through with first candidate");
+            // 1b. LLM标ambiguous + 高置信度 → 信任首选意图,不消歧
+            log.info("[RoutingService] Ambiguous but high confidence ({}) >= bypass ({}), trusting top intent: {}",
+                    phase2.getConfidence(), highConfidenceBypass, phase2.getIntentName());
         }
 
+        // 1c. 非ambiguous + 低置信度 + 意图属于歧义组 → 补充消歧
         String effectiveIntent = phase2.getIntentName();
+        if (!phase2.isAmbiguous() && effectiveIntent != null && phase2.getConfidence() < disambiguationThreshold) {
+            IntentRegistry.IntentGroup group = intentRegistry.findGroupByIntent(effectiveIntent);
+            if (group != null) {
+                log.info("[RoutingService] Supplemental disambiguation: low confidence ({}) < threshold ({}), intent={} belongs to group={}",
+                        phase2.getConfidence(), disambiguationThreshold, effectiveIntent, group.getGroupId());
+                return triggerDisambiguation(sessionId, group.getGroupId(), phase2);
+            }
+        }
 
         // 2. 完全无法识别 → 拒绝
         if (effectiveIntent == null || "UNKNOWN".equalsIgnoreCase(effectiveIntent)) {
@@ -168,17 +203,34 @@ public class RoutingService {
         RoutingResult rePhase1 = RoutingResult.builder()
                 .routeType("SWITCH_NEW").confidence(0.8).reasoning("消歧回答重新识别").build();
         RoutingResult phase2 = contextRewriter.rewriteAndIdentify(sessionId, userInput, rePhase1, stateManager);
-        log.info("[RoutingService] Disambiguation re-identify: intent={}, ambiguous={}",
-                phase2.getIntentName(), phase2.isAmbiguous());
+        log.info("[RoutingService] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
+                phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence());
 
-        // 识别到明确的已注册意图 → 解决
+        // 识别到明确的已注册意图 + 置信度足够 → 解决
         String identifiedIntent = phase2.getIntentName();
         if (identifiedIntent != null
                 && !"UNKNOWN".equalsIgnoreCase(identifiedIntent)
                 && intentRegistry.hasIntent(identifiedIntent)
-                && !intentRegistry.isGroupName(identifiedIntent)) {
+                && !intentRegistry.isGroupName(identifiedIntent)
+                && phase2.getConfidence() >= disambiguationThreshold) {
             stateManager.clearDisambiguationState(sessionId);
-            log.info("[RoutingService] Disambiguation resolved: intent={}", identifiedIntent);
+            log.info("[RoutingService] Disambiguation resolved: intent={}, confidence={}",
+                    identifiedIntent, phase2.getConfidence());
+
+            String routeType = resolveRouteType(phase1Result, phase2);
+            String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
+            return RoutingResolution.resolved(identifiedIntent, rewrittenInput, routeType);
+        }
+
+        // 低置信度但识别到组内意图 → 仍然RESOLVED (消歧1次后不过度追问)
+        if (identifiedIntent != null
+                && !"UNKNOWN".equalsIgnoreCase(identifiedIntent)
+                && intentRegistry.hasIntent(identifiedIntent)
+                && !intentRegistry.isGroupName(identifiedIntent)
+                && phase2.getConfidence() < disambiguationThreshold) {
+            stateManager.clearDisambiguationState(sessionId);
+            log.info("[RoutingService] Disambiguation resolved (low confidence but in-group): intent={}, confidence={}",
+                    identifiedIntent, phase2.getConfidence());
 
             String routeType = resolveRouteType(phase1Result, phase2);
             String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
