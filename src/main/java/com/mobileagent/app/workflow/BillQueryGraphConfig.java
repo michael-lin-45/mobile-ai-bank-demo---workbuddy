@@ -50,30 +50,25 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
 
     @Bean("billQueryGraph")
     public CompiledGraph billQueryGraph() throws GraphStateException {
+        Map<String, String> paramEdges = new HashMap<>(Map.of(
+                "ASK_TIME", "askTime",
+                "ASK_TYPE", "askType",
+                "ALL_GOOD", "executeBillQuery"
+        ));
+        addCancelEdge(paramEdges);
+
         StateGraph graph = new StateGraph(createKeyStrategyFactory())
                 .addNode("extractParams", node_async(this::extractParamsNode))
                 .addNode("paramRouter", node_async(this::paramRouterNode))
                 .addNode("askTime", node_async(this::askTimeNode))
                 .addNode("askType", node_async(this::askTypeNode))
                 .addNode("executeBillQuery", node_async(this::executeBillQueryNode))
-                .addNode("cancelExecution", node_async(this::cancelExecutionNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
-                .addConditionalEdges("paramRouter",
-                        edge_async(state -> {
-                            // 取消信号优先
-                            if (isCancelled(state)) return "CANCEL";
-                            Object param = state.value("_paramName").orElse("ALL_GOOD");
-                            return param.toString();
-                        }),
-                        Map.of(
-                                "ASK_TIME", "askTime",
-                                "ASK_TYPE", "askType",
-                                "ALL_GOOD", "executeBillQuery",
-                                "CANCEL", "cancelExecution"
-                        ))
-                .addEdge("executeBillQuery", END)
-                .addEdge("cancelExecution", END);
+                .addConditionalEdges("paramRouter", createCancelAwareRouter(), paramEdges)
+                .addEdge("executeBillQuery", END);
+
+        addCancelNode(graph);
 
         // ask节点条件路由
         addAskConditionalEdges(graph, "askTime");
@@ -81,18 +76,14 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
 
         CompiledGraph compiled = graph.compile(createCompileConfig("askTime", "askType"));
 
-        log.info("[BillQueryGraph] Compiled successfully with interruptBefore + ask→END conditional routing");
+        log.info("[BillQueryGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
     }
 
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
-        // 取消信号: 跳过LLM调用,直接返回空
-        if (isCancelled(state)) {
-            log.info("[BillQueryGraph.extractParams] Cancel signal detected, skipping LLM");
-            return Map.of();
-        }
+        if (cancelAwareExtractParams(state)) return Map.of();
 
         String userInput = getLatestInput(state);
         log.info("[BillQueryGraph.extractParams] userInput={}", userInput);
@@ -109,11 +100,8 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
     }
 
     private Map<String, Object> paramRouterNode(OverAllState state) {
-        // 取消信号: 直接路由到cancelExecution
-        if (isCancelled(state)) {
-            log.info("[BillQueryGraph.paramRouter] Cancel signal → CANCEL");
-            return Map.of("_paramName", "CANCEL");
-        }
+        Map<String, Object> cancelResult = cancelAwareParamRouter(state);
+        if (cancelResult != null) return cancelResult;
 
         String timePeriod = getStringValue(state, "bill.timePeriod");
         String expenseType = getStringValue(state, "bill.expenseType");

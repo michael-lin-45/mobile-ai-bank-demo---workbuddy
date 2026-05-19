@@ -4,6 +4,8 @@ import com.alibaba.cloud.ai.graph.*;
 import com.alibaba.cloud.ai.graph.checkpoint.config.SaverConfig;
 import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.CompileConfig;
+import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
+import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
 import com.alibaba.cloud.ai.graph.exception.GraphStateException;
 import com.alibaba.cloud.ai.graph.state.strategy.AppendStrategy;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
@@ -17,13 +19,21 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.alibaba.cloud.ai.graph.StateGraph.END;
+import static com.alibaba.cloud.ai.graph.action.AsyncEdgeAction.edge_async;
+import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
+
 /**
  * Graph配置基类 - 提取4个子Graph共享的基础设施代码
  *
  * 子Graph共享的模式:
  * - extractJson / getLatestInput / getStringValue 等工具方法
  * - callExtractModel (buildExtractPrompt + LLM call + parseExtractResult)
- * - isCancelled / cancelExecutionNode 取消信号处理
+ * - 取消信号处理 (isCancelled / cancelExecutionNode / onCleanup)
+ *   - cancelAwareExtractParams: 自动拦截_cancelSignal, 子类无需关心
+ *   - cancelAwareParamRouter: 自动拦截_cancelSignal, 子类只需关心业务路由
+ *   - addCancelNode: 一行代码添加cancelExecution节点+END边
+ *   - addCancelEdge: 一行代码给paramRouter的edges map添加CANCEL路由
  * - 公共KeyStrategy注册 (messages, _latestUserInput, _question, _cancelSignal等)
  * - SaverConfig + CompileConfig构建
  * - ask节点条件路由 (CONTINUE→paramRouter / WAIT→END)
@@ -33,6 +43,9 @@ import java.util.Map;
  * - buildExtractPrompt(): 提取参数的prompt
  * - parseExtractResult(): 解析LLM返回的JSON
  * - registerCustomKeys(): 注册Graph专用的state keys
+ *
+ * 子类可覆盖:
+ * - onCleanup(): 取消时的自定义清理逻辑 (如释放资源、回滚等)
  */
 @Slf4j
 public abstract class AbstractGraphConfig {
@@ -111,17 +124,115 @@ public abstract class AbstractGraphConfig {
     }
 
     /**
-     * 默认的取消执行节点 - 子Graph可直接使用
-     * 设置取消输出内容并终止Graph
+     * 取消时的自定义清理逻辑 - 子类可覆盖
+     *
+     * 典型场景: 释放锁、回滚临时数据、记录审计日志等
+     * 默认实现: 无操作
+     *
+     * @param state 当前Graph状态 (包含已收集的参数)
+     * @return 需要写入state的额外数据 (通常返回Map.of())
+     */
+    protected Map<String, Object> onCleanup(OverAllState state) {
+        return Map.of();
+    }
+
+    /**
+     * 取消执行节点 - 调用子类onCleanup()后设置取消输出并终止Graph
      */
     protected Map<String, Object> cancelExecutionNode(OverAllState state) {
-        log.info("[{}.cancelExecution] Cancel signal received, terminating", getGraphName());
+        log.info("[{}.cancelExecution] Cancel signal received, calling cleanup", getGraphName());
+        Map<String, Object> cleanupResult = onCleanup(state);
         Map<String, Object> result = new HashMap<>();
         result.put("_outputContent", "操作已取消");
         result.put("_outputType", "TEXT");
         result.put("_isFinal", true);
         result.put("_cancelSignal", null);
+        if (cleanupResult != null && !cleanupResult.isEmpty()) {
+            result.putAll(cleanupResult);
+        }
         return result;
+    }
+
+    /**
+     * 带取消检查的extractParams - 自动拦截_cancelSignal,子类无需关心
+     *
+     * 子类的extractParamsNode实现应使用此方法包装:
+     *   private Map<String, Object> extractParamsNode(OverAllState state) {
+     *       if (cancelAwareExtractParams(state)) return Map.of();
+     *       // ... 原有extractParams逻辑 ...
+     *   }
+     *
+     * @return true表示检测到取消信号(子类应直接return Map.of()), false表示正常执行
+     */
+    protected boolean cancelAwareExtractParams(OverAllState state) {
+        if (isCancelled(state)) {
+            log.info("[{}.extractParams] Cancel signal detected, skipping LLM", getGraphName());
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 带取消检查的paramRouter - 自动拦截_cancelSignal,子类无需关心
+     *
+     * 子类的paramRouterNode实现应使用此方法包装:
+     *   private Map<String, Object> paramRouterNode(OverAllState state) {
+     *       Map<String, Object> cancelResult = cancelAwareParamRouter(state);
+     *       if (cancelResult != null) return cancelResult;
+     *       // ... 原有paramRouter逻辑 ...
+     *   }
+     *
+     * @return 非null表示检测到取消信号(子类应直接return此结果), null表示正常执行
+     */
+    protected Map<String, Object> cancelAwareParamRouter(OverAllState state) {
+        if (isCancelled(state)) {
+            log.info("[{}.paramRouter] Cancel signal → CANCEL", getGraphName());
+            return Map.of("_paramName", "CANCEL");
+        }
+        return null;
+    }
+
+    /**
+     * 添加cancelExecution节点 + END边 - 子类Graph构建时调用
+     *
+     * 用法: 在graph构建链中调用
+     *   .addNode("cancelExecution", node_async(this::cancelExecutionNode))
+     *   ...
+     *   addCancelEdge(graph);
+     */
+    protected void addCancelNode(StateGraph graph) throws GraphStateException {
+        graph.addNode("cancelExecution", node_async(this::cancelExecutionNode))
+             .addEdge("cancelExecution", END);
+    }
+
+    /**
+     * 给paramRouter的条件边map添加CANCEL路由 - 子类Graph构建时调用
+     *
+     * 用法:
+     *   Map<String, String> edges = new HashMap<>(Map.of(
+     *       "ASK_TIME", "askTime",
+     *       "ALL_GOOD", "executeBillQuery"
+     *   ));
+     *   addCancelEdge(edges);
+     */
+    protected void addCancelEdge(Map<String, String> edges) {
+        edges.put("CANCEL", "cancelExecution");
+    }
+
+    /**
+     * 创建带取消检查的paramRouter条件路由函数
+     *
+     * 用法:
+     *   .addConditionalEdges("paramRouter",
+     *       createCancelAwareRouter(),
+     *       edgeMap)
+     */
+    protected AsyncEdgeAction createCancelAwareRouter() {
+        return edge_async(state -> {
+            if (isCancelled(state)) return "CANCEL";
+            Object param = state.value("_paramName").orElse("ALL_GOOD");
+            return param.toString();
+        });
     }
 
     // ==================== 公共构建方法 ====================

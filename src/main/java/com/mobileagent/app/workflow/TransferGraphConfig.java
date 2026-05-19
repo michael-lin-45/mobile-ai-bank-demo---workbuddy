@@ -52,30 +52,25 @@ public class TransferGraphConfig extends AbstractGraphConfig {
 
     @Bean("transferGraph")
     public CompiledGraph transferGraph() throws GraphStateException {
+        Map<String, String> paramEdges = new HashMap<>(Map.of(
+                "ASK_RECEIVER", "askReceiver",
+                "ASK_AMOUNT", "askAmount",
+                "ALL_GOOD", "executeTransfer"
+        ));
+        addCancelEdge(paramEdges);
+
         StateGraph graph = new StateGraph(createKeyStrategyFactory())
                 .addNode("extractParams", node_async(this::extractParamsNode))
                 .addNode("paramRouter", node_async(this::paramRouterNode))
                 .addNode("askReceiver", node_async(this::askReceiverNode))
                 .addNode("askAmount", node_async(this::askAmountNode))
                 .addNode("executeTransfer", node_async(this::executeTransferNode))
-                .addNode("cancelExecution", node_async(this::cancelExecutionNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
-                .addConditionalEdges("paramRouter",
-                        edge_async(state -> {
-                            // 取消信号优先
-                            if (isCancelled(state)) return "CANCEL";
-                            Object param = state.value("_paramName").orElse("ALL_GOOD");
-                            return param.toString();
-                        }),
-                        Map.of(
-                                "ASK_RECEIVER", "askReceiver",
-                                "ASK_AMOUNT", "askAmount",
-                                "ALL_GOOD", "executeTransfer",
-                                "CANCEL", "cancelExecution"
-                        ))
-                .addEdge("executeTransfer", END)
-                .addEdge("cancelExecution", END);
+                .addConditionalEdges("paramRouter", createCancelAwareRouter(), paramEdges)
+                .addEdge("executeTransfer", END);
+
+        addCancelNode(graph);
 
         // ask节点条件路由
         addAskConditionalEdges(graph, "askReceiver");
@@ -83,18 +78,14 @@ public class TransferGraphConfig extends AbstractGraphConfig {
 
         CompiledGraph compiled = graph.compile(createCompileConfig("askReceiver", "askAmount"));
 
-        log.info("[TransferGraph] Compiled successfully with interruptBefore + ask→END conditional routing");
+        log.info("[TransferGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
     }
 
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
-        // 取消信号: 跳过LLM调用,直接返回空
-        if (isCancelled(state)) {
-            log.info("[TransferGraph.extractParams] Cancel signal detected, skipping LLM");
-            return Map.of();
-        }
+        if (cancelAwareExtractParams(state)) return Map.of();
 
         String userInput = getLatestInput(state);
         log.info("[TransferGraph.extractParams] userInput={}", userInput);
@@ -111,11 +102,8 @@ public class TransferGraphConfig extends AbstractGraphConfig {
     }
 
     private Map<String, Object> paramRouterNode(OverAllState state) {
-        // 取消信号: 直接路由到cancelExecution
-        if (isCancelled(state)) {
-            log.info("[TransferGraph.paramRouter] Cancel signal → CANCEL");
-            return Map.of("_paramName", "CANCEL");
-        }
+        Map<String, Object> cancelResult = cancelAwareParamRouter(state);
+        if (cancelResult != null) return cancelResult;
 
         String receiver = getStringValue(state, "transfer.receiver");
         Object amountObj = state.value("transfer.amount").orElse(null);

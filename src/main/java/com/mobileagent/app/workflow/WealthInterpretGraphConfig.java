@@ -23,6 +23,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  * 节点流程:
  * START → extractParams → paramRouter → askProductName (interruptBefore)
  *                                       ↘ executeWealthInterpret → END
+ *                                       ↘ cancelExecution → END (_cancelSignal)
  * askProductName → paramRouter (循环)
  */
 @Slf4j
@@ -48,6 +49,12 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
 
     @Bean("wealthInterpretGraph")
     public CompiledGraph wealthInterpretGraph() throws GraphStateException {
+        Map<String, String> paramEdges = new HashMap<>(Map.of(
+                "ASK_PRODUCT_NAME", "askProductName",
+                "ALL_GOOD", "executeWealthInterpret"
+        ));
+        addCancelEdge(paramEdges);
+
         StateGraph graph = new StateGraph(createKeyStrategyFactory())
                 .addNode("extractParams", node_async(this::extractParamsNode))
                 .addNode("paramRouter", node_async(this::paramRouterNode))
@@ -55,29 +62,25 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
                 .addNode("executeWealthInterpret", node_async(this::executeWealthInterpretNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
-                .addConditionalEdges("paramRouter",
-                        edge_async(state -> {
-                            Object param = state.value("_paramName").orElse("ALL_GOOD");
-                            return param.toString();
-                        }),
-                        Map.of(
-                                "ASK_PRODUCT_NAME", "askProductName",
-                                "ALL_GOOD", "executeWealthInterpret"
-                        ))
+                .addConditionalEdges("paramRouter", createCancelAwareRouter(), paramEdges)
                 .addEdge("executeWealthInterpret", END);
+
+        addCancelNode(graph);
 
         // ask节点条件路由
         addAskConditionalEdges(graph, "askProductName");
 
         CompiledGraph compiled = graph.compile(createCompileConfig("askProductName"));
 
-        log.info("[WealthInterpretGraph] Compiled successfully with interruptBefore + ask→END conditional routing");
+        log.info("[WealthInterpretGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
     }
 
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
+        if (cancelAwareExtractParams(state)) return Map.of();
+
         String userInput = getLatestInput(state);
         log.info("[WealthInterpretGraph.extractParams] userInput={}", userInput);
 
@@ -93,6 +96,9 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
     }
 
     private Map<String, Object> paramRouterNode(OverAllState state) {
+        Map<String, Object> cancelResult = cancelAwareParamRouter(state);
+        if (cancelResult != null) return cancelResult;
+
         String productName = getStringValue(state, "wealthInterpret.productName");
 
         Map<String, Object> result = new HashMap<>();

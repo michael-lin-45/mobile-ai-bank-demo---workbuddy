@@ -185,20 +185,13 @@ public class BankController {
             return WorkflowOutput.completed(null, "当前没有进行中的操作。有什么可以帮您的吗？");
         }
 
-        // 有活跃线程 → 通知子Graph自行清理
+        // 有活跃线程 → 通知子Graph自行清理 (所有子Graph都支持_cancelSignal)
         if (active != null) {
-            String intent = active.getIntent();
-            // TRANSFER和BILL_QUERY支持_cancelSignal, 让Graph自行清理
-            if ("TRANSFER".equals(intent) || "BILL_QUERY".equals(intent)) {
-                stateManager.clearDisambiguationState(sessionId);
-                return graphExecutionService.cancelGraph(intent, active.getThreadId(), sessionId);
-            }
-            // 其他意图: 直接清理(Controller层面取消)
-            stateManager.completeAgent(sessionId, intent);
-            stateManager.clearActiveThread(sessionId);
+            stateManager.clearDisambiguationState(sessionId);
+            return graphExecutionService.cancelGraph(active.getIntent(), active.getThreadId(), sessionId);
         }
 
-        // 清除消歧状态
+        // 清除消歧状态 (消歧中但无活跃线程)
         stateManager.clearDisambiguationState(sessionId);
         return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
     }

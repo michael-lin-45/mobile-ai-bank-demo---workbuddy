@@ -23,6 +23,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  * 节点流程:
  * START → extractParams → paramRouter → askRiskLevel (interruptBefore)
  *                                       ↘ executeWealthConsult → END
+ *                                       ↘ cancelExecution → END (_cancelSignal)
  * askRiskLevel → paramRouter (循环)
  */
 @Slf4j
@@ -48,6 +49,12 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
 
     @Bean("wealthConsultGraph")
     public CompiledGraph wealthConsultGraph() throws GraphStateException {
+        Map<String, String> paramEdges = new HashMap<>(Map.of(
+                "ASK_RISK_LEVEL", "askRiskLevel",
+                "ALL_GOOD", "executeWealthConsult"
+        ));
+        addCancelEdge(paramEdges);
+
         StateGraph graph = new StateGraph(createKeyStrategyFactory())
                 .addNode("extractParams", node_async(this::extractParamsNode))
                 .addNode("paramRouter", node_async(this::paramRouterNode))
@@ -55,29 +62,25 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
                 .addNode("executeWealthConsult", node_async(this::executeWealthConsultNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
-                .addConditionalEdges("paramRouter",
-                        edge_async(state -> {
-                            Object param = state.value("_paramName").orElse("ALL_GOOD");
-                            return param.toString();
-                        }),
-                        Map.of(
-                                "ASK_RISK_LEVEL", "askRiskLevel",
-                                "ALL_GOOD", "executeWealthConsult"
-                        ))
+                .addConditionalEdges("paramRouter", createCancelAwareRouter(), paramEdges)
                 .addEdge("executeWealthConsult", END);
+
+        addCancelNode(graph);
 
         // ask节点条件路由
         addAskConditionalEdges(graph, "askRiskLevel");
 
         CompiledGraph compiled = graph.compile(createCompileConfig("askRiskLevel"));
 
-        log.info("[WealthConsultGraph] Compiled successfully with interruptBefore + ask→END conditional routing");
+        log.info("[WealthConsultGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
     }
 
     // ==================== 节点实现 ====================
 
     private Map<String, Object> extractParamsNode(OverAllState state) {
+        if (cancelAwareExtractParams(state)) return Map.of();
+
         String userInput = getLatestInput(state);
         log.info("[WealthConsultGraph.extractParams] userInput={}", userInput);
 
@@ -93,6 +96,9 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
     }
 
     private Map<String, Object> paramRouterNode(OverAllState state) {
+        Map<String, Object> cancelResult = cancelAwareParamRouter(state);
+        if (cancelResult != null) return cancelResult;
+
         String riskLevel = getStringValue(state, "wealthConsult.riskLevel");
 
         Map<String, Object> result = new HashMap<>();
