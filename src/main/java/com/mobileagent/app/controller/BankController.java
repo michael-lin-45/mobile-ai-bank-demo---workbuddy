@@ -2,11 +2,12 @@ package com.mobileagent.app.controller;
 
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.mobileagent.app.model.IntentRegistry;
+import com.mobileagent.app.model.RoutingResolution;
 import com.mobileagent.app.model.RoutingResult;
 import com.mobileagent.app.model.WorkflowOutput;
-import com.mobileagent.app.service.ContextRewriter;
 import com.mobileagent.app.service.GraphExecutionService;
 import com.mobileagent.app.service.IntentRouter;
+import com.mobileagent.app.service.RoutingService;
 import com.mobileagent.app.state.AgentStateManager;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -15,18 +16,13 @@ import org.springframework.web.bind.annotation.*;
 import java.util.*;
 
 /**
- * 银行主控制器 (Master) - 接收用户消息 → 3阶段LLM路由 → 执行Graph → 处理中断/完成
+ * 银行主控制器 (Master) - 接收用户消息 → Phase1路由 → 路由决议 → 执行Graph
  *
- * 3阶段路由:
- * Phase1: 4B模型判断意图类型 (FOLLOW_UP / SWITCH_NEW / RESUME)
- * Phase2: 8B模型上下文改写+意图识别 (仅SWITCH_NEW/RESUME/fallback需要)
- * Phase3: 路由执行
- *
- * 职责边界:
- * - Controller: 路由决策 + 消歧决策 + 协调Service
+ * 职责边界 (重构后):
+ * - Controller: Phase1路由 + CANCEL处理 + FOLLOW_UP快速路径 + 根据决议执行Phase3
+ * - RoutingService: Phase2识别 + 消歧 + 模糊匹配 (Controller不关心细节)
  * - GraphExecutionService: Graph执行 + 中断检测 + 参数提取
- * - IntentRegistry: 意图注册 + 模糊匹配
- * - IntentRouter/ContextRewriter: LLM路由判断
+ * - IntentRouter: Phase1确定性规则 + 4B模型判断
  */
 @Slf4j
 @RestController
@@ -36,28 +32,35 @@ public class BankController {
     private final AgentStateManager stateManager;
     private final IntentRegistry intentRegistry;
     private final IntentRouter intentRouter;
-    private final ContextRewriter contextRewriter;
+    private final RoutingService routingService;
     private final GraphExecutionService graphExecutionService;
 
     public BankController(AgentStateManager stateManager,
                           IntentRegistry intentRegistry,
                           IntentRouter intentRouter,
-                          ContextRewriter contextRewriter,
+                          RoutingService routingService,
                           GraphExecutionService graphExecutionService) {
         this.stateManager = stateManager;
         this.intentRegistry = intentRegistry;
         this.intentRouter = intentRouter;
-        this.contextRewriter = contextRewriter;
+        this.routingService = routingService;
         this.graphExecutionService = graphExecutionService;
     }
 
     @PostConstruct
     public void init() {
-        log.info("[BankController] Initialized");
+        log.info("[BankController] Initialized with RoutingService");
     }
 
     /**
      * 主聊天接口
+     *
+     * 流程:
+     * 1. Phase1 (IntentRouter): 判断路由类型 FOLLOW_UP/SWITCH_NEW/RESUME/CANCEL
+     * 2. CANCEL → handleCancel
+     * 3. FOLLOW_UP + activeThread (且不在消歧中) → 直接resume
+     * 4. RoutingService.resolve(): Phase2 + 消歧 + 模糊匹配 → 路由决议
+     * 5. 根据决议执行Phase3
      */
     @PostMapping("/chat")
     public WorkflowOutput chat(@RequestParam String sessionId,
@@ -70,22 +73,18 @@ public class BankController {
         }
 
         try {
-            // ========== 消歧模式处理 ==========
-            if (stateManager.isInDisambiguation(sessionId)) {
-                return handleDisambiguationAnswer(sessionId, userInput);
-            }
-
             // ========== Phase 1: 意图类型判断 (4B) ==========
             RoutingResult phase1 = intentRouter.route(sessionId, userInput, stateManager);
             log.info("[BankController] Phase1: routeType={}, confidence={}",
                     phase1.getRouteType(), phase1.getConfidence());
 
+            // ========== CANCEL ==========
             if ("CANCEL".equals(phase1.getRouteType())) {
                 return handleCancel(sessionId);
             }
 
-            // ========== FOLLOW_UP + activeThread → 直接resume ==========
-            if (phase1.isFollowUp()) {
+            // ========== FOLLOW_UP + activeThread → 直接resume (消歧中除外) ==========
+            if (phase1.isFollowUp() && !stateManager.isInDisambiguation(sessionId)) {
                 AgentStateManager.ActiveThreadInfo activeThread = stateManager.getActiveThread(sessionId);
                 if (activeThread != null) {
                     log.info("[BankController] FOLLOW_UP with activeThread: intent={}", activeThread.getIntent());
@@ -100,74 +99,16 @@ public class BankController {
                 }
             }
 
-            // ========== Phase 2: 上下文改写+意图识别 (8B) ==========
-            RoutingResult phase2 = contextRewriter.rewriteAndIdentify(sessionId, userInput, phase1, stateManager);
-            log.info("[BankController] Phase2: intent={}, ambiguous={}, candidates={}",
-                    phase2.getIntentName(), phase2.isAmbiguous(), phase2.getCandidateIntents());
+            // ========== 路由决策 (Phase2 + 消歧 + 模糊匹配) ==========
+            RoutingResolution resolution = routingService.resolve(sessionId, userInput, phase1);
+            log.info("[BankController] Routing resolution: status={}, intent={}",
+                    resolution.getStatus(), resolution.getIntentName());
 
-            // ========== 消歧检查 ==========
-            if (phase2.isAmbiguous() && phase2.getCandidateIntents() != null && !phase2.getCandidateIntents().isEmpty()) {
-                String groupId = phase2.getGroupId();
-                if (groupId == null) groupId = inferGroupId(phase2.getCandidateIntents());
-                if (groupId != null && intentRegistry.getGroup(groupId) != null) {
-                    return handleDisambiguationNeeded(sessionId, phase2, userInput);
-                }
-                log.info("[BankController] Ambiguous but no matching group, falling through with first candidate");
-            }
-
-            // ========== 完全无法识别 → 不支持 ==========
-            String effectiveIntent = phase2.getIntentName();
-            if ("UNKNOWN".equalsIgnoreCase(effectiveIntent) || effectiveIntent == null) {
-                log.info("[BankController] Intent completely unidentifiable");
-                return WorkflowOutput.completed(null, "不支持该功能");
-            }
-
-            // ========== 意图组名 → 消歧 ==========
-            if (intentRegistry.isGroupName(effectiveIntent)) {
-                IntentRegistry.IntentGroup group = intentRegistry.getGroup(effectiveIntent);
-                if (group != null) {
-                    RoutingResult disambigResult = RoutingResult.builder()
-                            .routeType(phase1.getRouteType()).intentName(effectiveIntent)
-                            .groupId(effectiveIntent).candidateIntents(group.getIntentNames())
-                            .ambiguous(true).rewrittenInput(phase2.getRewrittenInput())
-                            .confidence(phase2.getConfidence()).build();
-                    return handleDisambiguationNeeded(sessionId, disambigResult, userInput);
-                }
-            }
-
-            // ========== 模糊匹配 ==========
-            if (!intentRegistry.hasIntent(effectiveIntent)) {
-                log.warn("[BankController] Unknown intent: {}, attempting fuzzy match", effectiveIntent);
-                effectiveIntent = intentRegistry.fuzzyMatchIntent(effectiveIntent, userInput);
-                if (effectiveIntent == null) {
-                    return WorkflowOutput.completed(null, "不支持该功能");
-                }
-                // 模糊匹配到组名 → 消歧
-                if (intentRegistry.isGroupName(effectiveIntent)) {
-                    IntentRegistry.IntentGroup group = intentRegistry.getGroup(effectiveIntent);
-                    if (group != null) {
-                        RoutingResult disambigResult = RoutingResult.builder()
-                                .routeType(phase1.getRouteType()).intentName(effectiveIntent)
-                                .groupId(effectiveIntent).candidateIntents(group.getIntentNames())
-                                .ambiguous(true).rewrittenInput(phase2.getRewrittenInput())
-                                .confidence(phase2.getConfidence()).build();
-                        return handleDisambiguationNeeded(sessionId, disambigResult, userInput);
-                    }
-                }
-                log.info("[BankController] Fuzzy matched to: {}", effectiveIntent);
-            }
-
-            // ========== Phase 3: 路由执行 ==========
-            String routeType = phase2.getRefinedRouteType() != null ? phase2.getRefinedRouteType() : phase1.getRouteType();
-            if (phase1.isFollowUp() && phase2.getRefinedRouteType() == null) {
-                routeType = "SWITCH_NEW";
-            }
-
-            return switch (routeType) {
-                case "SWITCH_NEW" -> handleSwitchNew(sessionId, effectiveIntent,
-                        phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput);
-                case "RESUME" -> handleResume(sessionId, effectiveIntent, userInput);
-                default -> WorkflowOutput.error("Unknown route type: " + routeType);
+            // ========== 根据决议执行Phase3 ==========
+            return switch (resolution.getStatus()) {
+                case RESOLVED -> executeRoute(sessionId, resolution);
+                case DISAMBIGUATION -> WorkflowOutput.disambiguation(resolution.getQuestion(), resolution.getCandidateIntents());
+                case REJECTED -> WorkflowOutput.completed(null, "不支持该功能");
             };
 
         } catch (Exception e) {
@@ -176,78 +117,17 @@ public class BankController {
         }
     }
 
-    // ==================== 消歧处理 ====================
+    // ==================== Phase3: 路由执行 ====================
 
-    private WorkflowOutput handleDisambiguationNeeded(String sessionId, RoutingResult phase2Result, String userInput) {
-        String groupId = phase2Result.getGroupId();
-        if (groupId == null && phase2Result.getCandidateIntents() != null && !phase2Result.getCandidateIntents().isEmpty()) {
-            groupId = inferGroupId(phase2Result.getCandidateIntents());
-        }
-
-        IntentRegistry.IntentGroup group = groupId != null ? intentRegistry.getGroup(groupId) : null;
-        if (group == null) {
-            log.warn("[BankController] Disambiguation failed: no group found for candidates={}", phase2Result.getCandidateIntents());
-            return WorkflowOutput.completed(null, "不支持该功能");
-        }
-
-        stateManager.setDisambiguationState(sessionId, new AgentStateManager.DisambiguationState(groupId, userInput));
-        log.info("[BankController] Entering disambiguation: groupId={}, attempt=1", groupId);
-        return WorkflowOutput.disambiguation(group.getDisambiguationQuestion(), group.getIntentNames());
+    /**
+     * 执行路由 - 根据决议中的routeType分发
+     */
+    private WorkflowOutput executeRoute(String sessionId, RoutingResolution resolution) {
+        return switch (resolution.getRouteType()) {
+            case "RESUME" -> handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
+            default -> handleSwitchNew(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
+        };
     }
-
-    private WorkflowOutput handleDisambiguationAnswer(String sessionId, String userInput) {
-        AgentStateManager.DisambiguationState disambigState = stateManager.getDisambiguationState(sessionId);
-        if (disambigState == null) {
-            stateManager.clearDisambiguationState(sessionId);
-            return WorkflowOutput.error("消歧状态异常");
-        }
-
-        String groupId = disambigState.getGroupId();
-        IntentRegistry.IntentGroup group = intentRegistry.getGroup(groupId);
-        if (group == null) {
-            stateManager.clearDisambiguationState(sessionId);
-            return WorkflowOutput.completed(null, "不支持该功能");
-        }
-
-        // 重新走Phase2识别
-        RoutingResult phase1Result = RoutingResult.builder()
-                .routeType("SWITCH_NEW").confidence(0.8).reasoning("消歧回答重新识别").build();
-        RoutingResult phase2 = contextRewriter.rewriteAndIdentify(sessionId, userInput, phase1Result, stateManager);
-        log.info("[BankController] Disambiguation re-identify: intent={}, ambiguous={}",
-                phase2.getIntentName(), phase2.isAmbiguous());
-
-        String identifiedIntent = phase2.getIntentName();
-        if (identifiedIntent != null && !"UNKNOWN".equalsIgnoreCase(identifiedIntent)
-                && intentRegistry.hasIntent(identifiedIntent) && !intentRegistry.isGroupName(identifiedIntent)) {
-            stateManager.clearDisambiguationState(sessionId);
-            log.info("[BankController] Disambiguation resolved: intent={}", identifiedIntent);
-            return handleSwitchNew(sessionId, identifiedIntent,
-                    phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput);
-        }
-
-        // 仍然模糊 → 增加尝试次数
-        disambigState = stateManager.incrementDisambiguationAttempt(sessionId);
-        int attempt = disambigState.getAttemptCount();
-
-        if (attempt >= 3) {
-            stateManager.clearDisambiguationState(sessionId);
-            log.info("[BankController] Disambiguation max attempts ({}) → 不支持该功能", attempt);
-            return WorkflowOutput.completed(null, "不支持该功能");
-        }
-
-        log.info("[BankController] Disambiguation attempt {}: still ambiguous, asking again", attempt);
-        return WorkflowOutput.disambiguation(group.getDisambiguationQuestion(), group.getIntentNames());
-    }
-
-    private String inferGroupId(java.util.List<String> candidateIntents) {
-        for (String candidate : candidateIntents) {
-            IntentRegistry.IntentGroup group = intentRegistry.findGroupByIntent(candidate);
-            if (group != null) return group.getGroupId();
-        }
-        return null;
-    }
-
-    // ==================== 路由执行 ====================
 
     private WorkflowOutput handleSwitchNew(String sessionId, String intent, String rewrittenInput) {
         // 挂起当前活跃线程
@@ -303,6 +183,7 @@ public class BankController {
             stateManager.completeAgent(sessionId, active.getIntent());
         }
         stateManager.clearActiveThread(sessionId);
+        stateManager.clearDisambiguationState(sessionId); // 修复: CANCEL时清除消歧状态
         return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
     }
 
@@ -322,19 +203,15 @@ public class BankController {
                     "reasoning", phase1.getReasoning() != null ? phase1.getReasoning() : "null"
             ));
 
-            RoutingResult phase2 = contextRewriter.rewriteAndIdentify(sessionId, userInput, phase1, stateManager);
-            result.put("phase2", Map.of(
-                    "intentName", phase2.getIntentName() != null ? phase2.getIntentName() : "null",
-                    "rewrittenInput", phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : "null",
-                    "refinedRouteType", phase2.getRefinedRouteType() != null ? phase2.getRefinedRouteType() : "null",
-                    "ambiguous", phase2.isAmbiguous(),
-                    "candidateIntents", phase2.getCandidateIntents() != null ? phase2.getCandidateIntents() : List.of(),
-                    "groupId", phase2.getGroupId() != null ? phase2.getGroupId() : "null",
-                    "confidence", phase2.getConfidence()
+            RoutingResolution resolution = routingService.resolve(sessionId, userInput, phase1);
+            result.put("resolution", Map.of(
+                    "status", resolution.getStatus().name(),
+                    "intentName", resolution.getIntentName() != null ? resolution.getIntentName() : "null",
+                    "rewrittenInput", resolution.getRewrittenInput() != null ? resolution.getRewrittenInput() : "null",
+                    "routeType", resolution.getRouteType() != null ? resolution.getRouteType() : "null",
+                    "question", resolution.getQuestion() != null ? resolution.getQuestion() : "null",
+                    "candidateIntents", resolution.getCandidateIntents() != null ? resolution.getCandidateIntents() : List.of()
             ));
-
-            result.put("isGroupName", phase2.getIntentName() != null && intentRegistry.isGroupName(phase2.getIntentName()));
-            result.put("hasIntent", phase2.getIntentName() != null && intentRegistry.hasIntent(phase2.getIntentName()));
         } catch (Exception e) {
             result.put("error", e.getMessage());
         }
@@ -413,6 +290,7 @@ public class BankController {
                     .toList());
         }
         result.put("registeredIntents", intentRegistry.getIntentNames());
+        result.put("inDisambiguation", stateManager.isInDisambiguation(sessionId));
         return result;
     }
 
