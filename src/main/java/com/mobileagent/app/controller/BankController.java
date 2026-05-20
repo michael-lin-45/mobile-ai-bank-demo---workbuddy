@@ -6,11 +6,14 @@ import com.mobileagent.app.model.RoutingResolution;
 import com.mobileagent.app.model.RoutingResult;
 import com.mobileagent.app.model.WorkflowOutput;
 import com.mobileagent.app.service.GraphExecutionService;
-import com.mobileagent.app.service.IntentRouter;
+import com.mobileagent.app.service.ContextRouter;
 import com.mobileagent.app.service.RoutingService;
 import com.mobileagent.app.state.AgentStateManager;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -18,11 +21,16 @@ import java.util.*;
 /**
  * 银行主控制器 (Master) - 接收用户消息 → Phase1路由 → 路由决议 → 执行Graph
  *
- * 职责边界 (重构后):
- * - Controller: Phase1路由 + CANCEL处理 + FOLLOW_UP快速路径 + 根据决议执行Phase3
- * - RoutingService: Phase2识别 + 消歧 + 模糊匹配 (Controller不关心细节)
- * - GraphExecutionService: Graph执行 + 中断检测 + 参数提取
- * - IntentRouter: Phase1确定性规则 + 4B模型判断
+ * 对话历史管理 (ChatMemory):
+ * - 用户消息: Phase1+Phase2均读取完成后添加(避免与.messages(history)重复)
+ * - 系统回复: 子Graph追问/完成结果/消歧追问,拿到结果后提取文本添加
+ * - 路由JSON: 不进ChatMemory(对用户不可见)
+ *
+ * ChatMemory中的对话格式:
+ *   USER: "我想转账"
+ *   ASSISTANT: "请问您要转给谁？"
+ *   USER: "张三"
+ *   ASSISTANT: "请问您要转多少金额？"
  */
 @Slf4j
 @RestController
@@ -31,36 +39,39 @@ public class BankController {
 
     private final AgentStateManager stateManager;
     private final IntentRegistry intentRegistry;
-    private final IntentRouter intentRouter;
+    private final ContextRouter contextRouter;
     private final RoutingService routingService;
     private final GraphExecutionService graphExecutionService;
+    private final ChatMemory chatMemory;
 
     public BankController(AgentStateManager stateManager,
                           IntentRegistry intentRegistry,
-                          IntentRouter intentRouter,
+                          ContextRouter contextRouter,
                           RoutingService routingService,
-                          GraphExecutionService graphExecutionService) {
+                          GraphExecutionService graphExecutionService,
+                          ChatMemory chatMemory) {
         this.stateManager = stateManager;
         this.intentRegistry = intentRegistry;
-        this.intentRouter = intentRouter;
+        this.contextRouter = contextRouter;
         this.routingService = routingService;
         this.graphExecutionService = graphExecutionService;
+        this.chatMemory = chatMemory;
     }
 
     @PostConstruct
     public void init() {
-        log.info("[BankController] Initialized with RoutingService");
+        log.info("[BankController] Initialized with ChatMemory");
     }
 
     /**
      * 主聊天接口
      *
      * 流程:
-     * 1. Phase1 (IntentRouter): 判断路由类型 FOLLOW_UP/SWITCH_NEW/RESUME
-     * 2. 消歧取消检测 → handleCancel
-     * 3. FOLLOW_UP + activeThread (且不在消歧中) → 直接resume
-     * 4. RoutingService.resolve(): Phase2 + 消歧 + 模糊匹配 → 路由决议
-     * 5. 根据决议执行Phase3
+ * 1. Phase1 (ContextRouter): 判断路由类型(带对话历史)
+ * 2. 路由决议 → Phase2 (IntentionRouter也带对话历史)
+     * 3. 记录用户消息到ChatMemory(Phase1+Phase2均已读取)
+     * 4. 执行Graph
+     * 5. 记录系统回复到ChatMemory(子Graph追问/完成结果)
      */
     @PostMapping("/chat")
     public WorkflowOutput chat(@RequestParam String sessionId,
@@ -73,17 +84,19 @@ public class BankController {
         }
 
         try {
-            // ========== Phase 1: 意图类型判断 (4B) ==========
-            RoutingResult phase1 = intentRouter.route(sessionId, userInput, stateManager);
+            // ========== Phase 1: 意图类型判断 (带对话历史) ==========
+            RoutingResult phase1 = contextRouter.route(sessionId, userInput, stateManager);
             log.info("[BankController] Phase1: routeType={}, confidence={}",
                     phase1.getRouteType(), phase1.getConfidence());
 
             // ========== CANCEL during disambiguation ==========
-            // Phase1不判断CANCEL, 消歧中的取消意图由Controller检测
             if (phase1.isFollowUp() && stateManager.isInDisambiguation(sessionId)) {
                 if (isCancelExpression(userInput)) {
                     log.info("[BankController] Cancel detected during disambiguation");
-                    return handleCancel(sessionId);
+                    chatMemory.add(sessionId, new UserMessage(userInput));
+                    WorkflowOutput cancelResult = handleCancel(sessionId);
+                    recordSystemReply(sessionId, cancelResult);
+                    return cancelResult;
                 }
             }
 
@@ -92,7 +105,11 @@ public class BankController {
                 AgentStateManager.ActiveThreadInfo activeThread = stateManager.getActiveThread(sessionId);
                 if (activeThread != null) {
                     log.info("[BankController] FOLLOW_UP with activeThread: intent={}", activeThread.getIntent());
-                    return graphExecutionService.resumeGraph(activeThread.getIntent(), activeThread.getThreadId(), userInput, sessionId);
+                    chatMemory.add(sessionId, new UserMessage(userInput));
+                    WorkflowOutput resumeResult = graphExecutionService.resumeGraph(
+                            activeThread.getIntent(), activeThread.getThreadId(), userInput, sessionId);
+                    recordSystemReply(sessionId, resumeResult);
+                    return resumeResult;
                 }
 
                 if (!stateManager.hasSuspendedAgents(sessionId)) {
@@ -108,11 +125,13 @@ public class BankController {
             log.info("[BankController] Routing resolution: status={}, intent={}",
                     resolution.getStatus(), resolution.getIntentName());
 
+            // ========== 记录用户消息到ChatMemory (Phase1+Phase2均已读取,现在可以安全添加) ==========
+            chatMemory.add(sessionId, new UserMessage(userInput));
+
             // ========== 根据决议执行Phase3 ==========
-            return switch (resolution.getStatus()) {
+            WorkflowOutput output = switch (resolution.getStatus()) {
                 case RESOLVED -> executeRoute(sessionId, resolution);
                 case DISAMBIGUATION -> {
-                    // 进入消歧时suspend activeThread, 防止消歧取消误杀正在进行的子Graph
                     AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
                     if (active != null) {
                         stateManager.suspendAgent(sessionId, active.getIntent(), active.getThreadId());
@@ -124,17 +143,55 @@ public class BankController {
                 case REJECTED -> WorkflowOutput.completed(null, "不支持该功能");
             };
 
+            // ========== 记录系统回复到ChatMemory ==========
+            recordSystemReply(sessionId, output);
+            return output;
+
         } catch (Exception e) {
             log.error("[BankController] Error processing chat", e);
             return WorkflowOutput.error("处理请求时出错: " + e.getMessage());
         }
     }
 
-    // ==================== Phase3: 路由执行 ====================
+    // ==================== 对话历史管理 ====================
 
     /**
-     * 执行路由 - 根据决议中的routeType分发
+     * 记录系统回复到ChatMemory - 只存用户可见的文本,不存路由JSON
+     *
+     * 从WorkflowOutput提取用户可见的回复:
+     * - INTERRUPTED: 子Graph追问 (question)
+     * - COMPLETED: 完成结果 (content)
+     * - DISAMBIGUATION: 消歧追问 (question)
+     * - ERROR: 错误信息 (errorMessage)
      */
+    private void recordSystemReply(String sessionId, WorkflowOutput output) {
+        if (output == null) return;
+
+        String reply = extractReplyContent(output);
+        if (reply != null && !reply.isEmpty()) {
+            chatMemory.add(sessionId, new AssistantMessage(reply));
+            log.debug("[BankController] Recorded system reply: session={}, status={}, reply={}",
+                    sessionId, output.getStatus(), truncate(reply, 50));
+        }
+    }
+
+    private String extractReplyContent(WorkflowOutput output) {
+        return switch (output.getStatus()) {
+            case "INTERRUPTED" -> output.getQuestion();
+            case "COMPLETED" -> output.getContent();
+            case "DISAMBIGUATION" -> output.getQuestion();
+            case "ERROR" -> output.getErrorMessage();
+            default -> null;
+        };
+    }
+
+    private String truncate(String s, int maxLen) {
+        if (s == null) return "null";
+        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
+    }
+
+    // ==================== Phase3: 路由执行 ====================
+
     private WorkflowOutput executeRoute(String sessionId, RoutingResolution resolution) {
         return switch (resolution.getRouteType()) {
             case "RESUME" -> handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
@@ -143,7 +200,6 @@ public class BankController {
     }
 
     private WorkflowOutput handleSwitchNew(String sessionId, String intent, String rewrittenInput) {
-        // 挂起当前活跃线程
         AgentStateManager.ActiveThreadInfo currentActive = stateManager.getActiveThread(sessionId);
         if (currentActive != null) {
             stateManager.suspendAgent(sessionId, currentActive.getIntent(), currentActive.getThreadId());
@@ -170,57 +226,46 @@ public class BankController {
 
         String threadId = suspendedInfo.getThreadId();
 
-        // 挂起当前活跃线程(如果不同)
         AgentStateManager.ActiveThreadInfo currentActive = stateManager.getActiveThread(sessionId);
         if (currentActive != null && !currentActive.getThreadId().equals(threadId)) {
             stateManager.suspendAgent(sessionId, currentActive.getIntent(), currentActive.getThreadId());
         }
 
-        // 从挂起表移除,设为活跃
         stateManager.resumeAgent(sessionId, intent);
         stateManager.setActiveThread(sessionId, threadId, intent);
 
-        // 恢复累积参数
         AgentStateManager.ActiveThreadInfo newActive = stateManager.getActiveThread(sessionId);
         if (newActive != null && suspendedInfo.getAccumulatedParams() != null) {
             newActive.setAccumulatedParams(suspendedInfo.getAccumulatedParams());
         }
 
-        // 读取中断时的提问,重新展示
-        return graphExecutionService.readGraphInterruptState(intent, threadId, sessionId);
+        // 与FOLLOW_UP一致: 重新执行graph + 注入accumulatedParams + 处理用户输入
+        // 而非readGraphInterruptState(只读旧checkpoint,丢弃用户输入)
+        log.info("[BankController] RESUME with resumeGraph: intent={}, userInput={}", intent, userInput);
+        return graphExecutionService.resumeGraph(intent, threadId, userInput, sessionId);
     }
 
     private WorkflowOutput handleCancel(String sessionId) {
         AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
 
-        // 无活跃线程且不在消歧中 → 提示无操作
         if (active == null && !stateManager.isInDisambiguation(sessionId)) {
             return WorkflowOutput.completed(null, "当前没有进行中的操作。有什么可以帮您的吗？");
         }
 
-        // 有活跃线程 → 通知子Graph自行清理 (所有子Graph都支持_cancelSignal)
         if (active != null) {
             stateManager.clearDisambiguationState(sessionId);
             return graphExecutionService.cancelGraph(active.getIntent(), active.getThreadId(), sessionId);
         }
 
-        // 清除消歧状态 (消歧中但无活跃线程)
         stateManager.clearDisambiguationState(sessionId);
         return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
     }
 
     // ==================== 调试接口 ====================
 
-    /**
-     * 轻量取消意图检测 - 仅用于消歧场景(Controller层无子Graph上下文)
-     *
-     * 子Graph内部的取消检测由AbstractGraphConfig.detectCancelFromInput()负责(LLM方式)
-     * 这里只做简单模式匹配,覆盖常见的取消表达
-     */
     private boolean isCancelExpression(String input) {
         if (input == null) return false;
         String trimmed = input.trim();
-        // 精确匹配常见取消短句
         return trimmed.matches("^(取消|算了|不要了|不转了|不查了|不了|放弃|别转了|别查了|算了不问了|取消查询|取消转账)$")
             || trimmed.matches(".*(取消|算了|放弃|不要了|不想).*$") && trimmed.length() <= 8;
     }
@@ -231,11 +276,10 @@ public class BankController {
         String userInput = req.get("message");
         Map<String, Object> result = new HashMap<>();
         try {
-            RoutingResult phase1 = intentRouter.route(sessionId, userInput, stateManager);
+            RoutingResult phase1 = contextRouter.route(sessionId, userInput, stateManager);
             result.put("phase1", Map.of(
                     "routeType", phase1.getRouteType() != null ? phase1.getRouteType() : "null",
                     "confidence", phase1.getConfidence(),
-                    "intentName", phase1.getIntentName() != null ? phase1.getIntentName() : "null",
                     "reasoning", phase1.getReasoning() != null ? phase1.getReasoning() : "null"
             ));
 
@@ -333,6 +377,7 @@ public class BankController {
     @DeleteMapping("/session")
     public Map<String, String> clearSession(@RequestParam String sessionId) {
         stateManager.clearSession(sessionId);
+        chatMemory.clear(sessionId);
         return Map.of("status", "cleared", "sessionId", sessionId);
     }
 }

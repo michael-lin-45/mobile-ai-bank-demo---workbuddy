@@ -26,13 +26,13 @@ import java.util.List;
  *
  * 职责边界:
  * - 负责: Phase2意图识别 + 消歧追问(1次) + 模糊匹配
- * - 不负责: Phase1路由类型判断(IntentRouter) / Graph执行(GraphExecutionService) / 线程管理(BankController)
+ * - 不负责: Phase1路由类型判断(ContextRouter) / Graph执行(GraphExecutionService) / 线程管理(BankController)
  */
 @Slf4j
 @Service
 public class RoutingService {
 
-    private final ContextRewriter contextRewriter;
+    private final IntentionRouter intentionRouter;
     private final IntentRegistry intentRegistry;
     private final AgentStateManager stateManager;
 
@@ -44,10 +44,10 @@ public class RoutingService {
     @Value("${routing.confidence.high-confidence-bypass:0.85}")
     private double highConfidenceBypass;
 
-    public RoutingService(ContextRewriter contextRewriter,
+    public RoutingService(IntentionRouter intentionRouter,
                           IntentRegistry intentRegistry,
                           AgentStateManager stateManager) {
-        this.contextRewriter = contextRewriter;
+        this.intentionRouter = intentionRouter;
         this.intentRegistry = intentRegistry;
         this.stateManager = stateManager;
     }
@@ -90,7 +90,7 @@ public class RoutingService {
      */
     private RoutingResolution resolveNewIntent(String sessionId, String userInput, RoutingResult phase1Result) {
         // Phase2: 上下文改写 + 意图识别
-        RoutingResult phase2 = contextRewriter.rewriteAndIdentify(sessionId, userInput, phase1Result, stateManager);
+        RoutingResult phase2 = intentionRouter.rewriteAndIdentify(sessionId, userInput, phase1Result, stateManager);
         log.info("[RoutingService] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence(), phase2.getCandidateIntents());
 
@@ -153,7 +153,7 @@ public class RoutingService {
         }
 
         // 5. 意图明确 → RESOLVED
-        String routeType = resolveRouteType(phase1Result, phase2);
+        String routeType = resolveRouteType(sessionId, phase1Result, phase2);
         String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
         return RoutingResolution.resolved(effectiveIntent, rewrittenInput, routeType);
     }
@@ -202,42 +202,58 @@ public class RoutingService {
         // 重新Phase2识别
         RoutingResult rePhase1 = RoutingResult.builder()
                 .routeType("SWITCH_NEW").confidence(0.8).reasoning("消歧回答重新识别").build();
-        RoutingResult phase2 = contextRewriter.rewriteAndIdentify(sessionId, userInput, rePhase1, stateManager);
+        RoutingResult phase2 = intentionRouter.rewriteAndIdentify(sessionId, userInput, rePhase1, stateManager);
         log.info("[RoutingService] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence());
 
-        // 识别到明确的已注册意图 + 置信度足够 → 解决
+        // 识别到组内具体意图 → RESOLVED (消歧上下文已强,不再要求高置信度)
+        // 消歧回答场景: 用户回答的是"咨询"/"解读"这类短答案,只要映射到组内意图即可
         String identifiedIntent = phase2.getIntentName();
-        if (identifiedIntent != null
+        boolean isInGroupIntent = identifiedIntent != null
                 && !"UNKNOWN".equalsIgnoreCase(identifiedIntent)
                 && intentRegistry.hasIntent(identifiedIntent)
                 && !intentRegistry.isGroupName(identifiedIntent)
-                && phase2.getConfidence() >= disambiguationThreshold) {
+                && group.getIntentNames().contains(identifiedIntent);
+
+        if (isInGroupIntent) {
             stateManager.clearDisambiguationState(sessionId);
-            log.info("[RoutingService] Disambiguation resolved: intent={}, confidence={}",
+            log.info("[RoutingService] Disambiguation resolved (in-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
-            String routeType = resolveRouteType(phase1Result, phase2);
+            String routeType = resolveRouteType(sessionId, phase1Result, phase2);
             String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
             return RoutingResolution.resolved(identifiedIntent, rewrittenInput, routeType);
         }
 
-        // 低置信度但识别到组内意图 → 仍然RESOLVED (消歧1次后不过度追问)
+        // 识别到非组内的已注册意图 → 也RESOLVED (用户可能回答了不同的意图)
         if (identifiedIntent != null
                 && !"UNKNOWN".equalsIgnoreCase(identifiedIntent)
                 && intentRegistry.hasIntent(identifiedIntent)
-                && !intentRegistry.isGroupName(identifiedIntent)
-                && phase2.getConfidence() < disambiguationThreshold) {
+                && !intentRegistry.isGroupName(identifiedIntent)) {
             stateManager.clearDisambiguationState(sessionId);
-            log.info("[RoutingService] Disambiguation resolved (low confidence but in-group): intent={}, confidence={}",
+            log.info("[RoutingService] Disambiguation resolved (out-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
-            String routeType = resolveRouteType(phase1Result, phase2);
+            String routeType = resolveRouteType(sessionId, phase1Result, phase2);
             String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
             return RoutingResolution.resolved(identifiedIntent, rewrittenInput, routeType);
         }
 
-        // 1次追问后仍模糊 → 直接拒绝
+        // 识别到组名(仍模糊) → RESOLVED,选组内第一个意图作为默认 (消歧1次后不过度追问)
+        if (identifiedIntent != null
+                && intentRegistry.isGroupName(identifiedIntent)
+                && identifiedIntent.equals(groupId)) {
+            String defaultIntent = group.getIntentNames().get(0);
+            stateManager.clearDisambiguationState(sessionId);
+            log.info("[RoutingService] Disambiguation resolved (group name, using first candidate): group={}, default={}",
+                    identifiedIntent, defaultIntent);
+
+            String routeType = resolveRouteType(sessionId, phase1Result, phase2);
+            String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
+            return RoutingResolution.resolved(defaultIntent, rewrittenInput, routeType);
+        }
+
+        // 1次追问后仍无法识别 → 直接拒绝
         stateManager.clearDisambiguationState(sessionId);
         log.info("[RoutingService] Disambiguation answer still ambiguous → rejected");
         return RoutingResolution.rejected();
@@ -246,9 +262,16 @@ public class RoutingService {
     // ==================== 工具方法 ====================
 
     /**
-     * 解析路由类型 - 综合Phase1和Phase2的判断
+     * 解析路由类型 - 综合Phase1、Phase2和状态管理器的判断
+     *
+     * RESUME判定优先级:
+     * 1. Phase2细化路由类型 (LLM明确判断)
+     * 2. Phase1已经是RESUME
+     * 3. 识别到的意图在suspendedAgents中 → RESUME (状态兜底,防止LLM漏判)
+     * 4. Phase1是FOLLOW_UP但无活跃线程 → SWITCH_NEW
+     * 5. 兜底: Phase1的routeType
      */
-    private String resolveRouteType(RoutingResult phase1Result, RoutingResult phase2) {
+    private String resolveRouteType(String sessionId, RoutingResult phase1Result, RoutingResult phase2) {
         // Phase2细化路由类型优先
         if (phase2.getRefinedRouteType() != null) {
             return phase2.getRefinedRouteType();
@@ -256,6 +279,17 @@ public class RoutingService {
         // Phase1已经是RESUME
         if (phase1Result.isResume()) {
             return "RESUME";
+        }
+        // 状态兜底: 识别到的意图在suspendedAgents中 → RESUME
+        // 场景: "转500吧" → phase1=SWITCH_NEW(LLM漏判), phase2识别intent=TRANSFER → TRANSFER在挂起列表 → RESUME
+        String effectiveIntent = phase2.getIntentName();
+        if (effectiveIntent != null && !"UNKNOWN".equalsIgnoreCase(effectiveIntent)) {
+            AgentStateManager.SuspendedInfo suspended = stateManager.getSuspendedThread(sessionId, effectiveIntent);
+            if (suspended != null) {
+                log.info("[RoutingService] State-based RESUME override: intent={} is in suspendedAgents (phase1 was {})",
+                        effectiveIntent, phase1Result.getRouteType());
+                return "RESUME";
+            }
         }
         // Phase1是FOLLOW_UP但无活跃线程 → 降级为SWITCH_NEW
         if (phase1Result.isFollowUp()) {
