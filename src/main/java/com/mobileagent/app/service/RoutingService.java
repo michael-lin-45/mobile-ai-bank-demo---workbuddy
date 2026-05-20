@@ -5,6 +5,7 @@ import com.mobileagent.app.model.RoutingResolution;
 import com.mobileagent.app.model.RoutingResult;
 import com.mobileagent.app.state.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -63,13 +64,15 @@ public class RoutingService {
      * @param sessionId 会话ID
      * @param userInput 用户输入
      * @param phase1Result Phase1的路由结果
+     * @param chatMemory 指定读取的ChatMemory实例(领域级)
      * @return 路由决议 (RESOLVED / DISAMBIGUATION / REJECTED)
      */
-    public RoutingResolution resolve(String sessionId, String userInput, RoutingResult phase1Result) {
+    public RoutingResolution resolve(String sessionId, String userInput, RoutingResult phase1Result,
+                                      ChatMemory chatMemory) {
         if (stateManager.isInDisambiguation(sessionId)) {
-            return handleDisambiguationAnswer(sessionId, userInput, phase1Result);
+            return handleDisambiguationAnswer(sessionId, userInput, phase1Result, chatMemory);
         }
-        return resolveNewIntent(sessionId, userInput, phase1Result);
+        return resolveNewIntent(sessionId, userInput, phase1Result, chatMemory);
     }
 
     // ==================== 新意图识别 ====================
@@ -88,9 +91,10 @@ public class RoutingService {
      * 4. !hasIntent? → fuzzyMatch → 可能消歧或拒绝
      * 5. hasIntent? → RESOLVED
      */
-    private RoutingResolution resolveNewIntent(String sessionId, String userInput, RoutingResult phase1Result) {
+     private RoutingResolution resolveNewIntent(String sessionId, String userInput, RoutingResult phase1Result,
+                                                 ChatMemory chatMemory) {
         // Phase2: 上下文改写 + 意图识别
-        RoutingResult phase2 = intentionRouter.rewriteAndIdentify(sessionId, userInput, phase1Result, stateManager);
+        RoutingResult phase2 = intentionRouter.rewriteAndIdentify(sessionId, userInput, phase1Result, stateManager, chatMemory);
         log.info("[RoutingService] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence(), phase2.getCandidateIntents());
 
@@ -184,8 +188,9 @@ public class RoutingService {
      * 1. 重新识别 → 如果明确 → RESOLVED
      * 2. 仍然模糊 → REJECTED (不做多轮追问)
      */
-    private RoutingResolution handleDisambiguationAnswer(String sessionId, String userInput,
-                                                           RoutingResult phase1Result) {
+     private RoutingResolution handleDisambiguationAnswer(String sessionId, String userInput,
+                                                            RoutingResult phase1Result,
+                                                            ChatMemory chatMemory) {
         AgentStateManager.DisambiguationState disambigState = stateManager.getDisambiguationState(sessionId);
         if (disambigState == null) {
             stateManager.clearDisambiguationState(sessionId);
@@ -202,7 +207,7 @@ public class RoutingService {
         // 重新Phase2识别
         RoutingResult rePhase1 = RoutingResult.builder()
                 .routeType("SWITCH_NEW").confidence(0.8).reasoning("消歧回答重新识别").build();
-        RoutingResult phase2 = intentionRouter.rewriteAndIdentify(sessionId, userInput, rePhase1, stateManager);
+        RoutingResult phase2 = intentionRouter.rewriteAndIdentify(sessionId, userInput, rePhase1, stateManager, chatMemory);
         log.info("[RoutingService] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence());
 

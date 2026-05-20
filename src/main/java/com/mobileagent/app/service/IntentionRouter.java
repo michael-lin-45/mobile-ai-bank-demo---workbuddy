@@ -7,6 +7,7 @@ import com.mobileagent.app.state.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
@@ -14,20 +15,21 @@ import org.springframework.util.StreamUtils;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * 意图识别+上下文改写服务 - Phase2: 使用LLM同时完成意图识别和上下文改写
  *
  * 设计:
  * - 意图识别是主要目的,上下文改写是为子Graph提参服务的手段
- * - 通过ReadOnlyMemoryAdvisor自动注入对话历史,让LLM理解追问上下文(如"列出详情"→"列出这个星期开销的详情")
- * - ReadOnlyMemoryAdvisor只读不写,ChatMemory写入由BankController统一管理
+ * - 不使用ReadOnlyMemoryAdvisor，改为手动读取ChatMemory并格式化到{chat_history}占位符
+ * - 调用方传入对应的ChatMemory实例(全局/领域级)，在system prompt中区分【对话历史】和【当前消息】
  * - 改写后的输入传递给子Graph,使子Graph参数提取更准确
  *
- * 对话历史格式 (由BankController维护):
- *   USER: "我想转账"
- *   ASSISTANT: "请问您要转给谁？"
- *   USER: "张三"
+ * 对话历史格式 (由调用方维护):
+ *   用户: "我想转账"
+ *   助手: "请问您要转给谁？"
+ *   用户: "张三"
  */
 @Slf4j
 @Service
@@ -51,18 +53,20 @@ public class IntentionRouter {
      * @param userInput 用户原始输入
      * @param phase1Result Phase1的路由结果
      * @param stateManager 状态管理器
+     * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
      * @return 包含意图名称、改写后输入、路由类型的完整路由结果
      */
     public RoutingResult rewriteAndIdentify(String sessionId, String userInput,
                                              RoutingResult phase1Result,
-                                             AgentStateManager stateManager) {
+                                             AgentStateManager stateManager,
+                                             ChatMemory chatMemory) {
         try {
-            String systemPrompt = buildIntentionSystemPrompt(sessionId, userInput, phase1Result, stateManager);
+            String chatHistoryStr = formatChatHistory(chatMemory, sessionId);
+            String systemPrompt = buildIntentionSystemPrompt(sessionId, userInput, phase1Result, stateManager, chatHistoryStr);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
                     .system(systemPrompt)
-                    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
                     .user(userInput)
                     .call()
                     .content();
@@ -89,9 +93,40 @@ public class IntentionRouter {
         }
     }
 
+    /**
+     * 读取ChatMemory并格式化为文本历史
+     * 格式: "用户: xxx\n助手: yyy"
+     */
+    private String formatChatHistory(ChatMemory chatMemory, String sessionId) {
+        if (chatMemory == null) {
+            return "(无历史对话)";
+        }
+        try {
+            List<Message> messages = chatMemory.get(sessionId);
+            if (messages == null || messages.isEmpty()) {
+                return "(无历史对话)";
+            }
+            StringBuilder sb = new StringBuilder();
+            for (Message msg : messages) {
+                String role = switch (msg.getMessageType()) {
+                    case USER -> "用户";
+                    case ASSISTANT -> "助手";
+                    case SYSTEM -> "系统";
+                    default -> msg.getMessageType().name();
+                };
+                sb.append(role).append(": ").append(msg.getText()).append("\n");
+            }
+            return sb.toString().trim();
+        } catch (Exception e) {
+            log.warn("[IntentionRouter] Failed to read chat history for sessionId={}", sessionId, e);
+            return "(无法读取历史对话)";
+        }
+    }
+
     private String buildIntentionSystemPrompt(String sessionId, String userInput,
                                                RoutingResult phase1Result,
-                                               AgentStateManager stateManager) {
+                                               AgentStateManager stateManager,
+                                               String chatHistory) {
         String template = loadTemplate("prompts/l1-intention.st");
         String intentList = intentRegistry.getIntentListDescription();
         String sessionState = stateManager.getSessionStateDescription(sessionId);
@@ -138,7 +173,8 @@ public class IntentionRouter {
                 .replace("{last_agent_summary}", sessionState)
                 .replace("{session_state}", sessionState)
                 .replace("{pending_agents}", pendingList)
-                .replace("{disambig_context}", disambigContext);
+                .replace("{disambig_context}", disambigContext)
+                .replace("{chat_history}", chatHistory);
     }
 
     private RoutingResult parseRewriteResponse(String content, RoutingResult phase1Result) {
@@ -269,18 +305,23 @@ public class IntentionRouter {
             
             消歧上下文: {disambig_context}
             
-            用户输入: {message}
+            ===对话历史(用户之前的对话，用于理解上下文)===
+            {chat_history}
+            ===对话历史结束===
+            
+            ===用户当前消息(用户此刻说的话，用于判断当前意图)===
+            {message}
+            ===当前消息结束===
             
             任务:
             1. 意图识别(主要): 从已注册意图列表中选择最匹配的意图,无法归入则输出UNKNOWN
             2. 上下文改写(辅助): 将依赖上下文的模糊表达改写为自包含的完整描述,方便子智能体直接提取参数
-               例: user:"查一下我这个星期的开销" → assistant:xxxx → user:"列出详情" → 改写:"列出这个星期开销的详情"
-            3. 歧义检测: 如果用户输入只能匹配到意图组(如只说"理财"无法区分WEALTH_CONSULT和WEALTH_INTERPRET),标记is_ambiguous=true
+            3. 歧义检测: 如果用户输入只能匹配到意图组,标记is_ambiguous=true
             4. 路由判断: 意图在挂起列表中→RESUME,否则→SWITCH_NEW
             
             严格输出JSON:
             {
-              "intent_name": "意图名称(歧义时输出组名如WEALTH)",
+              "intent_name": "意图名称",
               "rewritten_input": "改写后的自包含描述",
               "route_type": "SWITCH_NEW | RESUME",
               "resume_target": "RESUME时填意图名,否则null",

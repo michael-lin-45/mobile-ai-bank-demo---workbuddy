@@ -7,6 +7,7 @@ import com.mobileagent.app.state.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
@@ -14,21 +15,20 @@ import org.springframework.util.StreamUtils;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
- * 意图路由器 - Phase1: 使用LLM判断意图类型 (FOLLOW_UP / SWITCH_NEW / RESUME)
+ * 上下文路由器 - Phase1: 使用LLM判断意图类型 (FOLLOW_UP / SWITCH_NEW / RESUME)
  *
  * 设计:
  * - 全部走LLM判断,不做确定性规则短路(避免误判)
- * - 通过ReadOnlyMemoryAdvisor自动注入对话历史,让LLM理解追问上下文
- * - ReadOnlyMemoryAdvisor只读不写,ChatMemory写入由BankController统一管理
- *   (避免路由JSON作为ASSISTANT消息污染对话历史)
+ * - 不使用ReadOnlyMemoryAdvisor，改为手动读取ChatMemory并格式化到{chat_history}占位符
+ * - 调用方传入对应的ChatMemory实例(全局/领域级)，在system prompt中区分【对话历史】和【当前消息】
+ * - ChatMemory写入由调用方统一管理
  *
- * 对话历史格式 (由BankController维护):
- *   USER: "我想转账"
- *   ASSISTANT: "请问您要转给谁？"
- *   USER: "张三"
- *   ASSISTANT: "请问您要转多少金额？"
+ * 支持两种模板:
+ * - 默认(l1-routing.st): 理财L1使用,包含FOLLOW_UP/SWITCH_NEW/RESUME三种
+ * - 简化(l1-routing-simple.st): 转账/账单L1使用,只有FOLLOW_UP/SWITCH_NEW两种
  */
 @Slf4j
 @Service
@@ -46,29 +46,49 @@ public class ContextRouter {
     }
 
     /**
-     * Phase1: 判断意图类型
+     * Phase1: 判断意图类型 (使用默认模板 l1-routing.st + 全局ChatMemory)
+     */
+    public RoutingResult route(String sessionId, String userInput, AgentStateManager stateManager) {
+        return route(sessionId, userInput, stateManager, "prompts/l1-routing.st", null, null);
+    }
+
+    /**
+     * Phase1: 判断意图类型 (使用指定模板 + 全局ChatMemory)
+     */
+    public RoutingResult route(String sessionId, String userInput, AgentStateManager stateManager,
+                               String templatePath, String domainName) {
+        return route(sessionId, userInput, stateManager, templatePath, domainName, null);
+    }
+
+    /**
+     * Phase1: 判断意图类型 (使用指定模板 + 指定ChatMemory)
      *
      * @param sessionId 会话ID
      * @param userInput 用户输入
      * @param stateManager 状态管理器
+     * @param templatePath 提示词模板路径
+     * @param domainName 领域名称(用于简化模板中的领域标识,可为null)
+     * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
      * @return 路由结果(至少包含routeType)
      */
-    public RoutingResult route(String sessionId, String userInput, AgentStateManager stateManager) {
+    public RoutingResult route(String sessionId, String userInput, AgentStateManager stateManager,
+                               String templatePath, String domainName, ChatMemory chatMemory) {
         try {
-            String systemPrompt = buildRoutingSystemPrompt(sessionId, userInput, stateManager);
+            String chatHistory = formatChatHistory(chatMemory, sessionId);
+            String systemPrompt = buildRoutingSystemPrompt(sessionId, userInput, stateManager, templatePath, domainName, chatHistory);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
                     .system(systemPrompt)
-                    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
                     .user(userInput)
                     .call()
                     .content();
             long elapsedMs = System.currentTimeMillis() - startMs;
-            log.info("[ContextRouter] LLM call completed in {}ms | sessionId={}, userInput={}", elapsedMs, sessionId, userInput);
+            log.info("[ContextRouter] LLM call completed in {}ms | sessionId={}, template={}, domain={}",
+                    elapsedMs, sessionId, templatePath, domainName);
             log.debug("[ContextRouter] LLM raw response: {}", content);
 
-            RoutingResult result = parseRoutingResponse(content);
+            RoutingResult result = parseRoutingResponse(content, templatePath);
             log.info("[ContextRouter] LLM result: routeType={}, confidence={}",
                     result.getRouteType(), result.getConfidence());
             return result;
@@ -82,8 +102,41 @@ public class ContextRouter {
         }
     }
 
-    private String buildRoutingSystemPrompt(String sessionId, String userInput, AgentStateManager stateManager) {
-        String template = loadTemplate("prompts/l0-routing.st");
+    /**
+     * 读取ChatMemory并格式化为文本历史
+     * 格式: "用户: xxx\n助手: yyy"
+     */
+    private String formatChatHistory(ChatMemory chatMemory, String sessionId) {
+        if (chatMemory == null) {
+            return "(无历史对话)";
+        }
+        try {
+            List<Message> messages = chatMemory.get(sessionId);
+            if (messages == null || messages.isEmpty()) {
+                return "(无历史对话)";
+            }
+            StringBuilder sb = new StringBuilder();
+            for (Message msg : messages) {
+                String role = switch (msg.getMessageType()) {
+                    case USER -> "用户";
+                    case ASSISTANT -> "助手";
+                    case SYSTEM -> "系统";
+                    default -> msg.getMessageType().name();
+                };
+                sb.append(role).append(": ").append(msg.getText()).append("\n");
+            }
+            return sb.toString().trim();
+        } catch (Exception e) {
+            log.warn("[ContextRouter] Failed to read chat history for sessionId={}", sessionId, e);
+            return "(无法读取历史对话)";
+        }
+    }
+
+    private String buildRoutingSystemPrompt(String sessionId, String userInput,
+                                             AgentStateManager stateManager,
+                                             String templatePath, String domainName,
+                                             String chatHistory) {
+        String template = loadTemplate(templatePath);
         String intentList = intentRegistry.getIntentListDescription();
         String sessionState = stateManager.getSessionStateDescription(sessionId);
 
@@ -93,22 +146,31 @@ public class ContextRouter {
                 ? String.join(", ", stateManager.getAllSuspended(sessionId).keySet())
                 : "无";
 
-        return template
+        String prompt = template
                 .replace("{intent_list}", intentList)
                 .replace("{message}", userInput)
                 .replace("{current_agent}", currentAgent)
                 .replace("{last_agent}", currentAgent)
                 .replace("{pending_agents}", pendingAgents)
-                .replace("{session_state}", sessionState);
+                .replace("{session_state}", sessionState)
+                .replace("{chat_history}", chatHistory);
+
+        // 简化模板需要domain_name替换
+        if (domainName != null) {
+            prompt = prompt.replace("{domain_name}", domainName);
+        }
+
+        return prompt;
     }
 
-    private RoutingResult parseRoutingResponse(String content) {
+    private RoutingResult parseRoutingResponse(String content, String templatePath) {
         try {
             String json = extractJson(content);
             var node = objectMapper.readTree(json);
 
             String routeType = node.has("route_type") ? node.get("route_type").asText() : "SWITCH_NEW";
-            routeType = normalizeRouteType(routeType);
+            boolean simpleMode = templatePath != null && templatePath.contains("simple");
+            routeType = normalizeRouteType(routeType, simpleMode);
 
             return RoutingResult.builder()
                     .routeType(routeType)
@@ -123,8 +185,15 @@ public class ContextRouter {
         }
     }
 
-    private String normalizeRouteType(String routeType) {
+    private String normalizeRouteType(String routeType, boolean simpleMode) {
         if (routeType == null) return "SWITCH_NEW";
+        if (simpleMode) {
+            // 简化模式: 只支持FOLLOW_UP和SWITCH_NEW
+            return switch (routeType.toUpperCase()) {
+                case "CONTINUE_FOLLOWUP", "FOLLOW_UP" -> "FOLLOW_UP";
+                default -> "SWITCH_NEW"; // RESUME在简化模式下降级为SWITCH_NEW
+            };
+        }
         return switch (routeType.toUpperCase()) {
             case "CONTINUE_FOLLOWUP", "FOLLOW_UP" -> "FOLLOW_UP";
             case "SWITCH_DIRECT", "SWITCH_COMPLEX", "SWITCH_NEW" -> "SWITCH_NEW";
@@ -165,7 +234,7 @@ public class ContextRouter {
 
     private String getDefaultRoutingPrompt() {
         return """
-            你是一个手机银行意图路由器。根据用户输入和当前会话状态判断意图类型。
+            你是一个手机银行意图路由器。根据【对话历史】理解上下文，根据【当前消息】判断意图类型。
             
             已注册意图列表:
             {intent_list}
@@ -176,15 +245,20 @@ public class ContextRouter {
             当前活跃意图: {current_agent}
             挂起的意图: {pending_agents}
             
-            用户输入: {message}
+            ===对话历史(用户之前的对话，用于理解上下文)===
+            {chat_history}
+            ===对话历史结束===
+            
+            ===用户当前消息(用户此刻说的话，用于判断当前意图)===
+            {message}
+            ===当前消息结束===
             
             判断路由类型:
-            1. FOLLOW_UP: 用户在回答当前agent的问题或追问(包括取消/放弃等否定回答)
-            2. SWITCH_NEW: 用户表达了新的意图
-            3. RESUME: 用户想恢复之前挂起的操作
+            1. FOLLOW_UP: 用户的话顺着最近一轮对话继续,回答系统刚才的问题或补充信息
+            2. SWITCH_NEW: 用户另起了一个完全不同的话题
+            3. RESUME: 用户的话和当前话题有转折,但和之前某个被挂起的任务形成了顺延
             
-            注意: 即使用户表达取消/放弃/中断意愿(如"不查了""算了""取消"),也应归类为FOLLOW_UP,
-            因为这是对当前agent的回应,由agent自行判断处理。
+            注意: 用户表达取消/放弃(如"不查了""算了""取消")应归FOLLOW_UP,这是对当前agent的回应,由agent自行处理。
             
             严格输出JSON,不要输出其他内容:
             {

@@ -149,6 +149,13 @@ public abstract class AbstractGraphConfig {
         return trimmed;
     }
 
+    /** 判断字符是否为标点或空格(用于精确词匹配的边界判断) */
+    private boolean isPunctuationOrSpace(char c) {
+        return c == ' ' || c == '\t' || c == ',' || c == '，' || c == '.'
+                || c == '。' || c == '!' || c == '！' || c == '?' || c == '？'
+                || c == ';' || c == '；' || c == '、';
+    }
+
     // ==================== 取消信号处理 ====================
 
     /** 检查是否收到取消信号 */
@@ -179,10 +186,21 @@ public abstract class AbstractGraphConfig {
         if (isCancelled(state)) return true;
 
         // 第1层: 关键字匹配 (0ms, 快速路径)
+        // 精确词匹配: 取消词必须独立出现，不能是更长表达的一部分
+        // 例: "算了" 应匹配 "算了" "算了，" 但不匹配 "算了查账单"
         List<String> keywords = getCancelKeywords();
+        String trimmedInput = userInput.trim();
         for (String keyword : keywords) {
-            if (userInput.contains(keyword)) {
-                log.info("[{}.detectCancel] Keyword matched: keyword={}, input={}", getGraphName(), keyword, userInput);
+            // 精确匹配: 输入完全等于关键词，或关键词后紧跟标点/结尾
+            if (trimmedInput.equals(keyword)) {
+                log.info("[{}.detectCancel] Keyword exact matched: keyword={}, input={}", getGraphName(), keyword, userInput);
+                return true;
+            }
+            // 关键词 + 标点结尾: "算了。" "算了，" "取消！"
+            if (trimmedInput.length() > keyword.length()
+                    && trimmedInput.startsWith(keyword)
+                    && isPunctuationOrSpace(trimmedInput.charAt(keyword.length()))) {
+                log.info("[{}.detectCancel] Keyword+ punct matched: keyword={}, input={}", getGraphName(), keyword, userInput);
                 return true;
             }
         }
