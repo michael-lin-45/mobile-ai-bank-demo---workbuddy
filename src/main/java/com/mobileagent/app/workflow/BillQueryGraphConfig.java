@@ -6,6 +6,7 @@ import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.mobileagent.app.mock.MockBankingService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -34,7 +35,7 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
 
     private final MockBankingService mockBankingService;
 
-    public BillQueryGraphConfig(ChatModel chatModel, MockBankingService mockBankingService) {
+    public BillQueryGraphConfig(@Qualifier("paramExtractChatModel") ChatModel chatModel, MockBankingService mockBankingService) {
         super(chatModel);
         this.mockBankingService = mockBankingService;
     }
@@ -46,7 +47,7 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
 
     @Override
     protected String getCancelDetectionContext() {
-        return "正在向用户询问账单查询条件(时间范围/支出类型)";
+        return "正在向用户询问账单查询条件(时间范围/收支类型)";
     }
 
     @Override
@@ -129,7 +130,7 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
             result.put("_paramName", "ASK_TIME");
             log.info("[BillQueryGraph.paramRouter] Missing timePeriod → ASK_TIME");
         } else if (expenseType == null || expenseType.isEmpty()) {
-            result.put("_question", "请问您要查询哪种类型的支出？(如:餐饮、交通、全部支出)");
+            result.put("_question", "请问您要查询支出、收入还是收支？(如:支出、收入、收支)");
             result.put("_paramName", "ASK_TYPE");
             log.info("[BillQueryGraph.paramRouter] Missing expenseType → ASK_TYPE");
         } else {
@@ -214,8 +215,7 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
     // ==================== BillQuery特有方法 ====================
 
     private static final java.util.Set<String> EXPENSE_TYPE_KEYWORDS = java.util.Set.of(
-            "餐饮", "交通", "购物", "娱乐", "医疗", "教育", "住房", "通讯",
-            "支出", "收入", "全部", "所有", "类型", "分类", "消费"
+            "支出", "开销", "花费", "收入", "收支", "both", "收入支出"
     );
 
     @Override
@@ -227,16 +227,19 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
             
             提取规则:
             - timePeriod: 时间范围,保留用户的原始表述,如"上个月"、"最近一周"、"昨天"、"2024年1月"
-            - expenseType: 支出/收入类型,如"餐饮"、"交通"、"支出"、"全部"、"收入"
+            - expenseType: 收支类型,只有三种取值:
+              · "支出" - 用户想查支出/开销/花费
+              · "收入" - 用户想查收入
+              · "收支" - 用户想同时查支出和收入(如"收支"、"都查"、"全部")
             - 关键: 只提取用户明确提到的参数,绝不推断或猜测
-            - 如果用户只说了时间没提类型 → expenseType必须输出null
-            - 如果用户说"全部支出""所有支出""查所有"等明确包含类型意图 → expenseType设为"支出"
-            - 不要因为用户没提类型就自动填"支出",必须用户原话包含类型相关词才提取
+            - 如果用户只说了时间没提收支类型 → expenseType必须输出null
+            - 如果用户说"全部""都查""收支明细"等明确包含查全部的意图 → expenseType设为"收支"
+            - 不要因为用户没提类型就自动填"支出",必须用户原话包含收支相关词才提取
             
             严格输出JSON:
             {
               "timePeriod": "时间范围或null",
-              "expenseType": "支出类型或null"
+              "expenseType": "支出/收入/收支 或null"
             }
             """.formatted(userInput);
     }

@@ -53,7 +53,7 @@ public class IntentRegistry {
     public void init() {
         // 注册已知意图(不含graph,graph在Bean初始化后注入)
         register("TRANSFER", "转账给他人", "收款人名称, 转账金额, 用途(可选)", true);
-        register("BILL_QUERY", "查询账单明细", "时间范围, 支出/收入类型(可选)", false);
+        register("BILL_QUERY", "查询账单明细", "时间范围, 收支类型(支出/收入/收支)", false);
         register("WEALTH_CONSULT", "理财咨询/推荐", "风险偏好(激进/稳健/保守)", false);
         register("WEALTH_INTERPRET", "理财产品解读", "理财产品名称", false);
 

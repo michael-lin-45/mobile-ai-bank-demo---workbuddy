@@ -36,24 +36,14 @@ public class MockBankingService {
         String period = timePeriod != null ? timePeriod : "近一个月";
 
         if (expenseType == null || expenseType.isEmpty()) {
-            // 全部类型
+            // 未指定类型 → 默认返回支出
             items.add(new BillItem("餐饮", new BigDecimal("356.50"), today.minusDays(1)));
             items.add(new BillItem("交通", new BigDecimal("128.00"), today.minusDays(2)));
             items.add(new BillItem("购物", new BigDecimal("899.00"), today.minusDays(3)));
             items.add(new BillItem("水电费", new BigDecimal("245.30"), today.minusDays(5)));
-            items.add(new BillItem("工资收入", new BigDecimal("15000.00"), today.minusDays(10)));
         } else {
-            // 按类型筛选
+            // 按收支类型筛选
             switch (expenseType) {
-                case "餐饮":
-                    items.add(new BillItem("餐饮", new BigDecimal("356.50"), today.minusDays(1)));
-                    break;
-                case "交通":
-                    items.add(new BillItem("交通", new BigDecimal("128.00"), today.minusDays(2)));
-                    break;
-                case "购物":
-                    items.add(new BillItem("购物", new BigDecimal("899.00"), today.minusDays(3)));
-                    break;
                 case "支出":
                 case "开销":
                     items.add(new BillItem("餐饮", new BigDecimal("356.50"), today.minusDays(1)));
@@ -63,6 +53,15 @@ public class MockBankingService {
                     break;
                 case "收入":
                     items.add(new BillItem("工资收入", new BigDecimal("15000.00"), today.minusDays(10)));
+                    items.add(new BillItem("理财收益", new BigDecimal("86.50"), today.minusDays(15)));
+                    break;
+                case "收支":
+                    items.add(new BillItem("餐饮", new BigDecimal("356.50"), today.minusDays(1)));
+                    items.add(new BillItem("交通", new BigDecimal("128.00"), today.minusDays(2)));
+                    items.add(new BillItem("购物", new BigDecimal("899.00"), today.minusDays(3)));
+                    items.add(new BillItem("水电费", new BigDecimal("245.30"), today.minusDays(5)));
+                    items.add(new BillItem("工资收入", new BigDecimal("15000.00"), today.minusDays(10)));
+                    items.add(new BillItem("理财收益", new BigDecimal("86.50"), today.minusDays(15)));
                     break;
                 default:
                     items.add(new BillItem(expenseType, new BigDecimal("200.00"), today.minusDays(1)));
@@ -75,7 +74,7 @@ public class MockBankingService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         StringBuilder sb = new StringBuilder();
-        sb.append(period).append("的账单明细：\n");
+        sb.append(period).append("的账单明细(").append(expenseType != null ? expenseType : "支出").append(")：\n");
         for (BillItem item : items) {
             sb.append("- ").append(item.type()).append(": ")
               .append(item.amount()).append("元 (")
