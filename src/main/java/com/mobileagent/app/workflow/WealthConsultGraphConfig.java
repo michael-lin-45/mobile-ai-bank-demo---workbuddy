@@ -6,6 +6,7 @@ import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.mobileagent.app.mock.MockBankingService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -34,7 +35,7 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
 
     private final MockBankingService mockBankingService;
 
-    public WealthConsultGraphConfig(ChatModel chatModel, MockBankingService mockBankingService) {
+    public WealthConsultGraphConfig(@Qualifier("paramExtractChatModel") ChatModel chatModel, MockBankingService mockBankingService) {
         super(chatModel);
         this.mockBankingService = mockBankingService;
     }

@@ -65,7 +65,7 @@ graph TB
     USER -->|POST /api/bank/chat| BC
     BC -->|Phase1| IR
     IR -->|RoutingResult| BC
-    BC -->|resolve()| RS
+    BC -->|resolve| RS
     RS -->|rewriteAndIdentify| CR
     CR -->|LLM call| LLM8
     IR -->|LLM call| LLM4
@@ -456,7 +456,7 @@ flowchart LR
     end
 
     subgraph "第3层: _cancelSignal (框架级)"
-        S1[cancelGraph()注入] --> S2[extractParams跳过LLM] --> S3[paramRouter→CANCEL]
+        S1[cancelGraph注入] --> S2[extractParams跳过LLM] --> S3[paramRouter→CANCEL]
     end
 
     A[用户输入] --> B{关键字匹配?}

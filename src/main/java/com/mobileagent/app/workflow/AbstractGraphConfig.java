@@ -127,8 +127,12 @@ public abstract class AbstractGraphConfig {
     /** 调用LLM提取参数: buildExtractPrompt → LLM call → parseExtractResult */
     protected Map<String, Object> callExtractModel(String userInput) {
         String prompt = buildExtractPrompt(userInput);
+        long startMs = System.currentTimeMillis();
         ChatResponse response = chatModel.call(new Prompt(prompt));
+        long elapsedMs = System.currentTimeMillis() - startMs;
         String content = response.getResult().getOutput().getText();
+        log.info("[{}.callExtractModel] LLM call completed in {}ms | input={}", getGraphName(), elapsedMs, userInput);
+        log.debug("[{}.callExtractModel] LLM raw response: {}", getGraphName(), content);
         return parseExtractResult(content);
     }
 
@@ -201,13 +205,18 @@ public abstract class AbstractGraphConfig {
             """, context, userInput);
 
         try {
+            long startMs = System.currentTimeMillis();
             ChatResponse response = chatModel.call(new Prompt(prompt));
+            long elapsedMs = System.currentTimeMillis() - startMs;
             String content = response.getResult().getOutput().getText().trim();
+            log.info("[{}.detectCancel] LLM call completed in {}ms | input={}", getGraphName(), elapsedMs, userInput);
             String json = extractJson(content);
             var node = objectMapper.readTree(json);
             boolean cancel = node.has("cancel") && node.get("cancel").asBoolean();
             if (cancel) {
                 log.info("[{}.detectCancel] LLM detected cancel intent: input={}", getGraphName(), userInput);
+            } else {
+                log.debug("[{}.detectCancel] LLM no cancel: input={}", getGraphName(), userInput);
             }
             return cancel;
         } catch (Exception e) {

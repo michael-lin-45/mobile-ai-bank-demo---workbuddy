@@ -1,26 +1,33 @@
 spring:
   application:
     name: mobile-ai-demo
-  ai:
-    dashscope:
-      api-key: sk-b545467bbc0f4270a842519ca69d9860
-      chat:
-        options:
-          model: qwen-plus
+
+models:
+  context:
+    base-url: ${CONTEXT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+    api-key: ${CONTEXT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
+    model: ${CONTEXT_MODEL:qwen-turbo}
+  intent:
+    base-url: ${INTENT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+    api-key: ${INTENT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
+    model: ${INTENT_MODEL:qwen-turbo}
+  param-extract:
+    base-url: ${PARAM_EXTRACT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+    api-key: ${PARAM_EXTRACT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
+    model: ${PARAM_EXTRACT_MODEL:qwen-plus}
 
 routing:
   deterministic:
     cancel-keywords: ["算了", "不转了", "取消", "不要了", "放弃"]
     short-answer-pattern: "^\\d+(\\.\\d+)?(元|块|万)?$|^(确认|好的|是的|对|继续|可以)$"
-  model:
-    routing-model: qwen-turbo
-    rewrite-model: qwen-turbo
-    planning-model: qwen-plus
   confidence:
     # 消歧置信度阈值 - confidence低于此值且意图属于歧义组时,补充触发消歧
     disambiguation-threshold: 0.7
     # 高置信度豁免 - confidence高于此值时,即使LLM标ambiguous也信任首选意图
     high-confidence-bypass: 0.85
+  history:
+    # 对话历史对数(1对=1条用户+1条系统),默认4对=8条消息,注入IntentRouter用于上下文判断
+    max-pairs: 4
   verification:
     max-retries: 1
 
