@@ -5,10 +5,9 @@ import com.mobileagent.app.model.IntentRegistry;
 import com.mobileagent.app.model.RoutingResult;
 import com.mobileagent.app.state.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StreamUtils;
@@ -17,57 +16,68 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 /**
- * 上下文改写+意图识别服务 - Phase2: 使用8B模型同时完成改写和识别
+ * 意图识别+上下文改写服务 - Phase2: 使用LLM同时完成意图识别和上下文改写
  *
- * 核心逻辑:
- * - 一个LLM调用同时完成上下文改写和意图识别
- * - 改写: "那昨天的呢" → "查询昨天的账单明细"
- * - 识别: → intent=bill_query
- * - 路由: → SWITCH_NEW 或 RESUME
+ * 设计:
+ * - 意图识别是主要目的,上下文改写是为子Graph提参服务的手段
+ * - 通过ReadOnlyMemoryAdvisor自动注入对话历史,让LLM理解追问上下文(如"列出详情"→"列出这个星期开销的详情")
+ * - ReadOnlyMemoryAdvisor只读不写,ChatMemory写入由BankController统一管理
+ * - 改写后的输入传递给子Graph,使子Graph参数提取更准确
+ *
+ * 对话历史格式 (由BankController维护):
+ *   USER: "我想转账"
+ *   ASSISTANT: "请问您要转给谁？"
+ *   USER: "张三"
  */
 @Slf4j
 @Service
-public class ContextRewriter {
+public class IntentionRouter {
 
-    private final ChatModel chatModel;
+    private final ChatClient chatClient;
     private final IntentRegistry intentRegistry;
     private final ObjectMapper objectMapper;
 
-    @Value("${routing.model.rewrite-model:qwen-turbo}")
-    private String rewriteModel;
-
-    public ContextRewriter(ChatModel chatModel, IntentRegistry intentRegistry) {
-        this.chatModel = chatModel;
+    public IntentionRouter(@Qualifier("intentChatClient") ChatClient chatClient,
+                           IntentRegistry intentRegistry) {
+        this.chatClient = chatClient;
         this.intentRegistry = intentRegistry;
         this.objectMapper = new ObjectMapper();
     }
 
     /**
-     * Phase2: 上下文改写 + 意图识别 (合并为一个LLM调用)
+     * Phase2: 意图识别 + 上下文改写 (合并为一个LLM调用)
      *
      * @param sessionId 会话ID
      * @param userInput 用户原始输入
      * @param phase1Result Phase1的路由结果
      * @param stateManager 状态管理器
-     * @return 包含改写后输入、意图名称、路由类型的完整路由结果
+     * @return 包含意图名称、改写后输入、路由类型的完整路由结果
      */
     public RoutingResult rewriteAndIdentify(String sessionId, String userInput,
                                              RoutingResult phase1Result,
                                              AgentStateManager stateManager) {
         try {
-            String prompt = buildRewritePrompt(sessionId, userInput, phase1Result, stateManager);
-            ChatResponse response = chatModel.call(new Prompt(prompt));
-            String content = response.getResult().getOutput().getText();
-            log.debug("[ContextRewriter] LLM raw response: {}", content);
+            String systemPrompt = buildIntentionSystemPrompt(sessionId, userInput, phase1Result, stateManager);
+
+            long startMs = System.currentTimeMillis();
+            String content = chatClient.prompt()
+                    .system(systemPrompt)
+                    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
+                    .user(userInput)
+                    .call()
+                    .content();
+            long elapsedMs = System.currentTimeMillis() - startMs;
+            log.info("[IntentionRouter] LLM call completed in {}ms | sessionId={}, userInput={}", elapsedMs, sessionId, userInput);
+            log.debug("[IntentionRouter] LLM raw response: {}", content);
 
             RoutingResult result = parseRewriteResponse(content, phase1Result);
-            log.info("[ContextRewriter] Result: intent={}, routeType={}, rewritten={}, confidence={}",
+            log.info("[IntentionRouter] Result: intent={}, routeType={}, rewritten={}, confidence={}",
                     result.getIntentName(), result.getRefinedRouteType(),
                     result.getRewrittenInput(), result.getConfidence());
             return result;
 
         } catch (Exception e) {
-            log.error("[ContextRewriter] LLM call failed", e);
+            log.error("[IntentionRouter] LLM call failed", e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
                     .refinedRouteType("SWITCH_NEW")
@@ -79,10 +89,10 @@ public class ContextRewriter {
         }
     }
 
-    private String buildRewritePrompt(String sessionId, String userInput,
-                                       RoutingResult phase1Result,
-                                       AgentStateManager stateManager) {
-        String template = loadTemplate("prompts/l1-rewrite.st");
+    private String buildIntentionSystemPrompt(String sessionId, String userInput,
+                                               RoutingResult phase1Result,
+                                               AgentStateManager stateManager) {
+        String template = loadTemplate("prompts/l1-intention.st");
         String intentList = intentRegistry.getIntentListDescription();
         String sessionState = stateManager.getSessionStateDescription(sessionId);
 
@@ -92,14 +102,28 @@ public class ContextRewriter {
                 ? String.join(", ", stateManager.getAllSuspended(sessionId).keySet())
                 : "无";
 
-        // 消歧上下文
+        // 消歧上下文 — 包含追问问题和候选意图描述,帮助LLM映射短回答
         String disambigContext = "无";
         AgentStateManager.DisambiguationState disambigState = stateManager.getDisambiguationState(sessionId);
         if (disambigState != null) {
             IntentRegistry.IntentGroup group = intentRegistry.getGroup(disambigState.getGroupId());
-            disambigContext = String.format("用户正在消歧: 意图组=%s, 候选意图=%s",
-                    disambigState.getGroupId(),
-                    group != null ? group.getIntentNames() : "?");
+            if (group != null) {
+                StringBuilder sb = new StringBuilder();
+                sb.append("系统追问: \"").append(group.getDisambiguationQuestion()).append("\"\n");
+                sb.append("候选意图:\n");
+                for (String candidateName : group.getIntentNames()) {
+                    IntentRegistry.IntentConfig config = intentRegistry.getConfig(candidateName);
+                    sb.append("  · ").append(candidateName);
+                    if (config != null) {
+                        sb.append(" (").append(config.getDescription()).append(")");
+                    }
+                    sb.append("\n");
+                }
+                sb.append("用户回答应映射到上述候选意图之一");
+                disambigContext = sb.toString();
+            } else {
+                disambigContext = String.format("意图组=%s, 候选意图未知", disambigState.getGroupId());
+            }
         }
 
         // 根据Phase1判断确定改写模式
@@ -163,7 +187,7 @@ public class ContextRewriter {
                     .groupId(groupId)
                     .build();
         } catch (Exception e) {
-            log.warn("[ContextRewriter] Failed to parse rewrite response: {}", content, e);
+            log.warn("[IntentionRouter] Failed to parse rewrite response: {}", content, e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
                     .refinedRouteType("SWITCH_NEW")
@@ -223,14 +247,14 @@ public class ContextRewriter {
             ClassPathResource resource = new ClassPathResource(path);
             return StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            log.warn("[ContextRewriter] Failed to load template: {}, using fallback", path);
+            log.warn("[IntentionRouter] Failed to load template: {}, using fallback", path);
             return getDefaultRewritePrompt();
         }
     }
 
     private String getDefaultRewritePrompt() {
         return """
-            你是一个手机银行意图改写器。同时完成上下文改写和意图识别。
+            你是一个手机银行意图识别与改写器。意图识别是主要目的,上下文改写是为子智能体提取参数服务的手段。
             
             已注册意图列表:
             {intent_list}
@@ -240,22 +264,30 @@ public class ContextRewriter {
             当前会话状态:
             {session_state}
             
+            当前意图: {intent_name}
             挂起的意图: {pending_agents}
+            
+            消歧上下文: {disambig_context}
             
             用户输入: {message}
             
             任务:
-            1. 上下文改写: 将模糊表达改写为自包含的完整描述
-            2. 意图识别: 从已注册意图列表中选择最匹配的意图
-            3. 路由判断: 如果识别的意图在挂起列表中 → RESUME, 否则 → SWITCH_NEW
+            1. 意图识别(主要): 从已注册意图列表中选择最匹配的意图,无法归入则输出UNKNOWN
+            2. 上下文改写(辅助): 将依赖上下文的模糊表达改写为自包含的完整描述,方便子智能体直接提取参数
+               例: user:"查一下我这个星期的开销" → assistant:xxxx → user:"列出详情" → 改写:"列出这个星期开销的详情"
+            3. 歧义检测: 如果用户输入只能匹配到意图组(如只说"理财"无法区分WEALTH_CONSULT和WEALTH_INTERPRET),标记is_ambiguous=true
+            4. 路由判断: 意图在挂起列表中→RESUME,否则→SWITCH_NEW
             
             严格输出JSON:
             {
-              "intent_name": "意图名称(从已注册列表选择)",
+              "intent_name": "意图名称(歧义时输出组名如WEALTH)",
               "rewritten_input": "改写后的自包含描述",
               "route_type": "SWITCH_NEW | RESUME",
-              "resume_target": "RESUME时填要恢复的意图名,其他填null",
-              "confidence": 0.0-1.0
+              "resume_target": "RESUME时填意图名,否则null",
+              "confidence": 0.0-1.0,
+              "is_ambiguous": false,
+              "candidate_intents": [],
+              "group_id": null
             }
             """;
     }
