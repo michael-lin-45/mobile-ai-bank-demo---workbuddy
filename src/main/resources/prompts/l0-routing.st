@@ -12,18 +12,19 @@
 用户输入: {message}
 
 路由类型:
-1. FOLLOW_UP: 用户在回答当前agent的问题或追问(包括取消/放弃等否定回答)
-2. SWITCH_NEW: 用户表达了新的意图
-3. RESUME: 用户想恢复之前挂起的操作
+1. FOLLOW_UP — 用户的话顺着最近一轮对话继续,回答系统刚才的问题或补充信息
+2. SWITCH_NEW — 用户另起了一个完全不同的话题
+3. RESUME — 用户的话和当前话题有转折,但和之前某个被挂起的任务形成了顺延
 
-注意: 即使用户表达取消/放弃/中断意愿(如"不查了""算了""取消"),也应归类为FOLLOW_UP,
-因为这是对当前agent的回应,由agent自行判断处理。
+判断方法: 看用户输入与对话历史的顺延转折关系
+- 顺着最新一轮继续 → FOLLOW_UP (如系统问"转给谁",用户说"张三")
+- 和当前话题转折,但接着之前某个挂起的任务往下说 → RESUME (如之前转账问到一半被切走,现在说"转500吧"是接着转账往下)
+- 和所有已有话题都无关,开了一个全新的 → SWITCH_NEW
 
-严格输出JSON:
+注意: 用户表达取消/放弃(如"不查了""算了""取消")应归FOLLOW_UP,这是对当前agent的回应,由agent自行处理。
+
+严格输出JSON,不要输出其他内容:
 {
   "route_type": "FOLLOW_UP | SWITCH_NEW | RESUME",
-  "intent_name": "意图名称(SWITCH_NEW时必填,从已注册列表选择,其他填null,模糊时填组名如WEALTH)",
-  "confidence": 0.0-1.0,
-  "reasoning": "判断理由",
-  "resume_target": "RESUME时填意图名,其他填null"
+  "confidence": 0.0-1.0
 }
