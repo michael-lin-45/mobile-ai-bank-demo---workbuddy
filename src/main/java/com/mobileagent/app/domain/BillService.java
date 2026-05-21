@@ -4,6 +4,7 @@ import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.mobileagent.app.model.IntentRegistry;
 import com.mobileagent.app.model.RoutingResult;
 import com.mobileagent.app.model.WorkflowOutput;
+import com.mobileagent.app.service.ContextRewriter;
 import com.mobileagent.app.service.ContextRouter;
 import com.mobileagent.app.service.GraphExecutionService;
 import com.mobileagent.app.state.AgentStateManager;
@@ -38,17 +39,20 @@ public class BillService {
     private static final String DOMAIN_NAME = "账单";
 
     private final ContextRouter contextRouter;
+    private final ContextRewriter contextRewriter;
     private final GraphExecutionService graphExecutionService;
     private final IntentRegistry intentRegistry;
     private final AgentStateManager stateManager;
     private final ChatMemory billChatMemory;
 
     public BillService(ContextRouter contextRouter,
+                       ContextRewriter contextRewriter,
                        GraphExecutionService graphExecutionService,
                        IntentRegistry intentRegistry,
                        AgentStateManager stateManager,
                        @org.springframework.beans.factory.annotation.Qualifier("billChatMemory") ChatMemory billChatMemory) {
         this.contextRouter = contextRouter;
+        this.contextRewriter = contextRewriter;
         this.graphExecutionService = graphExecutionService;
         this.intentRegistry = intentRegistry;
         this.stateManager = stateManager;
@@ -96,14 +100,17 @@ public class BillService {
                     return resumeResult;
                 }
 
-                // FOLLOW_UP但无activeThread → 降级为SWITCH_NEW
-                log.info("[BillService] FOLLOW_UP but no activeThread → fallback to SWITCH_NEW");
+                // FOLLOW_UP但无activeThread → 上下文改写后降级为SWITCH_NEW
+                log.info("[BillService] FOLLOW_UP but no activeThread → rewrite and fallback to SWITCH_NEW");
+                String rewrittenInput = contextRewriter.rewrite(sessionId, userInput, billChatMemory, DOMAIN_NAME);
+                billChatMemory.add(sessionId, new UserMessage(userInput));
+                return handleSwitchNew(sessionId, userInput, rewrittenInput);
             }
 
-            // ========== SWITCH_NEW (或FOLLOW_UP降级) ==========
+            // ========== SWITCH_NEW (非FOLLOW_UP) ==========
             // 记录用户消息到领域ChatMemory
             billChatMemory.add(sessionId, new UserMessage(userInput));
-            return handleSwitchNew(sessionId, userInput);
+            return handleSwitchNew(sessionId, userInput, userInput);
 
         } catch (Exception e) {
             log.error("[BillService] Error handling message", e);
@@ -111,7 +118,7 @@ public class BillService {
         }
     }
 
-    private WorkflowOutput handleSwitchNew(String sessionId, String userInput) {
+    private WorkflowOutput handleSwitchNew(String sessionId, String userInput, String rewrittenInput) {
         // 挂起当前活跃线程(无论属于哪个领域 — 其他领域的线程切换过来时需要挂起原线程)
         AgentStateManager.ActiveThreadInfo currentActive = stateManager.getActiveThread(sessionId);
         if (currentActive != null) {
@@ -127,7 +134,7 @@ public class BillService {
         String newThreadId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         stateManager.setActiveThread(sessionId, newThreadId, INTENT);
 
-        return graphExecutionService.executeGraph(graph, INTENT, newThreadId, userInput, sessionId, null);
+        return graphExecutionService.executeGraph(graph, INTENT, newThreadId, rewrittenInput, sessionId, null);
     }
 
     // ==================== ChatMemory管理 ====================
