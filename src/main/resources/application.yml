@@ -3,21 +3,21 @@ spring:
     name: mobile-ai-demo
 
 models:
-  # L0 领域路由 - 默认复用context配置(qwen-turbo)
+  # L0 领域路由 - qwen2.5-7b-instruct 指令遵循更强
   domain:
     base-url: ${DOMAIN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     api-key: ${DOMAIN_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
-    model: ${DOMAIN_MODEL:qwen-turbo}
+    model: ${DOMAIN_MODEL:qwen2.5-7b-instruct}
   # L1 上下文路由 (FOLLOW_UP/SWITCH_NEW/RESUME)
   context:
     base-url: ${CONTEXT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     api-key: ${CONTEXT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
-    model: ${CONTEXT_MODEL:qwen-turbo}
+    model: ${CONTEXT_MODEL:qwen2.5-7b-instruct}
   # L1 意图识别+改写 (理财L1)
   intent:
     base-url: ${INTENT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     api-key: ${INTENT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
-    model: ${INTENT_MODEL:qwen-turbo}
+    model: ${INTENT_MODEL:qwen2.5-7b-instruct}
   # L2 子Graph提参
   param-extract:
     base-url: ${PARAM_EXTRACT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
@@ -39,8 +39,10 @@ routing:
     # 高置信度豁免 - confidence高于此值时,即使LLM标ambiguous也信任首选意图
     high-confidence-bypass: 0.85
   history:
-    # 对话历史对数(1对=1条用户+1条系统),默认4对=8条消息,注入IntentRouter用于上下文判断
-    max-pairs: 4
+    # 对话历史存储对数(1对=1条用户+1条助手),默认10对=20条消息,ChatMemory存储上限
+    max-pairs: 10
+    # L0/L1意图判断和改写节点使用的历史对数,默认5对=10条消息,超出部分截断不传给LLM
+    judgment-max-pairs: 5
   verification:
     max-retries: 1
 
@@ -55,7 +57,7 @@ intents:
     is-write-op: false
   - name: WEALTH_CONSULT
     description: "理财咨询/推荐"
-    param-schema: "风险偏好(激进/稳健/保守)"
+    param-schema: "风险偏好(激进/稳健/保守), 关注领域(科技/能源/汽车/银行/工业/饮食/娱乐/全部, 可选, 默认全部)"
     is-write-op: false
   - name: WEALTH_INTERPRET
     description: "理财产品解读"
