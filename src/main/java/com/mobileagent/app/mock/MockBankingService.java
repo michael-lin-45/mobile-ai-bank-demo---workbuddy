@@ -91,32 +91,74 @@ public class MockBankingService {
     /**
      * 模拟理财咨询
      */
-    public WealthConsultResult wealthConsult(String riskLevel) {
+    public WealthConsultResult wealthConsult(String riskLevel, String focusArea) {
         String normalizedRisk = normalizeRiskLevel(riskLevel);
+        String normalizedArea = (focusArea == null || focusArea.isEmpty()) ? "全部" : focusArea;
         StringBuilder sb = new StringBuilder();
-        sb.append("根据您的风险偏好（").append(normalizedRisk).append("），为您推荐以下理财产品：\n");
+        sb.append("根据您的风险偏好（").append(normalizedRisk).append("）");
+        if (!"全部".equals(normalizedArea)) {
+            sb.append("、关注领域（").append(normalizedArea).append("）");
+        }
+        sb.append("，为您推荐以下理财产品：\n");
 
+        // 按关注领域筛选推荐
         switch (normalizedRisk) {
             case "激进" -> {
-                sb.append("- 天天利进取版: 年化收益4.2%, 中高风险, 灵活申赎\n");
-                sb.append("- 汇添富精选混合: 年化收益5.8%, 高风险, 锁定6个月\n");
-                sb.append("- 成长优选基金: 年化收益6.5%, 高风险, 锁定1年\n");
+                if (matchesArea(normalizedArea, "科技")) sb.append("- 科技成长基金: 年化收益6.8%, 高风险, 科技赛道, 锁定1年\n");
+                if (matchesArea(normalizedArea, "能源")) sb.append("- 新能源进取基金: 年化收益6.2%, 高风险, 能源赛道, 锁定1年\n");
+                if (matchesArea(normalizedArea, "汽车")) sb.append("- 智能汽车基金: 年化收益5.9%, 高风险, 汽车赛道, 锁定6个月\n");
+                if (matchesArea(normalizedArea, "银行")) sb.append("- 金融科技混合: 年化收益5.5%, 高风险, 银行+科技, 锁定6个月\n");
+                if (matchesArea(normalizedArea, "工业")) sb.append("- 先进制造基金: 年化收益5.7%, 高风险, 工业赛道, 锁定1年\n");
+                if (matchesArea(normalizedArea, "饮食")) sb.append("- 消费升级进取版: 年化收益5.3%, 高风险, 饮食消费, 锁定6个月\n");
+                if (matchesArea(normalizedArea, "娱乐")) sb.append("- 文娱传媒基金: 年化收益5.6%, 高风险, 娱乐赛道, 锁定1年\n");
+                if (matchesArea(normalizedArea, "全部")) {
+                    sb.append("- 天天利进取版: 年化收益4.2%, 中高风险, 灵活申赎\n");
+                    sb.append("- 汇添富精选混合: 年化收益5.8%, 高风险, 锁定6个月\n");
+                    sb.append("- 成长优选基金: 年化收益6.5%, 高风险, 锁定1年\n");
+                }
             }
             case "保守" -> {
-                sb.append("- 安心宝定期: 年化收益2.8%, 低风险, 锁定3个月\n");
-                sb.append("- 稳利宝保本版: 年化收益3.0%, 低风险, 灵活申赎\n");
-                sb.append("- 国债逆回购: 年化收益2.5%, 极低风险, 隔夜\n");
+                if (matchesArea(normalizedArea, "科技")) sb.append("- 科技蓝筹稳健债: 年化收益3.0%, 低风险, 科技板块, 灵活申赎\n");
+                if (matchesArea(normalizedArea, "能源")) sb.append("- 能源稳定收益: 年化收益2.9%, 低风险, 能源板块, 锁定3个月\n");
+                if (matchesArea(normalizedArea, "汽车")) sb.append("- 汽车行业安心宝: 年化收益2.8%, 低风险, 汽车板块, 锁定3个月\n");
+                if (matchesArea(normalizedArea, "银行")) sb.append("- 银行股息优选: 年化收益3.2%, 低风险, 银行板块, 灵活申赎\n");
+                if (matchesArea(normalizedArea, "工业")) sb.append("- 工业稳定理财: 年化收益2.9%, 低风险, 工业板块, 锁定3个月\n");
+                if (matchesArea(normalizedArea, "饮食")) sb.append("- 消费稳健理财: 年化收益3.0%, 低风险, 饮食消费, 灵活申赎\n");
+                if (matchesArea(normalizedArea, "娱乐")) sb.append("- 文娱稳健收益: 年化收益2.8%, 低风险, 娱乐板块, 锁定3个月\n");
+                if (matchesArea(normalizedArea, "全部")) {
+                    sb.append("- 安心宝定期: 年化收益2.8%, 低风险, 锁定3个月\n");
+                    sb.append("- 稳利宝保本版: 年化收益3.0%, 低风险, 灵活申赎\n");
+                    sb.append("- 国债逆回购: 年化收益2.5%, 极低风险, 隔夜\n");
+                }
             }
             default -> { // 稳健
-                sb.append("- 稳利宝稳健版: 年化收益3.5%, 中低风险, 灵活申赎\n");
-                sb.append("- 汇添富稳健债券: 年化收益3.8%, 中低风险, 锁定3个月\n");
-                sb.append("- 优选理财组合A: 年化收益4.0%, 中风险, 锁定6个月\n");
+                if (matchesArea(normalizedArea, "科技")) sb.append("- 科技稳健混合: 年化收益4.2%, 中低风险, 科技板块, 锁定6个月\n");
+                if (matchesArea(normalizedArea, "能源")) sb.append("- 新能源稳健债: 年化收益3.9%, 中低风险, 能源板块, 锁定3个月\n");
+                if (matchesArea(normalizedArea, "汽车")) sb.append("- 智驾稳健理财: 年化收益3.8%, 中低风险, 汽车板块, 锁定3个月\n");
+                if (matchesArea(normalizedArea, "银行")) sb.append("- 银行优选理财: 年化收益3.6%, 中低风险, 银行板块, 灵活申赎\n");
+                if (matchesArea(normalizedArea, "工业")) sb.append("- 制造稳健收益: 年化收益3.8%, 中低风险, 工业板块, 锁定6个月\n");
+                if (matchesArea(normalizedArea, "饮食")) sb.append("- 消费稳健组合: 年化收益3.7%, 中低风险, 饮食消费, 灵活申赎\n");
+                if (matchesArea(normalizedArea, "娱乐")) sb.append("- 文娱均衡理财: 年化收益3.9%, 中低风险, 娱乐板块, 锁定3个月\n");
+                if (matchesArea(normalizedArea, "全部")) {
+                    sb.append("- 稳利宝稳健版: 年化收益3.5%, 中低风险, 灵活申赎\n");
+                    sb.append("- 汇添富稳健债券: 年化收益3.8%, 中低风险, 锁定3个月\n");
+                    sb.append("- 优选理财组合A: 年化收益4.0%, 中风险, 锁定6个月\n");
+                }
             }
         }
 
         sb.append("\n温馨提示: 理财有风险,投资需谨慎。过往收益不代表未来表现。");
 
-        return new WealthConsultResult(true, normalizedRisk, sb.toString());
+        return new WealthConsultResult(true, normalizedRisk, normalizedArea, sb.toString());
+    }
+
+    private boolean matchesArea(String normalizedArea, String target) {
+        // 用户选了"全部"→ 只匹配"全部"分支
+        // 用户选了具体领域→ 匹配该领域 + "全部"分支中的通用推荐
+        if ("全部".equals(normalizedArea)) {
+            return "全部".equals(target);
+        }
+        return normalizedArea.equals(target);
     }
 
     /**
@@ -196,7 +238,7 @@ public class MockBankingService {
 
     public record BillItem(String type, BigDecimal amount, LocalDate date) {}
 
-    public record WealthConsultResult(boolean success, String riskLevel, String message) {}
+    public record WealthConsultResult(boolean success, String riskLevel, String focusArea, String message) {}
 
     public record WealthInterpretResult(boolean success, String productName, String message) {}
 }

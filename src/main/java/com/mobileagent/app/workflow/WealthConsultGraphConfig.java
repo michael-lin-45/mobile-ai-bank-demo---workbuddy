@@ -25,9 +25,10 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  *
  * 节点流程:
  * START → extractParams → paramRouter → askRiskLevel (interruptBefore)
+ *                                       ↘ askFocusArea (interruptBefore)
  *                                       ↘ executeWealthConsult → END
  *                                       ↘ cancelExecution → END (_cancelSignal)
- * askRiskLevel → paramRouter (循环)
+ * askRiskLevel/askFocusArea → paramRouter (循环)
  */
 @Slf4j
 @Configuration
@@ -60,12 +61,14 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
     @Override
     protected void registerCustomKeys(Map<String, KeyStrategy> strategies) {
         strategies.put("wealthConsult.riskLevel", new ReplaceStrategy());
+        strategies.put("wealthConsult.focusArea", new ReplaceStrategy());
     }
 
     @Bean("wealthConsultGraph")
     public CompiledGraph wealthConsultGraph() throws GraphStateException {
         Map<String, String> paramEdges = new HashMap<>(Map.of(
                 "ASK_RISK_LEVEL", "askRiskLevel",
+                "ASK_FOCUS_AREA", "askFocusArea",
                 "ALL_GOOD", "executeWealthConsult"
         ));
         addCancelEdge(paramEdges);
@@ -74,6 +77,7 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
                 .addNode("extractParams", node_async(this::extractParamsNode))
                 .addNode("paramRouter", node_async(this::paramRouterNode))
                 .addNode("askRiskLevel", node_async(this::askRiskLevelNode))
+                .addNode("askFocusArea", node_async(this::askFocusAreaNode))
                 .addNode("executeWealthConsult", node_async(this::executeWealthConsultNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
@@ -84,8 +88,9 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
 
         // ask节点条件路由
         addAskConditionalEdges(graph, "askRiskLevel");
+        addAskConditionalEdges(graph, "askFocusArea");
 
-        CompiledGraph compiled = graph.compile(createCompileConfig("askRiskLevel"));
+        CompiledGraph compiled = graph.compile(createCompileConfig("askRiskLevel", "askFocusArea"));
 
         log.info("[WealthConsultGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
@@ -116,12 +121,17 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         if (cancelResult != null) return cancelResult;
 
         String riskLevel = getStringValue(state, "wealthConsult.riskLevel");
+        String focusArea = getStringValue(state, "wealthConsult.focusArea");
 
         Map<String, Object> result = new HashMap<>();
         if (riskLevel == null || riskLevel.isEmpty()) {
             result.put("_question", "请问您的风险偏好是什么？(激进/稳健/保守)");
             result.put("_paramName", "ASK_RISK_LEVEL");
             log.info("[WealthConsultGraph.paramRouter] Missing riskLevel → ASK_RISK_LEVEL");
+        } else if (focusArea == null || focusArea.isEmpty()) {
+            result.put("_question", "请问您关注哪个领域的理财？(科技/能源/汽车/银行/工业/饮食/娱乐/全部)");
+            result.put("_paramName", "ASK_FOCUS_AREA");
+            log.info("[WealthConsultGraph.paramRouter] Missing focusArea → ASK_FOCUS_AREA");
         } else {
             result.put("_question", null);
             result.put("_paramName", "ALL_GOOD");
@@ -150,6 +160,11 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
                 result.put("wealthConsult.riskLevel", normalizeRiskLevel(userInput.trim()));
                 log.info("[WealthConsultGraph.askRiskLevel] Fallback: normalized riskLevel={}", userInput.trim());
             }
+            String focusArea = (String) extracted.get("wealthConsult.focusArea");
+            if (focusArea != null && !focusArea.isEmpty()) {
+                result.put("wealthConsult.focusArea", focusArea);
+                log.info("[WealthConsultGraph.askRiskLevel] Extracted focusArea={}", focusArea);
+            }
         } catch (Exception e) {
             log.error("[WealthConsultGraph.askRiskLevel] Extraction failed", e);
             result.put("wealthConsult.riskLevel", normalizeRiskLevel(userInput.trim()));
@@ -158,12 +173,41 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
+    private Map<String, Object> askFocusAreaNode(OverAllState state) {
+        String userInput = getLatestInput(state);
+        log.info("[WealthConsultGraph.askFocusArea] userInput={}", userInput);
+
+        Map<String, Object> result = new HashMap<>();
+        if (userInput == null || userInput.isEmpty()) {
+            log.info("[WealthConsultGraph.askFocusArea] No user input, will route to END");
+            return result;
+        }
+
+        try {
+            Map<String, Object> extracted = callExtractModel(userInput);
+            String focusArea = (String) extracted.get("wealthConsult.focusArea");
+            if (focusArea != null && !focusArea.isEmpty()) {
+                result.put("wealthConsult.focusArea", focusArea);
+                log.info("[WealthConsultGraph.askFocusArea] Extracted focusArea={}", focusArea);
+            } else {
+                result.put("wealthConsult.focusArea", normalizeFocusArea(userInput.trim()));
+                log.info("[WealthConsultGraph.askFocusArea] Fallback: normalized focusArea={}", userInput.trim());
+            }
+        } catch (Exception e) {
+            log.error("[WealthConsultGraph.askFocusArea] Extraction failed", e);
+            result.put("wealthConsult.focusArea", normalizeFocusArea(userInput.trim()));
+        }
+        result.put("_latestUserInput", "");
+        return result;
+    }
+
     private Map<String, Object> executeWealthConsultNode(OverAllState state) {
         String riskLevel = getStringValue(state, "wealthConsult.riskLevel");
+        String focusArea = getStringValue(state, "wealthConsult.focusArea");
 
-        log.info("[WealthConsultGraph.executeWealthConsult] riskLevel={}", riskLevel);
+        log.info("[WealthConsultGraph.executeWealthConsult] riskLevel={}, focusArea={}", riskLevel, focusArea);
 
-        MockBankingService.WealthConsultResult consultResult = mockBankingService.wealthConsult(riskLevel);
+        MockBankingService.WealthConsultResult consultResult = mockBankingService.wealthConsult(riskLevel, focusArea);
 
         Map<String, Object> result = new HashMap<>();
         result.put("_outputContent", consultResult.message());
@@ -183,14 +227,24 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
 
             提取规则:
             - riskLevel: 风险偏好,只能为"激进"、"稳健"、"保守"之一
-            - 如果用户说"高风险"、"进取"等 → 激进
-            - 如果用户说"低风险"、"安全"等 → 保守
-            - 如果用户说"中等"、"平衡"等 → 稳健
+              如果用户说"高风险"、"进取"等 → 激进
+              如果用户说"低风险"、"安全"等 → 保守
+              如果用户说"中等"、"平衡"等 → 稳健
+            - focusArea: 关注领域,只能为"科技"、"能源"、"汽车"、"银行"、"工业"、"饮食"、"娱乐"、"全部"之一
+              如果用户说"互联网"、"AI"、"芯片"等 → 科技
+              如果用户说"新能源"、"光伏"、"电力"等 → 能源
+              如果用户说"车企"、"造车"、"电动车"等 → 汽车
+              如果用户说"金融"、"银行股"等 → 银行
+              如果用户说"制造"、"工厂"等 → 工业
+              如果用户说"食品"、"餐饮"、"消费"等 → 饮食
+              如果用户说"影视"、"游戏"、"传媒"等 → 娱乐
+              如果用户没提关注领域 → null(不要猜测)
             - 只提取用户明确提到的参数,不猜测
 
             严格输出JSON:
             {
-              "riskLevel": "风险偏好(激进/稳健/保守)或null"
+              "riskLevel": "风险偏好(激进/稳健/保守)或null",
+              "focusArea": "关注领域(科技/能源/汽车/银行/工业/饮食/娱乐/全部)或null"
             }
             """.formatted(userInput);
     }
@@ -206,6 +260,11 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
             if (riskLevel != null && !riskLevel.isEmpty()) {
                 result.put("wealthConsult.riskLevel", riskLevel);
             }
+            String focusArea = node.has("focusArea") && !node.get("focusArea").isNull()
+                    ? node.get("focusArea").asText() : null;
+            if (focusArea != null && !focusArea.isEmpty()) {
+                result.put("wealthConsult.focusArea", normalizeFocusArea(focusArea));
+            }
         } catch (Exception e) {
             log.warn("[WealthConsultGraph] Failed to parse extract result: {}", content, e);
         }
@@ -219,5 +278,22 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         if (lower.contains("保守") || lower.contains("低风险") || lower.contains("稳健保守")) return "保守";
         if (lower.contains("稳健") || lower.contains("中等") || lower.contains("平衡")) return "稳健";
         return "稳健";
+    }
+
+    private String normalizeFocusArea(String input) {
+        if (input == null) return null;
+        String validAreas = "科技,能源,汽车,银行,工业,饮食,娱乐,全部";
+        for (String area : validAreas.split(",")) {
+            if (input.equals(area)) return area;
+        }
+        // 语义映射
+        if (input.contains("互联") || input.contains("AI") || input.contains("芯片") || input.contains("半导体")) return "科技";
+        if (input.contains("新能源") || input.contains("光伏") || input.contains("电力")) return "能源";
+        if (input.contains("车") || input.contains("电动")) return "汽车";
+        if (input.contains("金融") || input.contains("银行股")) return "银行";
+        if (input.contains("制造") || input.contains("工厂")) return "工业";
+        if (input.contains("食品") || input.contains("餐饮") || input.contains("消费")) return "饮食";
+        if (input.contains("影视") || input.contains("游戏") || input.contains("传媒")) return "娱乐";
+        return "全部";
     }
 }
