@@ -6,27 +6,27 @@ models:
   # L0 领域路由 - qwen2.5-7b-instruct 指令遵循更强
   domain:
     base-url: ${DOMAIN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-    api-key: ${DOMAIN_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
+    api-key: ${DOMAIN_API_KEY:}
     model: ${DOMAIN_MODEL:qwen2.5-7b-instruct}
   # L1 上下文路由 (FOLLOW_UP/SWITCH_NEW/RESUME)
   context:
     base-url: ${CONTEXT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-    api-key: ${CONTEXT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
+    api-key: ${CONTEXT_API_KEY:}
     model: ${CONTEXT_MODEL:qwen2.5-7b-instruct}
   # L1 意图识别+改写 (理财L1)
   intent:
     base-url: ${INTENT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-    api-key: ${INTENT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
+    api-key: ${INTENT_API_KEY:}
     model: ${INTENT_MODEL:qwen2.5-7b-instruct}
   # L2 子Graph提参
   param-extract:
     base-url: ${PARAM_EXTRACT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-    api-key: ${PARAM_EXTRACT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
+    api-key: ${PARAM_EXTRACT_API_KEY:}
     model: ${PARAM_EXTRACT_MODEL:qwen-plus}
   # L1 闲聊 - 默认复用context配置(可改为32B+模型)
   chat:
     base-url: ${CHAT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-    api-key: ${CHAT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
+    api-key: ${CHAT_API_KEY:}
     model: ${CHAT_MODEL:qwen-turbo}
 
 routing:
