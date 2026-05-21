@@ -1,10 +1,10 @@
 package com.mobileagent.app.domain;
 
+import com.mobileagent.app.service.ChatHistoryUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.messages.Message;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
@@ -12,7 +12,6 @@ import org.springframework.util.StreamUtils;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 /**
  * L0领域路由器 - 无状态，根据对话历史+当前消息判断领域
@@ -36,12 +35,15 @@ public class DomainRouter {
     private final ChatClient domainChatClient;
     private final ChatMemory chatMemory;
     private final ObjectMapper objectMapper;
+    private final int judgmentMaxPairs;
 
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
-                        ChatMemory chatMemory) {
+                        ChatMemory chatMemory,
+                        @org.springframework.beans.factory.annotation.Value("${routing.history.judgment-max-pairs:5}") int judgmentMaxPairs) {
         this.domainChatClient = domainChatClient;
         this.chatMemory = chatMemory;
         this.objectMapper = new ObjectMapper();
+        this.judgmentMaxPairs = judgmentMaxPairs;
     }
 
     /**
@@ -82,30 +84,11 @@ public class DomainRouter {
     }
 
     /**
-     * 读取全局ChatMemory并格式化为文本历史
+     * 读取全局ChatMemory并格式化为文本历史(截断到配置对数)
      * 格式: "用户: xxx\n助手: yyy\n用户: zzz\n助手: www"
      */
     private String formatChatHistory(String sessionId) {
-        try {
-            List<Message> messages = chatMemory.get(sessionId);
-            if (messages == null || messages.isEmpty()) {
-                return "(无历史对话)";
-            }
-            StringBuilder sb = new StringBuilder();
-            for (Message msg : messages) {
-                String role = switch (msg.getMessageType()) {
-                    case USER -> "用户";
-                    case ASSISTANT -> "助手";
-                    case SYSTEM -> "系统";
-                    default -> msg.getMessageType().name();
-                };
-                sb.append(role).append(": ").append(msg.getText()).append("\n");
-            }
-            return sb.toString().trim();
-        } catch (Exception e) {
-            log.warn("[DomainRouter] Failed to read chat history for sessionId={}", sessionId, e);
-            return "(无法读取历史对话)";
-        }
+        return ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs);
     }
 
     private String buildDomainPrompt(String userInput, String chatHistory) {

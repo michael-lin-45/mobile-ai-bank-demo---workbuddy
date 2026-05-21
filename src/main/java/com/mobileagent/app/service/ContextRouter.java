@@ -7,7 +7,6 @@ import com.mobileagent.app.state.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.messages.Message;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
@@ -15,7 +14,6 @@ import org.springframework.util.StreamUtils;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 /**
  * 上下文路由器 - Phase1: 使用LLM判断意图类型 (FOLLOW_UP / SWITCH_NEW / RESUME)
@@ -37,12 +35,15 @@ public class ContextRouter {
     private final ChatClient chatClient;
     private final IntentRegistry intentRegistry;
     private final ObjectMapper objectMapper;
+    private final int judgmentMaxPairs;
 
     public ContextRouter(@Qualifier("contextChatClient") ChatClient chatClient,
-                        IntentRegistry intentRegistry) {
+                        IntentRegistry intentRegistry,
+                        @org.springframework.beans.factory.annotation.Value("${routing.history.judgment-max-pairs:5}") int judgmentMaxPairs) {
         this.chatClient = chatClient;
         this.intentRegistry = intentRegistry;
         this.objectMapper = new ObjectMapper();
+        this.judgmentMaxPairs = judgmentMaxPairs;
     }
 
     /**
@@ -103,33 +104,11 @@ public class ContextRouter {
     }
 
     /**
-     * 读取ChatMemory并格式化为文本历史
+     * 读取ChatMemory并格式化为文本历史(截断到配置对数)
      * 格式: "用户: xxx\n助手: yyy"
      */
     private String formatChatHistory(ChatMemory chatMemory, String sessionId) {
-        if (chatMemory == null) {
-            return "(无历史对话)";
-        }
-        try {
-            List<Message> messages = chatMemory.get(sessionId);
-            if (messages == null || messages.isEmpty()) {
-                return "(无历史对话)";
-            }
-            StringBuilder sb = new StringBuilder();
-            for (Message msg : messages) {
-                String role = switch (msg.getMessageType()) {
-                    case USER -> "用户";
-                    case ASSISTANT -> "助手";
-                    case SYSTEM -> "系统";
-                    default -> msg.getMessageType().name();
-                };
-                sb.append(role).append(": ").append(msg.getText()).append("\n");
-            }
-            return sb.toString().trim();
-        } catch (Exception e) {
-            log.warn("[ContextRouter] Failed to read chat history for sessionId={}", sessionId, e);
-            return "(无法读取历史对话)";
-        }
+        return ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs);
     }
 
     private String buildRoutingSystemPrompt(String sessionId, String userInput,
