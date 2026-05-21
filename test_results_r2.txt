@@ -1,0 +1,56 @@
+L0-L1-L2 50 Test Cases (Round 2)
+Date: 2026-05-21 01:52:20
+Results: 43 PASS / 7 FAIL / 50 TOTAL
+
+[PASS] #1 transfer-full -> status=COMPLETED
+[PASS] #2 bill-expense -> status=COMPLETED
+[PASS] #3 wealth-recommend -> status=COMPLETED
+[PASS] #4 wealth-interpret-needs-param -> status=INTERRUPTED
+[PASS] #5 chat-greeting -> status=COMPLETED
+[PASS] #6 transfer-2turn -> status=INTERRUPTED
+[PASS] #7 transfer-3turn-done -> status=COMPLETED
+[PASS] #8 bill-2turn -> status=INTERRUPTED
+[PASS] #9 bill-3turn-done -> status=COMPLETED
+[PASS] #10 wealth-consult-2turn -> status=INTERRUPTED
+[PASS] #11 wealth-interpret-2turn -> status=COMPLETED
+[PASS] #12 chat-multi -> status=COMPLETED
+[FAIL] #13 transfer->bill -> status=COMPLETED | Reason: status=COMPLETED expected=INTERRUPTED; content missing '账单|时间|类型': 操作已取消
+[FAIL] #14 bill->transfer -> status=COMPLETED | Reason: status=COMPLETED expected=INTERRUPTED; content missing '转给谁|收款|转账': 操作已取消
+[PASS] #15 transfer->chat -> status=COMPLETED
+[PASS] #16 chat->transfer -> status=INTERRUPTED
+[FAIL] #17 wealth->transfer -> status=COMPLETED | Reason: status=COMPLETED expected=INTERRUPTED; content missing '转给谁|收款|转账': 操作已取消
+[FAIL] #18 transfer->wealth -> status=COMPLETED | Reason: status=COMPLETED expected=DISAMBIGUATION; content missing '咨询|解读': 根据您的风险偏好（稳健），为您推荐以下理财产品：
+- 稳利宝稳健版: 年化收益3.5%, 中低风险, 灵活申赎
+- 汇添富稳健债券: 年化收益3.8%, 中低风
+[PASS] #19 bill->chat -> status=COMPLETED
+[PASS] #20 chat->bill -> status=INTERRUPTED
+[PASS] #21 transfer-interrupted->bill->resume-transfer -> status=INTERRUPTED
+[PASS] #22 bill-interrupted->chat->resume-bill -> status=COMPLETED
+[PASS] #23 wealth-interrupted->transfer->resume-wealth -> status=INTERRUPTED
+[PASS] #24 transfer->chat->continue-transfer -> status=COMPLETED
+[FAIL] #25 wealth-interpret->transfer->resume-interpret -> status=INTERRUPTED | Reason: status=INTERRUPTED expected=COMPLETED
+[PASS] #26 multi-domain-switch-resume -> status=INTERRUPTED
+[FAIL] #27 resume-with-explicit-intent -> status=COMPLETED | Reason: status=COMPLETED expected=INTERRUPTED; content missing '转账|金额|转给谁': 操作已取消
+[FAIL] #28 wealth-consult->interpret->resume-consult -> status=INTERRUPTED | Reason: content missing '风险|偏好|稳健': 请问您要解读哪个理财产品？(如:稳利宝、汇添富等)
+[PASS] #29 cancel-transfer -> status=COMPLETED
+[PASS] #30 cancel-bill -> status=COMPLETED
+[PASS] #31 cancel-transfer-midway -> status=COMPLETED
+[PASS] #32 cancel-disambiguation -> status=COMPLETED
+[PASS] #33 cancel-then-new -> status=INTERRUPTED
+[PASS] #34 abandon-operation -> status=COMPLETED
+[PASS] #35 stop-query -> status=COMPLETED
+[PASS] #36 wealth-ambiguous -> status=DISAMBIGUATION
+[PASS] #37 disambig-answer-consult -> status=INTERRUPTED
+[PASS] #38 disambig-answer-interpret -> status=INTERRUPTED
+[PASS] #39 explicit-consult-needs-param -> status=INTERRUPTED
+[PASS] #40 explicit-interpret-needs-param -> status=INTERRUPTED
+[PASS] #41 loan-unsupported -> status=COMPLETED
+[PASS] #42 credit-card-unsupported -> status=COMPLETED
+[PASS] #43 promotion-unsupported -> status=COMPLETED
+[PASS] #44 points-unsupported -> status=COMPLETED
+[PASS] #45 empty-message -> status=ERROR
+[PASS] #46 wealth-purchase-unsupported -> status=DISAMBIGUATION
+[PASS] #47 short-number-followup -> status=INTERRUPTED
+[PASS] #48 repeat-intent -> status=INTERRUPTED
+[PASS] #49 transfer-then-transfer -> status=COMPLETED
+[PASS] #50 vip-benefits-unsupported -> status=COMPLETED

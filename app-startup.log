@@ -1,0 +1,36 @@
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.5.5)
+
+2026-05-20T09:45:58.607+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.MobileAiDemoApplication    : Starting MobileAiDemoApplication v0.0.1-SNAPSHOT using Java 21.0.10 with PID 21260 (D:\mobile-agent\mobile-ai-demo-enhanced\target\mobile-ai-demo-0.0.1-SNAPSHOT.jar started by libli in D:\mobile-agent\mobile-ai-demo-enhanced)
+2026-05-20T09:45:58.627+08:00 DEBUG 21260 --- [mobile-ai-demo] [           main] c.mobileagent.MobileAiDemoApplication    : Running with Spring Boot v3.5.5, Spring v6.2.10
+2026-05-20T09:45:58.628+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.MobileAiDemoApplication    : No active profile set, falling back to 1 default profile: "default"
+2026-05-20T09:46:00.308+08:00  INFO 21260 --- [mobile-ai-demo] [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8080 (http)
+2026-05-20T09:46:00.357+08:00  INFO 21260 --- [mobile-ai-demo] [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-05-20T09:46:00.358+08:00  INFO 21260 --- [mobile-ai-demo] [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.44]
+2026-05-20T09:46:00.413+08:00  INFO 21260 --- [mobile-ai-demo] [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-05-20T09:46:00.415+08:00  INFO 21260 --- [mobile-ai-demo] [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1709 ms
+2026-05-20T09:46:00.479+08:00 DEBUG 21260 --- [mobile-ai-demo] [           main] c.mobileagent.app.model.IntentRegistry   : Registered intent group: WEALTH -> [WEALTH_CONSULT, WEALTH_INTERPRET]
+2026-05-20T09:46:00.480+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.app.model.IntentRegistry   : IntentRegistry initialized with 4 intents: [TRANSFER, BILL_QUERY, WEALTH_CONSULT, WEALTH_INTERPRET]
+2026-05-20T09:46:00.482+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.app.model.IntentRegistry   : IntentGroups: [WEALTH]
+2026-05-20T09:46:00.489+08:00  INFO 21260 --- [mobile-ai-demo] [           main] com.mobileagent.app.config.ModelConfig   : [ModelConfig] paramExtractChatModel: baseUrl=https://dashscope.aliyuncs.com/compatible-mode, model=qwen-plus
+2026-05-20T09:46:00.803+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.m.app.workflow.TransferGraphConfig     : [TransferGraph] Compiled successfully with interruptBefore + ask→END + cancel routing
+2026-05-20T09:46:00.839+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.m.app.workflow.BillQueryGraphConfig    : [BillQueryGraph] Compiled successfully with interruptBefore + ask→END + cancel routing
+2026-05-20T09:46:00.843+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.m.a.workflow.WealthConsultGraphConfig  : [WealthConsultGraph] Compiled successfully with interruptBefore + ask→END + cancel routing
+2026-05-20T09:46:00.847+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.m.a.w.WealthInterpretGraphConfig       : [WealthInterpretGraph] Compiled successfully with interruptBefore + ask→END + cancel routing
+2026-05-20T09:46:00.849+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.app.model.IntentRegistry   : Bound graph to intent: TRANSFER
+2026-05-20T09:46:00.850+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.app.model.IntentRegistry   : Bound graph to intent: BILL_QUERY
+2026-05-20T09:46:00.850+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.app.model.IntentRegistry   : Bound graph to intent: WEALTH_CONSULT
+2026-05-20T09:46:00.851+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.app.model.IntentRegistry   : Bound graph to intent: WEALTH_INTERPRET
+2026-05-20T09:46:00.852+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.app.config.AppInitConfig   : [AppInitConfig] All graphs bound to IntentRegistry: TRANSFER, BILL_QUERY, WEALTH_CONSULT, WEALTH_INTERPRET
+2026-05-20T09:46:00.869+08:00  INFO 21260 --- [mobile-ai-demo] [           main] com.mobileagent.app.config.ModelConfig   : [ModelConfig] contextChatModel: baseUrl=https://dashscope.aliyuncs.com/compatible-mode, model=qwen-turbo
+2026-05-20T09:46:00.889+08:00  INFO 21260 --- [mobile-ai-demo] [           main] com.mobileagent.app.config.ModelConfig   : [ModelConfig] intentChatModel: baseUrl=https://dashscope.aliyuncs.com/compatible-mode, model=qwen-turbo
+2026-05-20T09:46:00.908+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.m.app.controller.BankController        : [BankController] Initialized with ChatMemory
+2026-05-20T09:46:01.583+08:00  INFO 21260 --- [mobile-ai-demo] [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8080 (http) with context path '/'
+2026-05-20T09:46:01.636+08:00  INFO 21260 --- [mobile-ai-demo] [           main] c.mobileagent.MobileAiDemoApplication    : Started MobileAiDemoApplication in 3.754 seconds (process running for 4.47)

@@ -2,6 +2,8 @@ package com.mobileagent.app.state;
 
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -30,10 +32,12 @@ public class AgentStateManager {
     private final Map<String, DisambiguationState> disambiguationStates = new ConcurrentHashMap<>();
 
     /** 最大挂起深度 */
-    private static final int MAX_SUSPENDED_DEPTH = 3;
+    @Value("${session.pending-agents.max-depth:3}")
+    private int maxSuspendedDepth;
 
-    /** 挂起超时时间(秒) */
-    private static final long SUSPENDED_EXPIRE_SECONDS = 1800; // 30分钟
+    /** 挂起超时时间(分钟), 可配置, 默认20分钟 */
+    @Value("${session.pending-agents.expire-minutes:20}")
+    private long suspendedExpireMinutes;
 
     // --- 活跃线程管理 ---
 
@@ -68,7 +72,7 @@ public class AgentStateManager {
         Map<String, SuspendedInfo> sessionMap = suspendedAgents.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
 
         // 检查深度限制
-        if (!sessionMap.containsKey(intent) && sessionMap.size() >= MAX_SUSPENDED_DEPTH) {
+        if (!sessionMap.containsKey(intent) && sessionMap.size() >= maxSuspendedDepth) {
             // 移除最早的挂起项
             String oldestKey = sessionMap.entrySet().stream()
                     .min(Comparator.comparing(e -> e.getValue().getSuspendedAt()))
@@ -80,7 +84,7 @@ public class AgentStateManager {
             }
         }
 
-        SuspendedInfo info = new SuspendedInfo(threadId, intent, Instant.now(), Instant.now().plusSeconds(SUSPENDED_EXPIRE_SECONDS));
+        SuspendedInfo info = new SuspendedInfo(threadId, intent, Instant.now(), Instant.now().plusSeconds(suspendedExpireMinutes * 60));
         // 继承activeThread的累积参数
         ActiveThreadInfo active = activeThreads.get(sessionId);
         if (active != null && active.getIntent().equals(intent)) {
@@ -123,6 +127,24 @@ public class AgentStateManager {
         if (sessionMap == null || sessionMap.isEmpty()) return false;
         sessionMap.entrySet().removeIf(e -> e.getValue().getExpiresAt().isBefore(Instant.now()));
         return !sessionMap.isEmpty();
+    }
+
+    /** 定时清理过期的挂起记录, 每分钟执行一次 */
+    @Scheduled(fixedRate = 60_000)
+    public void cleanupExpiredSuspended() {
+        Instant now = Instant.now();
+        suspendedAgents.forEach((sessionId, sessionMap) -> {
+            sessionMap.entrySet().removeIf(e -> {
+                if (e.getValue().getExpiresAt().isBefore(now)) {
+                    log.debug("[StateMgr] Auto cleaned expired: session={}, intent={}", sessionId, e.getKey());
+                    return true;
+                }
+                return false;
+            });
+            if (sessionMap.isEmpty()) {
+                suspendedAgents.remove(sessionId);
+            }
+        });
     }
 
     /** 清除会话所有状态 */

@@ -1,0 +1,17 @@
+﻿1. TCancel-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
+2. TCancel-取消转账 | status=COMPLETED | content=å¥½ç,å·²åæ¶å½åæä½ãè¿æä»ä¹å¯ä»¥å¸®æ¨çåï¼
+3. TMid-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
+4. TMid-Payee | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬å¤å°éé¢ï¼
+5. TMid-Cancel | status=COMPLETED | content=å¥½ç,å·²åæ¶å½åæä½ãè¿æä»ä¹å¯ä»¥å¸®æ¨çåï¼
+6. Disambig-Interpret-Start | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼
+7. Disambig-Interpret-Answer | status=INTERRUPTED | question=è¯·é®æ¨è¦è§£è¯»åªä¸ªçè´¢äº§åï¼(å¦:ç¨³å©å®ãæ±æ·»å¯ç­)
+8. Greeting | status=COMPLETED | content=ä¸æ¯æè¯¥åè½
+9. Multi-Transfer | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
+10. Multi-Payee | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬å¤å°éé¢ï¼
+11. Multi-Amount | status=COMPLETED | content=è½¬è´¦æåï¼å·²åæåè½¬è´¦500åãäº¤ææµæ°´å·ï¼TXN675894
+12. BillNCS-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨)
+13. BillNCS-Cancel | status=INTERRUPTED | content= | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨)
+14. TReject-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
+15. TReject-Payee | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬å¤å°éé¢ï¼
+16. TReject-Amount | status=COMPLETED | content=è½¬è´¦æåï¼å·²åçäºè½¬è´¦200åãäº¤ææµæ°´å·ï¼TXN690024
+17. TReject-Reject | status=COMPLETED | content=ä¸æ¯æè¯¥åè½

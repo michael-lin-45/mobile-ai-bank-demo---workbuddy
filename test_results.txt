@@ -1,0 +1,43 @@
+﻿1. Transfer-Routing | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼ | content=
+2. Transfer-Payee | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬å¤å°éé¢ï¼ | content=
+3. Transfer-Amount | status=COMPLETED | question= | content=è½¬è´¦æåï¼å·²åå¼ ä¸è½¬è´¦100åãäº¤ææµæ°´å·ï¼TXN282260
+4. Transfer-Confirm | status=COMPLETED | question= | content=ä¸æ¯æè¯¥åè½
+5. BillQuery-Routing | status=INTERRUPTED | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨) | content=
+6. BillQuery-Range | status=COMPLETED | question= | content=æè¿ä¸ä¸ªæçè´¦åæç»ï¼
+- é¤é¥®: 356.50å (05æ18æ¥)
+- äº¤é: 128.00å (05æ17æ¥)
+- è´­ç©: 899.00å (05æ16æ¥)
+- æ°´çµè´¹: 245.30å (05æ14æ¥)
+åè®¡: 1628.80å
+7. WealthConsult-Routing | status=INTERRUPTED | question=è¯·é®æ¨çé£é©åå¥½æ¯ä»ä¹ï¼(æ¿è¿/ç¨³å¥/ä¿å®) | content=
+8. WealthConsult-Risk | status=COMPLETED | question= | content=æ ¹æ®æ¨çé£é©åå¥½ï¼ç¨³å¥ï¼ï¼ä¸ºæ¨æ¨èä»¥ä¸çè´¢äº§åï¼
+- ç¨³å©å®ç¨³å¥ç: å¹´åæ¶ç3.5%, ä¸­ä½é£é©, çµæ´»ç³èµ
+- æ±æ·»å¯ç¨³å¥åºå¸: å¹´åæ¶ç3.8%, ä¸­ä½é£é©, éå®3ä¸ªæ
+- ä¼éçè´¢ç»åA: å¹´åæ¶ç4.0%, ä¸­é£é©, éå®6ä¸ªæ
+
+æ¸©é¦¨æç¤º: çè´¢æé£é©,æèµéè°¨æãè¿å¾æ¶çä¸ä»£è¡¨æªæ¥è¡¨ç°ã
+9. WealthInterpret-Routing | status=INTERRUPTED | question=è¯·é®æ¨è¦è§£è¯»åªä¸ªçè´¢äº§åï¼(å¦:ç¨³å©å®ãæ±æ·»å¯ç­) | content=
+10. WealthInterpret-Product | status=COMPLETED | question= | content=ãXXåºé äº§åè§£è¯»ã
+- äº§åç±»å: ç»¼åçè´¢
+- é£é©ç­çº§: R2(ä¸­ä½é£é©)
+- å¹´åæ¶çç: 3.0%~4.5%
+- æèµæé: çµæ´»ç³èµ
+- èµ·è´­éé¢: 1ä¸å
+- åºå±èµäº§: åºå¸ãè´§å¸å¸åºå·¥å·
+- å¦éäºè§£å·ä½äº§åè¯¦æ,è¯·æä¾åç¡®çäº§ååç§°
+
+æ¸©é¦¨æç¤º: ä»¥ä¸ä¿¡æ¯ä»ä¾åè,å·ä½ä»¥äº§åè¯´æä¹¦ä¸ºåã
+11. Disambig-Wealth | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼ | content= | candidateIntents=WEALTH_CONSULT WEALTH_INTERPRET
+12. Disambig-Answer-Consult | status=INTERRUPTED | question=è¯·é®æ¨çé£é©åå¥½æ¯ä»ä¹ï¼(æ¿è¿/ç¨³å¥/ä¿å®) | content=
+13. Disambig-Wealth2 | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼ | content=
+14. Disambig-StillAmbiguous | status=COMPLETED | question= | content=ä¸æ¯æè¯¥åè½
+15. Unsupported-Insurance | status=COMPLETED | question= | content=ä¸æ¯æè¯¥åè½
+16. Cancel-Transfer-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
+17. Cancel-Transfer-Cancel | status=COMPLETED | question= | content=å¥½ç,å·²åæ¶å½åæä½ãè¿æä»ä¹å¯ä»¥å¸®æ¨çåï¼
+18. Cancel-Bill-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨)
+19. Cancel-Bill-Cancel | status=INTERRUPTED | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨) | content=
+20. Switch-Transfer-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
+21. Switch-To-Bill | status=INTERRUPTED | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨) | content=
+22. Cancel-Disambig-Start | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼
+23. Cancel-Disambig-Cancel | status=COMPLETED | question= | content=å¥½ç,å·²åæ¶å½åæä½ãè¿æä»ä¹å¯ä»¥å¸®æ¨çåï¼
+24. Cancel-Nothing | status=COMPLETED | question= | content=å½åæ²¡æè¿è¡ä¸­çæä½ãæä»ä¹å¯ä»¥å¸®æ¨çåï¼

@@ -1,0 +1,12 @@
+﻿1. OneShot-Disambig | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼
+2. OneShot-StillAmbig | status=COMPLETED | content=ä¸æ¯æè¯¥åè½ | question=
+3. ClearAnswer-Disambig | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼
+4. ClearAnswer-Consult | status=INTERRUPTED | question=è¯·é®æ¨çé£é©åå¥½æ¯ä»ä¹ï¼(æ¿è¿/ç¨³å¥/ä¿å®)
+5. DisambigSwitch-Start | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼
+6. DisambigSwitch-ToTransfer | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
+7. AfterReject-Disambig | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼
+8. AfterReject-Reject | status=COMPLETED | content=ä¸æ¯æè¯¥åè½
+9. AfterReject-NewIntent | status=INTERRUPTED | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨)
+10. StateClear-Disambig | status=DISAMBIGUATION
+11. StateClear-Reject | status=COMPLETED | content=ä¸æ¯æè¯¥åè½
+12. StateClear-Retry | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼

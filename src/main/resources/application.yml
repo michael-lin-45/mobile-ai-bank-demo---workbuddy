@@ -67,7 +67,7 @@ intents:
 session:
   pending-agents:
     max-depth: 3
-    expire-minutes: 30
+    expire-minutes: 20
     prompt-max-times: 2
     prompt-timeout-seconds: 30
   last-agent:
