@@ -2,18 +2,14 @@ package com.mobileagent.app.router;
 
 import com.mobileagent.app.util.ChatHistoryUtils;
 import com.mobileagent.app.util.JsonParseUtils;
+import com.mobileagent.app.util.TemplateUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StreamUtils;
-
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -305,13 +301,7 @@ public class DomainRouter {
     // ==================== 模板加载 ====================
 
     private String loadTemplate(String path) {
-        try {
-            ClassPathResource resource = new ClassPathResource(path);
-            return StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            log.warn("[DomainRouter] Failed to load template: {}, using fallback", path);
-            return getDefaultDomainPrompt();
-        }
+        return TemplateUtils.loadTemplate(path, this::getDefaultDomainPrompt);
     }
 
     private String getDefaultDomainPrompt() {

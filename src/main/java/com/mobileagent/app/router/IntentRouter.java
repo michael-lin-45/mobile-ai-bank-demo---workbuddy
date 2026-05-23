@@ -6,16 +6,12 @@ import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.manager.AgentStateManager;
 import com.mobileagent.app.util.ChatHistoryUtils;
 import com.mobileagent.app.util.JsonParseUtils;
+import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StreamUtils;
-
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 
 /**
  * 意图识别+上下文改写服务 - Phase2: 使用LLM同时完成意图识别和上下文改写
@@ -240,13 +236,7 @@ public class IntentRouter {
     }
 
     private String loadTemplate(String path) {
-        try {
-            ClassPathResource resource = new ClassPathResource(path);
-            return StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            log.warn("[IntentRouter] Failed to load template: {}, using fallback", path);
-            return getDefaultRewritePrompt();
-        }
+        return TemplateUtils.loadTemplate(path, this::getDefaultRewritePrompt);
     }
 
     private String getDefaultRewritePrompt() {

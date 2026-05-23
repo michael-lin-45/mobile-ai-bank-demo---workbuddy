@@ -6,16 +6,12 @@ import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.manager.AgentStateManager;
 import com.mobileagent.app.util.ChatHistoryUtils;
 import com.mobileagent.app.util.JsonParseUtils;
+import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StreamUtils;
-
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 
 /**
  * 上下文路由器 - Phase1: 使用LLM判断意图类型 (FOLLOW_UP / SWITCH_NEW / RESUME)
@@ -176,13 +172,7 @@ public class ContextRouter {
     }
 
     private String loadTemplate(String path) {
-        try {
-            ClassPathResource resource = new ClassPathResource(path);
-            return StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            log.warn("[ContextRouter] Failed to load template: {}, using fallback", path);
-            return getDefaultRoutingPrompt();
-        }
+        return TemplateUtils.loadTemplate(path, this::getDefaultRoutingPrompt);
     }
 
     private String getDefaultRoutingPrompt() {

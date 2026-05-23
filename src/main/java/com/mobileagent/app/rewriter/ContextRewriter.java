@@ -3,16 +3,12 @@ package com.mobileagent.app.rewriter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.util.ChatHistoryUtils;
 import com.mobileagent.app.util.JsonParseUtils;
+import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StreamUtils;
-
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 
 /**
  * 上下文改写器 - 当FOLLOW_UP但无activeThread时，将依赖上下文的用户输入改写为自包含描述
@@ -107,13 +103,7 @@ public class ContextRewriter {
     }
 
     private String loadTemplate(String path) {
-        try {
-            ClassPathResource resource = new ClassPathResource(path);
-            return StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            log.warn("[ContextRewriter] Failed to load template: {}, using fallback", path);
-            return getDefaultRewritePrompt();
-        }
+        return TemplateUtils.loadTemplate(path, this::getDefaultRewritePrompt);
     }
 
     private String getDefaultRewritePrompt() {
