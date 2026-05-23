@@ -1,285 +1,42 @@
 package com.mobileagent.app.manager;
 
-import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-
 /**
- * 智能体状态管理器 - 管理多意图对话的线程状态
+ * 智能体状态管理器 - 已废弃
  *
- * 核心数据表:
- * 1. activeThreads: 当前活跃线程 (sessionId → ActiveThreadInfo)
- * 2. suspendedAgents: 挂起的意图线程 (sessionId → {intent → SuspendedInfo})
- * 3. disambiguationStates: 消歧状态 (sessionId → DisambiguationState)
+ * 状态已下沉到各L1 Service自管:
+ * - TransferService: transferActiveThreads
+ * - BillService: billActiveThreads
+ * - WealthService: wealthActiveThreads + wealthSuspendedAgents + disambiguationStates
+ *
+ * 保留此类仅为防止Spring扫描报错，后续重构为SingleSubAgentLayer/MultiSubAgentLayer时彻底移除。
+ *
+ * @deprecated 状态已下沉到各L1 Service，不再使用全局状态管理器
  */
 @Slf4j
 @Component
+@Deprecated
 public class AgentStateManager {
 
-    /** 当前活跃线程 */
-    private final Map<String, ActiveThreadInfo> activeThreads = new ConcurrentHashMap<>();
-
-    /** 挂起的意图线程表 */
-    private final Map<String, Map<String, SuspendedInfo>> suspendedAgents = new ConcurrentHashMap<>();
-
-    /** 消歧状态表 */
-    private final Map<String, DisambiguationState> disambiguationStates = new ConcurrentHashMap<>();
-
-    /** 最大挂起深度 */
-    @Value("${session.pending-agents.max-depth:3}")
-    private int maxSuspendedDepth;
-
-    /** 挂起超时时间(分钟), 可配置, 默认20分钟 */
-    @Value("${session.pending-agents.expire-minutes:20}")
-    private long suspendedExpireMinutes;
-
-    // --- 活跃线程管理 ---
-
-    public void setActiveThread(String sessionId, String threadId, String intent) {
-        if (threadId == null || intent == null) {
-            activeThreads.remove(sessionId);
-            log.debug("[StateMgr] Cleared active thread for session={}", sessionId);
-        } else {
-            activeThreads.put(sessionId, new ActiveThreadInfo(threadId, intent, Instant.now()));
-            log.debug("[StateMgr] Set active thread: session={}, threadId={}, intent={}", sessionId, threadId, intent);
-        }
-    }
-
-    public ActiveThreadInfo getActiveThread(String sessionId) {
-        ActiveThreadInfo info = activeThreads.get(sessionId);
-        if (info != null) {
-            log.debug("[StateMgr] Get active thread: session={}, threadId={}, intent={}", sessionId, info.getThreadId(), info.getIntent());
-        } else {
-            log.debug("[StateMgr] No active thread for session={}", sessionId);
-        }
-        return info;
-    }
-
-    public void clearActiveThread(String sessionId) {
-        activeThreads.remove(sessionId);
-        log.debug("[StateMgr] Cleared active thread for session={}", sessionId);
-    }
-
-    // --- 挂起管理 ---
-
-    public void suspendAgent(String sessionId, String intent, String threadId) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
-
-        // 同一intent已挂起 → 合并累积参数，保留原有的（更完整），不覆盖
-        if (sessionMap.containsKey(intent)) {
-            SuspendedInfo existing = sessionMap.get(intent);
-            ActiveThreadInfo active = activeThreads.get(sessionId);
-            if (active != null && active.getIntent().equals(intent)) {
-                // 合并: 原有参数 + 新参数(新参数不覆盖已有)
-                Map<String, Object> merged = new HashMap<>(active.getAccumulatedParams());
-                existing.getAccumulatedParams().forEach(merged::putIfAbsent);
-                existing.setAccumulatedParams(merged);
-            }
-            log.debug("[StateMgr] Suspended agent already exists, merged params: session={}, intent={}, params={}",
-                    sessionId, intent, existing.getAccumulatedParams());
-            return;
-        }
-
-        // 检查深度限制
-        if (sessionMap.size() >= maxSuspendedDepth) {
-            // 移除最早的挂起项
-            String oldestKey = sessionMap.entrySet().stream()
-                    .min(Comparator.comparing(e -> e.getValue().getSuspendedAt()))
-                    .map(Map.Entry::getKey)
-                    .orElse(null);
-            if (oldestKey != null) {
-                sessionMap.remove(oldestKey);
-                log.warn("[StateMgr] Exceeded max suspended depth, evicted oldest: {}", oldestKey);
-            }
-        }
-
-        SuspendedInfo info = new SuspendedInfo(threadId, intent, Instant.now(), Instant.now().plusSeconds(suspendedExpireMinutes * 60));
-        // 继承activeThread的累积参数
-        ActiveThreadInfo active = activeThreads.get(sessionId);
-        if (active != null && active.getIntent().equals(intent)) {
-            info.setAccumulatedParams(active.getAccumulatedParams());
-        }
-        sessionMap.put(intent, info);
-        log.debug("[StateMgr] Suspended agent: session={}, intent={}, threadId={}, params={}", sessionId, intent, threadId, info.getAccumulatedParams());
-    }
-
-    public SuspendedInfo getSuspendedThread(String sessionId, String intent) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
-        if (sessionMap == null) return null;
-        SuspendedInfo info = sessionMap.get(intent);
-        if (info != null && info.getExpiresAt().isBefore(Instant.now())) {
-            sessionMap.remove(intent);
-            log.debug("[StateMgr] Expired suspended agent removed: session={}, intent={}", sessionId, intent);
-            return null;
-        }
-        return info;
-    }
-
-    public Map<String, SuspendedInfo> getAllSuspended(String sessionId) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
-        if (sessionMap == null) return Collections.emptyMap();
-        // 清理过期项
-        sessionMap.entrySet().removeIf(e -> e.getValue().getExpiresAt().isBefore(Instant.now()));
-        return Collections.unmodifiableMap(sessionMap);
-    }
-
-    public void resumeAgent(String sessionId, String intent) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
-        if (sessionMap != null) {
-            sessionMap.remove(intent);
-            log.debug("[StateMgr] Resumed agent: session={}, intent={}", sessionId, intent);
-        }
-    }
-
-    public boolean hasSuspendedAgents(String sessionId) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
-        if (sessionMap == null || sessionMap.isEmpty()) return false;
-        sessionMap.entrySet().removeIf(e -> e.getValue().getExpiresAt().isBefore(Instant.now()));
-        return !sessionMap.isEmpty();
-    }
-
-    /** 定时清理过期的挂起记录, 每分钟执行一次 */
-    @Scheduled(fixedRate = 60_000)
-    public void cleanupExpiredSuspended() {
-        Instant now = Instant.now();
-        suspendedAgents.forEach((sessionId, sessionMap) -> {
-            sessionMap.entrySet().removeIf(e -> {
-                if (e.getValue().getExpiresAt().isBefore(now)) {
-                    log.debug("[StateMgr] Auto cleaned expired: session={}, intent={}", sessionId, e.getKey());
-                    return true;
-                }
-                return false;
-            });
-            if (sessionMap.isEmpty()) {
-                suspendedAgents.remove(sessionId);
-            }
-        });
-    }
-
-    /** 清除会话所有状态 */
-    public void clearSession(String sessionId) {
-        activeThreads.remove(sessionId);
-        suspendedAgents.remove(sessionId);
-        disambiguationStates.remove(sessionId);
-        log.debug("[StateMgr] Cleared all session state: session={}", sessionId);
-    }
-
-    /** 任务完成时清理: 清空activeThread + 从suspended移除 */
-    public void completeAgent(String sessionId, String intent) {
-        activeThreads.remove(sessionId);
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
-        if (sessionMap != null) {
-            sessionMap.remove(intent);
-        }
-        log.debug("[StateMgr] Completed agent: session={}, intent={}", sessionId, intent);
-    }
-
-    // --- 消歧状态管理 ---
-
-    public void setDisambiguationState(String sessionId, DisambiguationState state) {
-        disambiguationStates.put(sessionId, state);
-        log.debug("[StateMgr] Set disambiguation state: session={}, groupId={}",
-                sessionId, state.getGroupId());
-    }
-
-    public DisambiguationState getDisambiguationState(String sessionId) {
-        return disambiguationStates.get(sessionId);
-    }
-
-    public void clearDisambiguationState(String sessionId) {
-        disambiguationStates.remove(sessionId);
-        log.debug("[StateMgr] Cleared disambiguation state: session={}", sessionId);
-    }
-
-    public boolean isInDisambiguation(String sessionId) {
-        DisambiguationState state = disambiguationStates.get(sessionId);
-        return state != null;
-    }
-
-    /** 生成当前会话状态描述(供LLM使用) */
-    public String getSessionStateDescription(String sessionId) {
-        StringBuilder sb = new StringBuilder();
-        ActiveThreadInfo active = getActiveThread(sessionId);
-        Map<String, SuspendedInfo> suspended = getAllSuspended(sessionId);
-        DisambiguationState disambiguation = disambiguationStates.get(sessionId);
-
-        if (disambiguation != null) {
-            sb.append("当前在消歧模式: 意图组=").append(disambiguation.getGroupId());
-        } else if (active != null) {
-            sb.append("当前活跃意图: ").append(active.getIntent())
-              .append(" (线程: ").append(active.getThreadId().substring(0, 8)).append("...)");
-        } else {
-            sb.append("当前无活跃意图");
-        }
-
-        if (!suspended.isEmpty()) {
-            sb.append("\n挂起的意图: ");
-            for (SuspendedInfo info : suspended.values()) {
-                sb.append(info.getIntent()).append(" ");
-            }
-        }
-
-        return sb.toString();
-    }
-
-    // --- 数据类 ---
-
-    @Data
-    public static class ActiveThreadInfo {
-        private final String threadId;
-        private final String intent;
-        private final Instant createdAt;
-        /** 累积的参数 (如transfer.receiver, transfer.amount等) */
-        private Map<String, Object> accumulatedParams = new HashMap<>();
-
-        public ActiveThreadInfo(String threadId, String intent, Instant createdAt) {
-            this.threadId = threadId;
-            this.intent = intent;
-            this.createdAt = createdAt;
-        }
-
-        public void setAccumulatedParams(Map<String, Object> params) {
-            this.accumulatedParams = params != null ? new HashMap<>(params) : new HashMap<>();
-        }
-    }
-
-    @Data
-    public static class SuspendedInfo {
-        private final String threadId;
-        private final String intent;
-        private final Instant suspendedAt;
-        private final Instant expiresAt;
-        /** 累积的参数 (从activeThread继承) */
-        private Map<String, Object> accumulatedParams = new HashMap<>();
-
-        public SuspendedInfo(String threadId, String intent, Instant suspendedAt, Instant expiresAt) {
-            this.threadId = threadId;
-            this.intent = intent;
-            this.suspendedAt = suspendedAt;
-            this.expiresAt = expiresAt;
-        }
-
-        public void setAccumulatedParams(Map<String, Object> params) {
-            this.accumulatedParams = params != null ? new HashMap<>(params) : new HashMap<>();
-        }
+    public AgentStateManager() {
+        log.info("[AgentStateManager] Initialized (deprecated - state now managed by L1 Services)");
     }
 
     /**
-     * 消歧状态 - Controller层追问用户明确意图时使用
-     * 最小状态: 只保留groupId, 用于下次回答时知道消歧哪个意图组
+     * @deprecated 使用各L1 Service的clearSession()代替
      */
-    @Data
-    public static class DisambiguationState {
-        private final String groupId;
+    @Deprecated
+    public void clearSession(String sessionId) {
+        // no-op: 由各L1 Service自管
+    }
 
-        public DisambiguationState(String groupId) {
-            this.groupId = groupId;
-        }
+    /**
+     * @deprecated 使用各L1 Service的getSessionStateDescription()代替
+     */
+    @Deprecated
+    public String getSessionStateDescription(String sessionId) {
+        return "状态已迁移到各L1 Service (deprecated)";
     }
 }

@@ -1,9 +1,7 @@
 package com.mobileagent.app.router;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.data.RoutingResult;
-import com.mobileagent.app.manager.AgentStateManager;
 import com.mobileagent.app.util.ChatHistoryUtils;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
@@ -21,11 +19,7 @@ import org.springframework.stereotype.Service;
  * - 不使用ReadOnlyMemoryAdvisor，改为手动读取ChatMemory并格式化到{chat_history}占位符
  * - 调用方传入对应的ChatMemory实例(全局/领域级)，在system prompt中区分【对话历史】和【当前消息】
  * - 改写后的输入传递给子Graph,使子Graph参数提取更准确
- *
- * 对话历史格式 (由调用方维护):
- *   用户: "我想转账"
- *   助手: "请问您要转给谁？"
- *   用户: "张三"
+ * - 不依赖AgentStateManager，由调用方传入状态字符串
  */
 @Slf4j
 @Service
@@ -51,17 +45,22 @@ public class IntentRouter {
      * @param sessionId 会话ID
      * @param userInput 用户原始输入
      * @param phase1Result Phase1的路由结果
-     * @param stateManager 状态管理器
+     * @param currentAgent 当前活跃意图名称(如"WEALTH_CONSULT"或"无")
+     * @param pendingAgents 挂起的意图列表描述(如"WEALTH_CONSULT, WEALTH_INTERPRET"或"无")
+     * @param sessionState 会话状态描述(由L1 Service生成)
+     * @param disambigContext 消歧上下文(如"无"或具体消歧信息)
      * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
      * @return 包含意图名称、改写后输入、路由类型的完整路由结果
      */
     public RoutingResult rewriteAndIdentify(String sessionId, String userInput,
                                              RoutingResult phase1Result,
-                                             AgentStateManager stateManager,
+                                             String currentAgent, String pendingAgents,
+                                             String sessionState, String disambigContext,
                                              ChatMemory chatMemory) {
         try {
             String chatHistoryStr = formatChatHistory(chatMemory, sessionId);
-            String systemPrompt = buildIntentionSystemPrompt(sessionId, userInput, phase1Result, stateManager, chatHistoryStr);
+            String systemPrompt = buildIntentionSystemPrompt(userInput, phase1Result,
+                    currentAgent, pendingAgents, sessionState, disambigContext, chatHistoryStr);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
@@ -94,49 +93,18 @@ public class IntentRouter {
 
     /**
      * 读取ChatMemory并格式化为文本历史(截断到配置对数)
-     * 格式: "用户: xxx\n助手: yyy"
      */
     private String formatChatHistory(ChatMemory chatMemory, String sessionId) {
         return ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs);
     }
 
-    private String buildIntentionSystemPrompt(String sessionId, String userInput,
+    private String buildIntentionSystemPrompt(String userInput,
                                                RoutingResult phase1Result,
-                                               AgentStateManager stateManager,
+                                               String currentAgent, String pendingAgents,
+                                               String sessionState, String disambigContext,
                                                String chatHistory) {
         String template = loadTemplate("prompts/l1-intention.st");
         String intentList = intentRegistry.getIntentListDescription();
-        String sessionState = stateManager.getSessionStateDescription(sessionId);
-
-        AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
-        String currentIntent = active != null ? active.getIntent() : "无";
-        String pendingList = stateManager.hasSuspendedAgents(sessionId)
-                ? String.join(", ", stateManager.getAllSuspended(sessionId).keySet())
-                : "无";
-
-        // 消歧上下文 — 包含追问问题和候选意图描述,帮助LLM映射短回答
-        String disambigContext = "无";
-        AgentStateManager.DisambiguationState disambigState = stateManager.getDisambiguationState(sessionId);
-        if (disambigState != null) {
-            IntentRegistry.IntentGroup group = intentRegistry.getGroup(disambigState.getGroupId());
-            if (group != null) {
-                StringBuilder sb = new StringBuilder();
-                sb.append("系统追问: \"").append(group.getDisambiguationQuestion()).append("\"\n");
-                sb.append("候选意图:\n");
-                for (String candidateName : group.getIntentNames()) {
-                    IntentRegistry.IntentConfig config = intentRegistry.getConfig(candidateName);
-                    sb.append("  · ").append(candidateName);
-                    if (config != null) {
-                        sb.append(" (").append(config.getDescription()).append(")");
-                    }
-                    sb.append("\n");
-                }
-                sb.append("用户回答应映射到上述候选意图之一");
-                disambigContext = sb.toString();
-            } else {
-                disambigContext = String.format("意图组=%s, 候选意图未知", disambigState.getGroupId());
-            }
-        }
 
         // 根据Phase1判断确定改写模式
         String mode = phase1Result.isResume() ? "RESUME" : "SWITCH";
@@ -145,11 +113,11 @@ public class IntentRouter {
                 .replace("{intent_list}", intentList)
                 .replace("{message}", userInput)
                 .replace("{mode}", mode)
-                .replace("{intent_name}", currentIntent)
-                .replace("{last_agent_description}", currentIntent)
+                .replace("{intent_name}", currentAgent)
+                .replace("{last_agent_description}", currentAgent)
                 .replace("{last_agent_summary}", sessionState)
                 .replace("{session_state}", sessionState)
-                .replace("{pending_agents}", pendingList)
+                .replace("{pending_agents}", pendingAgents)
                 .replace("{disambig_context}", disambigContext)
                 .replace("{chat_history}", chatHistory);
     }
@@ -214,7 +182,7 @@ public class IntentRouter {
 
     /**
      * 判断细化路由类型:
-     * - 如果识别的意图在suspendedAgents中 → RESUME
+     * - 如果识别的意图在suspendedAgents中 → RESUME (由调用方传入isInSuspended判断)
      * - 否则 → SWITCH_NEW
      */
     private String determineRouteType(String intentName, RoutingResult phase1Result,

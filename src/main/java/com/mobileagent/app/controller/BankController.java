@@ -6,7 +6,6 @@ import com.mobileagent.app.domain.TransferService;
 import com.mobileagent.app.domain.WealthService;
 import com.mobileagent.app.router.DomainRouter;
 import com.mobileagent.app.data.WorkflowOutput;
-import com.mobileagent.app.manager.AgentStateManager;
 import com.mobileagent.app.util.ChatHistoryUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -21,8 +20,13 @@ import java.util.Map;
  * 架构 (L0→L1→L2):
  * 1. L0: DomainRouter判断领域(WEALTH/TRANSFER/BILL/UNSUPPORTED/CHAT)
  * 2. 分发到L1 Service
- * 3. L1: 各领域Service内部路由(FOLLOW_UP/RESUME等)
+ * 3. L1: 各领域Service内部路由(FOLLOW_UP/RESUME等) + 自管状态
  * 4. L2: 子智能体Graph执行
+ *
+ * 状态管理:
+ * - 不依赖AgentStateManager，各L1 Service自管状态
+ * - clearSession: 委托给各L1 Service清理
+ * - getState: 聚合各L1 Service的状态描述
  *
  * 对话历史管理:
  * - 全局ChatMemory: 记录所有对话,供L0 DomainRouter手动读取
@@ -39,22 +43,19 @@ public class BankController {
     private final BillService billService;
     private final ChatService chatService;
     private final ChatMemory chatMemory;
-    private final AgentStateManager stateManager;
 
     public BankController(DomainRouter domainRouter,
                           WealthService wealthService,
                           TransferService transferService,
                           BillService billService,
                           ChatService chatService,
-                          ChatMemory chatMemory,
-                          AgentStateManager stateManager) {
+                          ChatMemory chatMemory) {
         this.domainRouter = domainRouter;
         this.wealthService = wealthService;
         this.transferService = transferService;
         this.billService = billService;
         this.chatService = chatService;
         this.chatMemory = chatMemory;
-        this.stateManager = stateManager;
     }
 
     @PostMapping("/chat")
@@ -102,17 +103,31 @@ public class BankController {
 
     // ==================== 会话管理 ====================
 
+    /**
+     * 获取会话状态 - 聚合各L1 Service的状态
+     */
     @GetMapping("/state")
     public Map<String, Object> getState(@RequestParam String sessionId) {
-        return stateManager.getSessionStateDescription(sessionId) != null
-                ? Map.of("sessionId", sessionId,
-                "state", stateManager.getSessionStateDescription(sessionId))
-                : Map.of("sessionId", sessionId, "state", "empty");
+        String transferState = transferService.getSessionStateDescription(sessionId);
+        String billState = billService.getSessionStateDescription(sessionId);
+        String wealthState = wealthService.getSessionStateDescription(sessionId);
+
+        return Map.of(
+                "sessionId", sessionId,
+                "transfer", transferState,
+                "bill", billState,
+                "wealth", wealthState
+        );
     }
 
+    /**
+     * 清除会话 - 委托给各L1 Service清理各自状态
+     */
     @DeleteMapping("/session")
     public Map<String, String> clearSession(@RequestParam String sessionId) {
-        stateManager.clearSession(sessionId);
+        transferService.clearSession(sessionId);
+        billService.clearSession(sessionId);
+        wealthService.clearSession(sessionId);
         domainRouter.clearLastDomain(sessionId);
         chatMemory.clear(sessionId);
         return Map.of("status", "cleared", "sessionId", sessionId);

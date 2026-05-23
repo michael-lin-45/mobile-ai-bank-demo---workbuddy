@@ -1,9 +1,7 @@
 package com.mobileagent.app.router;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.data.RoutingResult;
-import com.mobileagent.app.manager.AgentStateManager;
 import com.mobileagent.app.util.ChatHistoryUtils;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
@@ -21,6 +19,7 @@ import org.springframework.stereotype.Service;
  * - 不使用ReadOnlyMemoryAdvisor，改为手动读取ChatMemory并格式化到{chat_history}占位符
  * - 调用方传入对应的ChatMemory实例(全局/领域级)，在system prompt中区分【对话历史】和【当前消息】
  * - ChatMemory写入由调用方统一管理
+ * - 不依赖AgentStateManager，由L1 Service传入状态字符串(currentAgent, pendingAgents, sessionState)
  *
  * 支持两种模板:
  * - 默认(l1-routing.st): 理财L1使用,包含FOLLOW_UP/SWITCH_NEW/RESUME三种
@@ -45,28 +44,25 @@ public class ContextRouter {
     }
 
     /**
-     * Phase1: 判断意图类型 (使用默认模板 l1-routing.st + 全局ChatMemory)
-     */
-    public RoutingResult route(String sessionId, String userInput, AgentStateManager stateManager) {
-        return route(sessionId, userInput, stateManager, "prompts/l1-routing.st", null, null);
-    }
-
-    /**
-     * Phase1: 判断意图类型 (使用指定模板 + 指定ChatMemory)
+     * Phase1: 判断意图类型
      *
      * @param sessionId 会话ID
      * @param userInput 用户输入
-     * @param stateManager 状态管理器
+     * @param currentAgent 当前活跃意图名称(如"TRANSFER"或"无")
+     * @param pendingAgents 挂起的意图列表描述(如"WEALTH_CONSULT, WEALTH_INTERPRET"或"无")
      * @param templatePath 提示词模板路径
      * @param domainName 领域名称(用于简化模板中的领域标识,可为null)
      * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
      * @return 路由结果(至少包含routeType)
      */
-    public RoutingResult route(String sessionId, String userInput, AgentStateManager stateManager,
+    public RoutingResult route(String sessionId, String userInput,
+                               String currentAgent, String pendingAgents,
                                String templatePath, String domainName, ChatMemory chatMemory) {
         try {
             String chatHistory = formatChatHistory(chatMemory, sessionId);
-            String systemPrompt = buildRoutingSystemPrompt(sessionId, userInput, stateManager, templatePath, domainName, chatHistory);
+            String sessionState = buildSessionStateDescription(currentAgent, pendingAgents);
+            String systemPrompt = buildRoutingSystemPrompt(userInput, currentAgent, pendingAgents,
+                    sessionState, templatePath, domainName, chatHistory);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
@@ -95,25 +91,34 @@ public class ContextRouter {
 
     /**
      * 读取ChatMemory并格式化为文本历史(截断到配置对数)
-     * 格式: "用户: xxx\n助手: yyy"
      */
     private String formatChatHistory(ChatMemory chatMemory, String sessionId) {
         return ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs);
     }
 
-    private String buildRoutingSystemPrompt(String sessionId, String userInput,
-                                             AgentStateManager stateManager,
+    /**
+     * 根据currentAgent和pendingAgents构建sessionState描述
+     */
+    private String buildSessionStateDescription(String currentAgent, String pendingAgents) {
+        StringBuilder sb = new StringBuilder();
+        if (currentAgent != null && !"无".equals(currentAgent)) {
+            sb.append("当前活跃意图: ").append(currentAgent);
+        } else {
+            sb.append("当前无活跃意图");
+        }
+        if (pendingAgents != null && !"无".equals(pendingAgents)) {
+            sb.append("\n挂起的意图: ").append(pendingAgents);
+        }
+        return sb.toString();
+    }
+
+    private String buildRoutingSystemPrompt(String userInput,
+                                             String currentAgent, String pendingAgents,
+                                             String sessionState,
                                              String templatePath, String domainName,
                                              String chatHistory) {
         String template = loadTemplate(templatePath);
         String intentList = intentRegistry.getIntentListDescription();
-        String sessionState = stateManager.getSessionStateDescription(sessionId);
-
-        AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
-        String currentAgent = active != null ? active.getIntent() : "无";
-        String pendingAgents = stateManager.hasSuspendedAgents(sessionId)
-                ? String.join(", ", stateManager.getAllSuspended(sessionId).keySet())
-                : "无";
 
         String prompt = template
                 .replace("{intent_list}", intentList)

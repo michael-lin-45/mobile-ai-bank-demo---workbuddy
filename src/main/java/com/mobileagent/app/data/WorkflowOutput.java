@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Graph执行结果DTO - Controller返回给前端的统一响应格式
@@ -38,6 +39,9 @@ public class WorkflowOutput {
 
     /** 候选意图列表 (DISAMBIGUATION时) */
     private List<String> candidateIntents;
+
+    /** 从Graph state中提取的已收集参数 (由L1 Service保存到自己的activeThread) */
+    private Map<String, Object> accumulatedParams;
 
     public static WorkflowOutput completed(String intent, String content) {
         return WorkflowOutput.builder()

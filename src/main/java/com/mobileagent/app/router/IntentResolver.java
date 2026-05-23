@@ -2,13 +2,13 @@ package com.mobileagent.app.router;
 
 import com.mobileagent.app.data.RoutingResolution;
 import com.mobileagent.app.data.RoutingResult;
-import com.mobileagent.app.manager.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 意图决议器 - 封装Phase2(改写+识别) + 消歧 + 模糊匹配
@@ -17,16 +17,17 @@ import java.util.List;
  * - 一个方法(resolve)，一次调用，一个结果
  * - Controller不需要知道消歧细节，只看RoutingResolution.status
  * - 消歧1次追问，回答仍模糊则直接拒绝（手机银行用户不会反复给模糊答案）
+ * - 不依赖AgentStateManager，消歧状态由WealthService自管，通过参数传入
  *
  * 置信度增强消歧:
  * - 不完全依赖LLM的is_ambiguous自标记，结合confidence量化判断
- * - 高置信度 + LLM标ambiguous → 信任LLM首选意图，不消歧（LLM自己都不确定才标记ambiguous）
- * - 低置信度 + 未标ambiguous + 意图属于歧义组 → 补充触发消歧（LLM不够自信）
+ * - 高置信度 + LLM标ambiguous → 信任LLM首选意图，不消歧
+ * - 低置信度 + 未标ambiguous + 意图属于歧义组 → 补充触发消歧
  * - 阈值可配置: routing.confidence.disambiguation-threshold
  *
  * 职责边界:
  * - 负责: Phase2意图识别 + 消歧追问(1次) + 模糊匹配
- * - 不负责: Phase1路由类型判断(ContextRouter) / Graph执行(GraphExecutionService) / 线程管理(BankController)
+ * - 不负责: 状态管理(由L1 Service负责) / Phase1路由类型判断(ContextRouter) / Graph执行(GraphExecutionService)
  */
 @Slf4j
 @Service
@@ -34,7 +35,6 @@ public class IntentResolver {
 
     private final IntentRouter intentRouter;
     private final IntentRegistry intentRegistry;
-    private final AgentStateManager stateManager;
 
     /** 消歧置信度阈值 - confidence低于此值且意图属于歧义组时,补充触发消歧 */
     @Value("${routing.confidence.disambiguation-threshold:0.7}")
@@ -45,11 +45,9 @@ public class IntentResolver {
     private double highConfidenceBypass;
 
     public IntentResolver(IntentRouter intentRouter,
-                              IntentRegistry intentRegistry,
-                              AgentStateManager stateManager) {
+                               IntentRegistry intentRegistry) {
         this.intentRouter = intentRouter;
         this.intentRegistry = intentRegistry;
-        this.stateManager = stateManager;
     }
 
     // ==================== 公共入口 ====================
@@ -60,46 +58,58 @@ public class IntentResolver {
      * 如果当前在消歧中，处理消歧回答。
      * 如果不在消歧中，执行Phase2 + 消歧检查 + 模糊匹配。
      *
+     * 注意: 消歧状态由WealthService自管，此处通过参数传入。
+     * 消歧结果中的DISAMBIGUATION状态由WealthService保存到自己的disambiguationStates。
+     * 消歧回答后返回RESOLVED时，由WealthService清理自己的disambiguationStates。
+     *
      * @param sessionId 会话ID
      * @param userInput 用户输入
      * @param phase1Result Phase1的路由结果
      * @param chatMemory 指定读取的ChatMemory实例(领域级)
-     * @return 路由决议 (RESOLVED / DISAMBIGUATION / REJECTED)
+     * @param inDisambiguation 是否处于消歧模式(由WealthService传入)
+     * @param disambiguationGroupId 消歧的groupId(由WealthService传入，可为null)
+     * @param hasSuspendedAgents 是否有挂起的意图(由WealthService传入)
+     * @param suspendedAgents 挂起的意图映射(intent → SuspendedInfo-like)，用于RESUME判定
+     * @return 路由决议 (RESOLVED / DISAMBIGUATION / REJECTED / CANCELLED)
      */
     public RoutingResolution resolve(String sessionId, String userInput, RoutingResult phase1Result,
-                                      ChatMemory chatMemory) {
-        if (stateManager.isInDisambiguation(sessionId)) {
-            // 消歧中取消: 清理消歧状态,返回CANCELLED
+                                      ChatMemory chatMemory,
+                                      boolean inDisambiguation, String disambiguationGroupId,
+                                      boolean hasSuspendedAgents,
+                                      Map<String, ?> suspendedAgents) {
+        if (inDisambiguation) {
+            // 消歧中取消: 返回CANCELLED，由WealthService清理消歧状态
             if (isCancelExpression(userInput)) {
                 log.info("[IntentResolver] Cancel detected during disambiguation");
-                stateManager.clearDisambiguationState(sessionId);
                 return RoutingResolution.cancelled();
             }
-            return handleDisambiguationAnswer(sessionId, userInput, phase1Result, chatMemory);
+            return handleDisambiguationAnswer(sessionId, userInput, phase1Result, chatMemory,
+                    disambiguationGroupId, hasSuspendedAgents, suspendedAgents);
         }
-        return resolveNewIntention(sessionId, userInput, phase1Result, chatMemory);
+        return resolveNewIntention(sessionId, userInput, phase1Result, chatMemory,
+                hasSuspendedAgents, suspendedAgents);
     }
 
     // ==================== 新意图识别 ====================
 
     /**
      * 识别新意图 - Phase2 + 置信度增强消歧 + 模糊匹配
-     *
-     * 决策链 (置信度增强):
-     * 1. Phase2识别 → 量化消歧判断:
-     *    a. ambiguous + 低置信度 → 消歧 (LLM自己不确定)
-     *    b. ambiguous + 高置信度(≥bypass) → 信任首选意图,不消歧
-     *    c. 非ambiguous + 低置信度(<threshold) + 属于歧义组 → 补充消歧
-     *    d. 非ambiguous + 高置信度 → 直接RESOLVED
-     * 2. UNKNOWN? → 拒绝
-     * 3. isGroupName? → 消歧
-     * 4. !hasIntent? → fuzzyMatch → 可能消歧或拒绝
-     * 5. hasIntent? → RESOLVED
      */
      private RoutingResolution resolveNewIntention(String sessionId, String userInput, RoutingResult phase1Result,
-                                                 ChatMemory chatMemory) {
+                                                  ChatMemory chatMemory,
+                                                  boolean hasSuspendedAgents,
+                                                  Map<String, ?> suspendedAgents) {
+        // 构建状态字符串(用于IntentRouter的prompt)
+        String currentAgent = phase1Result.getRouteType() != null ? phase1Result.getRouteType() : "无";
+        String pendingAgents = hasSuspendedAgents
+                ? String.join(", ", suspendedAgents.keySet())
+                : "无";
+        String sessionState = "Phase1路由: " + phase1Result.getRouteType();
+        String disambigContext = "无";
+
         // Phase2: 上下文改写 + 意图识别
-        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, phase1Result, stateManager, chatMemory);
+        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, phase1Result,
+                currentAgent, pendingAgents, sessionState, disambigContext, chatMemory);
         log.info("[IntentResolver] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence(), phase2.getCandidateIntents());
 
@@ -111,7 +121,7 @@ public class IntentResolver {
                 if (groupId != null && intentRegistry.getGroup(groupId) != null) {
                     log.info("[IntentResolver] Disambiguation: ambiguous + low confidence ({}) < bypass ({})",
                             phase2.getConfidence(), highConfidenceBypass);
-                    return triggerDisambiguation(sessionId, groupId, phase2);
+                    return triggerDisambiguation(groupId, phase2);
                 }
             }
             // 1b. LLM标ambiguous + 高置信度 → 信任首选意图,不消歧
@@ -126,7 +136,7 @@ public class IntentResolver {
             if (group != null) {
                 log.info("[IntentResolver] Supplemental disambiguation: low confidence ({}) < threshold ({}), intent={} belongs to group={}",
                         phase2.getConfidence(), disambiguationThreshold, effectiveIntent, group.getGroupId());
-                return triggerDisambiguation(sessionId, group.getGroupId(), phase2);
+                return triggerDisambiguation(group.getGroupId(), phase2);
             }
         }
 
@@ -140,7 +150,7 @@ public class IntentResolver {
         if (intentRegistry.isGroupName(effectiveIntent)) {
             IntentRegistry.IntentGroup group = intentRegistry.getGroup(effectiveIntent);
             if (group != null) {
-                return triggerDisambiguation(sessionId, effectiveIntent, phase2);
+                return triggerDisambiguation(effectiveIntent, phase2);
             }
         }
 
@@ -155,14 +165,14 @@ public class IntentResolver {
             if (intentRegistry.isGroupName(effectiveIntent)) {
                 IntentRegistry.IntentGroup group = intentRegistry.getGroup(effectiveIntent);
                 if (group != null) {
-                    return triggerDisambiguation(sessionId, effectiveIntent, phase2);
+                    return triggerDisambiguation(effectiveIntent, phase2);
                 }
             }
             log.info("[IntentResolver] Fuzzy matched to: {}", effectiveIntent);
         }
 
         // 5. 意图明确 → RESOLVED
-        String routeType = resolveRouteType(sessionId, phase1Result, phase2);
+        String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
         String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
         return RoutingResolution.resolved(effectiveIntent, rewrittenInput, routeType);
     }
@@ -170,17 +180,15 @@ public class IntentResolver {
     // ==================== 消歧处理 ====================
 
     /**
-     * 触发消歧 - 保存groupId，返回DISAMBIGUATION
+     * 触发消歧 - 返回DISAMBIGUATION，由WealthService保存disambiguationState
      */
-    private RoutingResolution triggerDisambiguation(String sessionId, String groupId, RoutingResult phase2) {
+    private RoutingResolution triggerDisambiguation(String groupId, RoutingResult phase2) {
         IntentRegistry.IntentGroup group = intentRegistry.getGroup(groupId);
         if (group == null) {
             log.warn("[IntentResolver] Disambiguation failed: no group found for groupId={}", groupId);
             return RoutingResolution.rejected();
         }
 
-        stateManager.setDisambiguationState(sessionId,
-                new AgentStateManager.DisambiguationState(groupId));
         log.info("[IntentResolver] Entering disambiguation: groupId={}", groupId);
 
         return RoutingResolution.disambiguation(group.getDisambiguationQuestion(), group.getIntentNames());
@@ -188,36 +196,53 @@ public class IntentResolver {
 
     /**
      * 处理消歧回答 - 重新Phase2识别，1次追问后仍模糊则直接拒绝
-     *
-     * 决策链:
-     * 1. 重新识别 → 如果明确 → RESOLVED
-     * 2. 仍然模糊 → REJECTED (不做多轮追问)
      */
      private RoutingResolution handleDisambiguationAnswer(String sessionId, String userInput,
-                                                            RoutingResult phase1Result,
-                                                            ChatMemory chatMemory) {
-        AgentStateManager.DisambiguationState disambigState = stateManager.getDisambiguationState(sessionId);
-        if (disambigState == null) {
-            stateManager.clearDisambiguationState(sessionId);
+                                                             RoutingResult phase1Result,
+                                                             ChatMemory chatMemory,
+                                                             String disambiguationGroupId,
+                                                             boolean hasSuspendedAgents,
+                                                             Map<String, ?> suspendedAgents) {
+        if (disambiguationGroupId == null) {
             return RoutingResolution.rejected();
         }
 
-        String groupId = disambigState.getGroupId();
-        IntentRegistry.IntentGroup group = intentRegistry.getGroup(groupId);
+        IntentRegistry.IntentGroup group = intentRegistry.getGroup(disambiguationGroupId);
         if (group == null) {
-            stateManager.clearDisambiguationState(sessionId);
             return RoutingResolution.rejected();
         }
+
+        // 构建消歧上下文(用于IntentRouter)
+        String currentAgent = "消歧模式";
+        String pendingAgents = hasSuspendedAgents
+                ? String.join(", ", suspendedAgents.keySet())
+                : "无";
+        String sessionState = "消歧中: 意图组=" + disambiguationGroupId;
+
+        // 构建消歧上下文字符串
+        StringBuilder sb = new StringBuilder();
+        sb.append("系统追问: \"").append(group.getDisambiguationQuestion()).append("\"\n");
+        sb.append("候选意图:\n");
+        for (String candidateName : group.getIntentNames()) {
+            IntentRegistry.IntentConfig config = intentRegistry.getConfig(candidateName);
+            sb.append("  · ").append(candidateName);
+            if (config != null) {
+                sb.append(" (").append(config.getDescription()).append(")");
+            }
+            sb.append("\n");
+        }
+        sb.append("用户回答应映射到上述候选意图之一");
+        String disambigContext = sb.toString();
 
         // 重新Phase2识别
         RoutingResult rePhase1 = RoutingResult.builder()
                 .routeType("SWITCH_NEW").confidence(0.8).reasoning("消歧回答重新识别").build();
-        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, rePhase1, stateManager, chatMemory);
+        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, rePhase1,
+                currentAgent, pendingAgents, sessionState, disambigContext, chatMemory);
         log.info("[IntentResolver] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence());
 
-        // 识别到组内具体意图 → RESOLVED (消歧上下文已强,不再要求高置信度)
-        // 消歧回答场景: 用户回答的是"咨询"/"解读"这类短答案,只要映射到组内意图即可
+        // 识别到组内具体意图 → RESOLVED
         String identifiedIntent = phase2.getIntentName();
         boolean isInGroupIntent = identifiedIntent != null
                 && !"UNKNOWN".equalsIgnoreCase(identifiedIntent)
@@ -226,45 +251,41 @@ public class IntentResolver {
                 && group.getIntentNames().contains(identifiedIntent);
 
         if (isInGroupIntent) {
-            stateManager.clearDisambiguationState(sessionId);
             log.info("[IntentResolver] Disambiguation resolved (in-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
-            String routeType = resolveRouteType(sessionId, phase1Result, phase2);
+            String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
             String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
             return RoutingResolution.resolved(identifiedIntent, rewrittenInput, routeType);
         }
 
-        // 识别到非组内的已注册意图 → 也RESOLVED (用户可能回答了不同的意图)
+        // 识别到非组内的已注册意图 → 也RESOLVED
         if (identifiedIntent != null
                 && !"UNKNOWN".equalsIgnoreCase(identifiedIntent)
                 && intentRegistry.hasIntent(identifiedIntent)
                 && !intentRegistry.isGroupName(identifiedIntent)) {
-            stateManager.clearDisambiguationState(sessionId);
             log.info("[IntentResolver] Disambiguation resolved (out-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
-            String routeType = resolveRouteType(sessionId, phase1Result, phase2);
+            String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
             String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
             return RoutingResolution.resolved(identifiedIntent, rewrittenInput, routeType);
         }
 
-        // 识别到组名(仍模糊) → RESOLVED,选组内第一个意图作为默认 (消歧1次后不过度追问)
+        // 识别到组名(仍模糊) → RESOLVED,选组内第一个意图作为默认
         if (identifiedIntent != null
                 && intentRegistry.isGroupName(identifiedIntent)
-                && identifiedIntent.equals(groupId)) {
+                && identifiedIntent.equals(disambiguationGroupId)) {
             String defaultIntent = group.getIntentNames().get(0);
-            stateManager.clearDisambiguationState(sessionId);
             log.info("[IntentResolver] Disambiguation resolved (group name, using first candidate): group={}, default={}",
                     identifiedIntent, defaultIntent);
 
-            String routeType = resolveRouteType(sessionId, phase1Result, phase2);
+            String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
             String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
             return RoutingResolution.resolved(defaultIntent, rewrittenInput, routeType);
         }
 
         // 1次追问后仍无法识别 → 直接拒绝
-        stateManager.clearDisambiguationState(sessionId);
         log.info("[IntentResolver] Disambiguation answer still ambiguous → rejected");
         return RoutingResolution.rejected();
     }
@@ -272,7 +293,7 @@ public class IntentResolver {
     // ==================== 工具方法 ====================
 
     /**
-     * 解析路由类型 - 综合Phase1、Phase2和状态管理器的判断
+     * 解析路由类型 - 综合Phase1、Phase2和挂起状态的判断
      *
      * RESUME判定优先级:
      * 1. Phase2细化路由类型 (LLM明确判断)
@@ -281,7 +302,8 @@ public class IntentResolver {
      * 4. Phase1是FOLLOW_UP但无活跃线程 → SWITCH_NEW
      * 5. 兜底: Phase1的routeType
      */
-    private String resolveRouteType(String sessionId, RoutingResult phase1Result, RoutingResult phase2) {
+    private String resolveRouteType(RoutingResult phase1Result, RoutingResult phase2,
+                                     boolean hasSuspendedAgents, Map<String, ?> suspendedAgents) {
         // Phase2细化路由类型优先
         if (phase2.getRefinedRouteType() != null) {
             return phase2.getRefinedRouteType();
@@ -291,11 +313,9 @@ public class IntentResolver {
             return "RESUME";
         }
         // 状态兜底: 识别到的意图在suspendedAgents中 → RESUME
-        // 场景: "转500吧" → phase1=SWITCH_NEW(LLM漏判), phase2识别intent=TRANSFER → TRANSFER在挂起列表 → RESUME
         String effectiveIntent = phase2.getIntentName();
-        if (effectiveIntent != null && !"UNKNOWN".equalsIgnoreCase(effectiveIntent)) {
-            AgentStateManager.SuspendedInfo suspended = stateManager.getSuspendedThread(sessionId, effectiveIntent);
-            if (suspended != null) {
+        if (effectiveIntent != null && !"UNKNOWN".equalsIgnoreCase(effectiveIntent) && hasSuspendedAgents) {
+            if (suspendedAgents.containsKey(effectiveIntent)) {
                 log.info("[IntentResolver] State-based RESUME override: intent={} is in suspendedAgents (phase1 was {})",
                         effectiveIntent, phase1Result.getRouteType());
                 return "RESUME";
@@ -328,9 +348,6 @@ public class IntentResolver {
 
     /**
      * 判断是否为取消表达 - 用于消歧中检测用户取消
-     *
-     * 只匹配通用取消词(领域特定取消词如"不转了""别查了"由子workflow处理)
-     * 允许标点后缀: "算了。" "取消！" 但不允许追加内容: "算了查账单"
      */
     private boolean isCancelExpression(String input) {
         if (input == null) return false;
