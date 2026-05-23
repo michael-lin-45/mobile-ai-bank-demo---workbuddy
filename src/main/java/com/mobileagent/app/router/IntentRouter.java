@@ -39,8 +39,23 @@ public class IntentRouter {
         this.judgmentMaxPairs = judgmentMaxPairs;
     }
 
+    private static final String DEFAULT_TEMPLATE_PATH = "prompts/l1-intention.st";
+
     /**
-     * Phase2: 意图识别 + 上下文改写 (合并为一个LLM调用)
+     * Phase2: 意图识别 + 上下文改写 (使用默认模板)
+     */
+    public RoutingResult rewriteAndIdentify(String sessionId, String userInput,
+                                             RoutingResult phase1Result,
+                                             String currentAgent, String pendingAgents,
+                                             String sessionState, String disambigContext,
+                                             ChatMemory chatMemory) {
+        return rewriteAndIdentify(sessionId, userInput, phase1Result,
+                currentAgent, pendingAgents, sessionState, disambigContext,
+                DEFAULT_TEMPLATE_PATH, chatMemory);
+    }
+
+    /**
+     * Phase2: 意图识别 + 上下文改写 (使用指定模板)
      *
      * @param sessionId 会话ID
      * @param userInput 用户原始输入
@@ -49,6 +64,7 @@ public class IntentRouter {
      * @param pendingAgents 挂起的意图列表描述(如"WEALTH_CONSULT, WEALTH_INTERPRET"或"无")
      * @param sessionState 会话状态描述(由L1 Service生成)
      * @param disambigContext 消歧上下文(如"无"或具体消歧信息)
+     * @param templatePath 提示词模板路径(如"prompts/l1-intention.st")
      * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
      * @return 包含意图名称、改写后输入、路由类型的完整路由结果
      */
@@ -56,11 +72,13 @@ public class IntentRouter {
                                              RoutingResult phase1Result,
                                              String currentAgent, String pendingAgents,
                                              String sessionState, String disambigContext,
+                                             String templatePath,
                                              ChatMemory chatMemory) {
         try {
             String chatHistoryStr = formatChatHistory(chatMemory, sessionId);
             String systemPrompt = buildIntentionSystemPrompt(userInput, phase1Result,
-                    currentAgent, pendingAgents, sessionState, disambigContext, chatHistoryStr);
+                    currentAgent, pendingAgents, sessionState, disambigContext, chatHistoryStr,
+                    templatePath != null ? templatePath : DEFAULT_TEMPLATE_PATH);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
@@ -102,8 +120,9 @@ public class IntentRouter {
                                                RoutingResult phase1Result,
                                                String currentAgent, String pendingAgents,
                                                String sessionState, String disambigContext,
-                                               String chatHistory) {
-        String template = loadTemplate("prompts/l1-intention.st");
+                                               String chatHistory,
+                                               String templatePath) {
+        String template = loadTemplate(templatePath);
         String intentList = intentRegistry.getIntentListDescription();
 
         // 根据Phase1判断确定改写模式

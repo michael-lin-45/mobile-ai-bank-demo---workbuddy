@@ -39,6 +39,15 @@ public class ContextRewriter {
         this.judgmentMaxPairs = judgmentMaxPairs;
     }
 
+    private static final String DEFAULT_TEMPLATE_PATH = "prompts/l1-context-rewrite.st";
+
+    /**
+     * 上下文改写 - 将依赖历史的用户输入改写为自包含描述 (使用默认模板)
+     */
+    public String rewrite(String sessionId, String userInput, ChatMemory chatMemory, String domainName) {
+        return rewrite(sessionId, userInput, chatMemory, domainName, DEFAULT_TEMPLATE_PATH);
+    }
+
     /**
      * 上下文改写 - 将依赖历史的用户输入改写为自包含描述
      *
@@ -46,12 +55,14 @@ public class ContextRewriter {
      * @param userInput 用户原始输入
      * @param chatMemory 领域ChatMemory(用于读取历史)
      * @param domainName 领域名称(如"转账""账单")
+     * @param templatePath 提示词模板路径(如"prompts/l1-context-rewrite.st")
      * @return 改写后的输入，如果改写失败则返回原始输入
      */
-    public String rewrite(String sessionId, String userInput, ChatMemory chatMemory, String domainName) {
+    public String rewrite(String sessionId, String userInput, ChatMemory chatMemory, String domainName,
+                          String templatePath) {
         try {
             String chatHistory = formatChatHistory(chatMemory, sessionId);
-            String systemPrompt = buildRewritePrompt(userInput, chatHistory, domainName);
+            String systemPrompt = buildRewritePrompt(userInput, chatHistory, domainName, templatePath);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
@@ -77,8 +88,9 @@ public class ContextRewriter {
         return ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs);
     }
 
-    private String buildRewritePrompt(String userInput, String chatHistory, String domainName) {
-        String template = loadTemplate("prompts/l1-context-rewrite.st");
+    private String buildRewritePrompt(String userInput, String chatHistory, String domainName,
+                                       String templatePath) {
+        String template = loadTemplate(templatePath != null ? templatePath : DEFAULT_TEMPLATE_PATH);
         return template
                 .replace("{domain_name}", domainName)
                 .replace("{chat_history}", chatHistory)
