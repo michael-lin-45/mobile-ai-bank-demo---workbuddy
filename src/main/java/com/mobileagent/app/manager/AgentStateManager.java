@@ -6,17 +6,16 @@ import org.springframework.stereotype.Component;
 /**
  * 智能体状态管理器 - 已废弃
  *
- * 状态已下沉到各L1 Service自管:
- * - TransferService: transferActiveThreads
- * - BillService: billActiveThreads
- * - WealthService: wealthActiveThreads + wealthSuspendedAgents + disambiguationStates
+ * 状态已下沉到各L1领域服务基类自管:
+ * - SingleSubAgentDomainService: activeThreads (via AbstractDomainService)
+ * - MultiSubAgentDomainService: activeThreads + suspendedAgents + disambiguationStates
  *
- * 保留此类仅为防止Spring扫描报错，后续重构为SingleSubAgentLayer/MultiSubAgentLayer时彻底移除。
+ * 此类不再由Spring容器管理。保留源码仅供参考。
  *
- * @deprecated 状态已下沉到各L1 Service，不再使用全局状态管理器
+ * @deprecated 状态已下沉到AbstractDomainService/SingleSubAgentDomainService/MultiSubAgentDomainService基类
  */
 @Slf4j
-@Component
+// @Component — 已移除,状态由基类管理
 @Deprecated
 public class AgentStateManager {
 

@@ -1,15 +1,14 @@
 package com.mobileagent.app.controller;
 
-import com.mobileagent.app.domain.BillService;
+import com.mobileagent.app.domain.AbstractDomainService;
 import com.mobileagent.app.domain.ChatService;
-import com.mobileagent.app.domain.TransferService;
-import com.mobileagent.app.domain.WealthService;
 import com.mobileagent.app.router.DomainRouter;
 import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.util.ChatHistoryUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -38,22 +37,22 @@ import java.util.Map;
 public class BankController {
 
     private final DomainRouter domainRouter;
-    private final WealthService wealthService;
-    private final TransferService transferService;
-    private final BillService billService;
+    private final AbstractDomainService wealthDomainService;
+    private final AbstractDomainService transferDomainService;
+    private final AbstractDomainService billDomainService;
     private final ChatService chatService;
     private final ChatMemory chatMemory;
 
     public BankController(DomainRouter domainRouter,
-                          WealthService wealthService,
-                          TransferService transferService,
-                          BillService billService,
+                          @Qualifier("wealthDomainService") AbstractDomainService wealthDomainService,
+                          @Qualifier("transferDomainService") AbstractDomainService transferDomainService,
+                          @Qualifier("billDomainService") AbstractDomainService billDomainService,
                           ChatService chatService,
                           ChatMemory chatMemory) {
         this.domainRouter = domainRouter;
-        this.wealthService = wealthService;
-        this.transferService = transferService;
-        this.billService = billService;
+        this.wealthDomainService = wealthDomainService;
+        this.transferDomainService = transferDomainService;
+        this.billDomainService = billDomainService;
         this.chatService = chatService;
         this.chatMemory = chatMemory;
     }
@@ -82,9 +81,9 @@ public class BankController {
                 output = WorkflowOutput.completed(null, feature + "功能暂不支持");
             } else {
                 output = switch (domainResult.domain()) {
-                    case "WEALTH" -> wealthService.handle(sessionId, userInput);
-                    case "TRANSFER" -> transferService.handle(sessionId, userInput);
-                    case "BILL" -> billService.handle(sessionId, userInput);
+                    case "WEALTH" -> wealthDomainService.handle(sessionId, userInput);
+                    case "TRANSFER" -> transferDomainService.handle(sessionId, userInput);
+                    case "BILL" -> billDomainService.handle(sessionId, userInput);
                     default -> chatService.handle(sessionId, userInput);
                 };
             }
@@ -108,9 +107,9 @@ public class BankController {
      */
     @GetMapping("/state")
     public Map<String, Object> getState(@RequestParam String sessionId) {
-        String transferState = transferService.getSessionStateDescription(sessionId);
-        String billState = billService.getSessionStateDescription(sessionId);
-        String wealthState = wealthService.getSessionStateDescription(sessionId);
+        String transferState = transferDomainService.getSessionStateDescription(sessionId);
+        String billState = billDomainService.getSessionStateDescription(sessionId);
+        String wealthState = wealthDomainService.getSessionStateDescription(sessionId);
 
         return Map.of(
                 "sessionId", sessionId,
@@ -125,9 +124,9 @@ public class BankController {
      */
     @DeleteMapping("/session")
     public Map<String, String> clearSession(@RequestParam String sessionId) {
-        transferService.clearSession(sessionId);
-        billService.clearSession(sessionId);
-        wealthService.clearSession(sessionId);
+        transferDomainService.clearSession(sessionId);
+        billDomainService.clearSession(sessionId);
+        wealthDomainService.clearSession(sessionId);
         domainRouter.clearLastDomain(sessionId);
         chatMemory.clear(sessionId);
         return Map.of("status", "cleared", "sessionId", sessionId);

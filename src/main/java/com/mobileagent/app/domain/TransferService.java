@@ -37,8 +37,17 @@ import java.util.concurrent.ConcurrentHashMap;
  * 之前用全局activeThread，用户从转账切到账单再切回时，转账的accumulatedParams丢失。
  * 现在转账自管activeThread，切走再回来时上下文还在。
  */
+/**
+ * 转账L1 Service - @Deprecated: 已迁移到SingleSubAgentDomainService (通过DomainServiceConfig配置)
+ *
+ * 保留此文件仅供参考，不再由Spring容器管理。
+ * 新的实现: DomainServiceConfig.transferDomainService()
+ *
+ * @deprecated 使用 DomainServiceConfig 中配置的 SingleSubAgentDomainService 替代
+ */
+@Deprecated
 @Slf4j
-@Service
+// @Service — 已移除,由DomainServiceConfig中的@Bean替代
 public class TransferService {
 
     private static final String INTENT = "TRANSFER";

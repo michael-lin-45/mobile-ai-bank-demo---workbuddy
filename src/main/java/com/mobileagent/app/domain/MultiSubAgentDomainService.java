@@ -408,7 +408,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             clearOwnActiveThread(sessionId);
         }
 
-        recordSystemReply(sessionId, result);
         return result;
     }
 

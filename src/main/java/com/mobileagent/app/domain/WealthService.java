@@ -36,8 +36,17 @@ import java.util.concurrent.ConcurrentHashMap;
  * - WEALTH_CONSULT: 理财咨询/推荐
  * - WEALTH_INTERPRET: 理财产品解读
  */
+/**
+ * 理财L1 Service - @Deprecated: 已迁移到MultiSubAgentDomainService (通过DomainServiceConfig配置)
+ *
+ * 保留此文件仅供参考，不再由Spring容器管理。
+ * 新的实现: DomainServiceConfig.wealthDomainService()
+ *
+ * @deprecated 使用 DomainServiceConfig 中配置的 MultiSubAgentDomainService 替代
+ */
+@Deprecated
 @Slf4j
-@Service
+// @Service — 已移除,由DomainServiceConfig中的@Bean替代
 public class WealthService {
 
     private static final String DOMAIN_NAME = "理财";
