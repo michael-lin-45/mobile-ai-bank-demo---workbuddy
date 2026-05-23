@@ -112,26 +112,27 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         log.info("[{}] Handling: sessionId={}, input={}", logTag, sessionId, userInput);
 
         try {
-            String currentAgent = buildCurrentAgent(sessionId);
+            // ========== 1-1领域核心逻辑: activeThread在 → 直接FOLLOW_UP ==========
+            // 原因: 1-1领域只有一个意图,如果activeThread存在(操作中断),用户回来必然是继续。
+            // 不走ContextRouter,避免LLM非确定性误判SWITCH_NEW导致accumulatedParams丢失。
+            ActiveThreadInfo ownActive = getOwnActiveThread(sessionId);
+            if (ownActive != null) {
+                return resumeActiveThread(sessionId, userInput, ownActive);
+            }
+
+            // ========== 无activeThread → 走ContextRouter判断FOLLOW_UP/SWITCH_NEW ==========
+            String currentAgent = "无";
             String pendingAgents = "无"; // 1-1无suspendedAgents
 
             // Phase1: ContextRouter判断FOLLOW_UP/SWITCH_NEW (简化模式)
             RoutingResult phase1 = contextRouter.route(sessionId, userInput,
                     currentAgent, pendingAgents,
                     routingTemplatePath, domainName, chatMemory);
-            log.info("[{}] Phase1: routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
+            log.info("[{}] Phase1 (no activeThread): routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
 
-            // ========== FOLLOW_UP分支 ==========
+            // ========== FOLLOW_UP但无activeThread → 上下文改写后降级为SWITCH_NEW ==========
             if (phase1.isFollowUp()) {
-                ActiveThreadInfo active = getOwnActiveThread(sessionId);
-
-                // FOLLOW_UP + 自有activeThread → resumeGraph (核心bug修复!)
-                if (active != null) {
-                    return resumeActiveThread(sessionId, userInput, active);
-                }
-
-                // FOLLOW_UP但无activeThread → 上下文改写后降级为SWITCH_NEW
-                log.info("[{}] FOLLOW_UP but no own activeThread → rewrite and fallback to SWITCH_NEW", logTag);
+                log.info("[{}] FOLLOW_UP but no activeThread → rewrite and fallback to SWITCH_NEW", logTag);
                 String rewrittenInput = contextRewriter.rewrite(sessionId, userInput, chatMemory, domainName, rewriterTemplatePath);
                 addUserMessage(sessionId, userInput);
                 return handleSwitchNew(sessionId, rewrittenInput);

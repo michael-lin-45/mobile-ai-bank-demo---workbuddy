@@ -138,49 +138,44 @@ public class TransferService {
         log.info("[TransferService] Handling: sessionId={}, input={}", sessionId, userInput);
 
         try {
-            // 获取本领域当前状态(用于ContextRouter的prompt)
+            // ========== 1-1领域核心逻辑: activeThread在 → 直接FOLLOW_UP ==========
+            // 原因: 1-1领域只有一个意图,如果activeThread存在(说明操作中断),用户回来必然是继续。
+            // 不走ContextRouter,避免LLM非确定性误判SWITCH_NEW导致accumulatedParams丢失。
             ActiveThreadInfo ownActive = getOwnActiveThread(sessionId);
-            String currentAgent = ownActive != null ? ownActive.getIntent() : "无";
-            String pendingAgents = "无"; // 1-1无suspendedAgents
+            if (ownActive != null) {
+                log.info("[TransferService] FOLLOW_UP (activeThread exists): intent={}, params={}",
+                        ownActive.getIntent(), ownActive.getAccumulatedParams());
+                transferChatMemory.add(sessionId, new UserMessage(userInput));
 
-            // Phase1: ContextRouter判断FOLLOW_UP/SWITCH_NEW (简化模式)
+                String newThreadId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+                setOwnActiveThread(sessionId, newThreadId, INTENT);
+
+                WorkflowOutput resumeResult = graphExecutionService.resumeGraph(
+                        ownActive.getIntent(), newThreadId, userInput, sessionId,
+                        ownActive.getAccumulatedParams());
+                saveAccumulatedParams(sessionId, resumeResult);
+                recordSystemReply(sessionId, resumeResult);
+                return resumeResult;
+            }
+
+            // ========== 无activeThread → 走ContextRouter判断FOLLOW_UP/SWITCH_NEW ==========
+            String currentAgent = "无";
+            String pendingAgents = "无";
+
             RoutingResult phase1 = contextRouter.route(sessionId, userInput,
                     currentAgent, pendingAgents,
                     "prompts/l1-routing-simple.st", DOMAIN_NAME, transferChatMemory);
-            log.info("[TransferService] Phase1: routeType={}, confidence={}", phase1.getRouteType(), phase1.getConfidence());
+            log.info("[TransferService] Phase1 (no activeThread): routeType={}, confidence={}", phase1.getRouteType(), phase1.getConfidence());
 
-            // ========== FOLLOW_UP分支 ==========
             if (phase1.isFollowUp()) {
-                ActiveThreadInfo active = getOwnActiveThread(sessionId);
-
-                // ========== FOLLOW_UP + 自有activeThread → resumeGraph (核心bug修复!) ==========
-                if (active != null) {
-                    log.info("[TransferService] FOLLOW_UP with own activeThread: intent={}, params={}",
-                            active.getIntent(), active.getAccumulatedParams());
-                    transferChatMemory.add(sessionId, new UserMessage(userInput));
-
-                    // 生成新threadId，恢复累积参数
-                    String newThreadId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-                    setOwnActiveThread(sessionId, newThreadId, INTENT);
-
-                    WorkflowOutput resumeResult = graphExecutionService.resumeGraph(
-                            active.getIntent(), newThreadId, userInput, sessionId,
-                            active.getAccumulatedParams());
-                    // 保存accumulatedParams到自有activeThread
-                    saveAccumulatedParams(sessionId, resumeResult);
-                    recordSystemReply(sessionId, resumeResult);
-                    return resumeResult;
-                }
-
-                // FOLLOW_UP但无activeThread → 上下文改写后降级为SWITCH_NEW
-                log.info("[TransferService] FOLLOW_UP but no own activeThread → rewrite and fallback to SWITCH_NEW");
+                // 无activeThread的FOLLOW_UP → 上下文改写后降级为SWITCH_NEW
+                log.info("[TransferService] FOLLOW_UP but no activeThread → rewrite and fallback to SWITCH_NEW");
                 String rewrittenInput = contextRewriter.rewrite(sessionId, userInput, transferChatMemory, DOMAIN_NAME);
                 transferChatMemory.add(sessionId, new UserMessage(userInput));
                 return handleSwitchNew(sessionId, userInput, rewrittenInput);
             }
 
-            // ========== SWITCH_NEW (非FOLLOW_UP) ==========
-            // 记录用户消息到领域ChatMemory
+            // SWITCH_NEW
             transferChatMemory.add(sessionId, new UserMessage(userInput));
             return handleSwitchNew(sessionId, userInput, userInput);
 
