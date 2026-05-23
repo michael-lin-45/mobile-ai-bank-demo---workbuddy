@@ -2,6 +2,7 @@ package com.mobileagent.app.rewriter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.util.ChatHistoryUtils;
+import com.mobileagent.app.util.JsonParseUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -90,7 +91,7 @@ public class ContextRewriter {
 
     private String parseRewriteResponse(String content, String originalInput) {
         try {
-            String json = extractJson(content);
+            String json = JsonParseUtils.extractJson(content);
             var node = objectMapper.readTree(json);
             if (node.has("rewritten_input") && !node.get("rewritten_input").isNull()) {
                 String rewritten = node.get("rewritten_input").asText();
@@ -103,26 +104,6 @@ public class ContextRewriter {
             log.warn("[ContextRewriter] Failed to parse response: {}, returning original", content, e);
             return originalInput;
         }
-    }
-
-    private String extractJson(String content) {
-        String trimmed = content.trim();
-        if (trimmed.startsWith("```json")) {
-            trimmed = trimmed.substring(7);
-        } else if (trimmed.startsWith("```")) {
-            trimmed = trimmed.substring(3);
-        }
-        if (trimmed.endsWith("```")) {
-            trimmed = trimmed.substring(0, trimmed.length() - 3);
-        }
-        trimmed = trimmed.trim();
-
-        int start = trimmed.indexOf('{');
-        int end = trimmed.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            return trimmed.substring(start, end + 1);
-        }
-        return trimmed;
     }
 
     private String loadTemplate(String path) {

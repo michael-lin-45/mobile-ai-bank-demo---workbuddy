@@ -5,6 +5,7 @@ import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.manager.AgentStateManager;
 import com.mobileagent.app.util.ChatHistoryUtils;
+import com.mobileagent.app.util.JsonParseUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -52,14 +53,6 @@ public class ContextRouter {
      */
     public RoutingResult route(String sessionId, String userInput, AgentStateManager stateManager) {
         return route(sessionId, userInput, stateManager, "prompts/l1-routing.st", null, null);
-    }
-
-    /**
-     * Phase1: 判断意图类型 (使用指定模板 + 全局ChatMemory)
-     */
-    public RoutingResult route(String sessionId, String userInput, AgentStateManager stateManager,
-                               String templatePath, String domainName) {
-        return route(sessionId, userInput, stateManager, templatePath, domainName, null);
     }
 
     /**
@@ -145,7 +138,7 @@ public class ContextRouter {
 
     private RoutingResult parseRoutingResponse(String content, String templatePath) {
         try {
-            String json = extractJson(content);
+            String json = JsonParseUtils.extractJson(content);
             var node = objectMapper.readTree(json);
 
             String routeType = node.has("route_type") ? node.get("route_type").asText() : "SWITCH_NEW";
@@ -180,26 +173,6 @@ public class ContextRouter {
             case "CONTINUE_RESUME", "RESUME_PENDING", "RESUME" -> "RESUME";
             default -> "SWITCH_NEW";
         };
-    }
-
-    private String extractJson(String content) {
-        String trimmed = content.trim();
-        if (trimmed.startsWith("```json")) {
-            trimmed = trimmed.substring(7);
-        } else if (trimmed.startsWith("```")) {
-            trimmed = trimmed.substring(3);
-        }
-        if (trimmed.endsWith("```")) {
-            trimmed = trimmed.substring(0, trimmed.length() - 3);
-        }
-        trimmed = trimmed.trim();
-
-        int start = trimmed.indexOf('{');
-        int end = trimmed.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            return trimmed.substring(start, end + 1);
-        }
-        return trimmed;
     }
 
     private String loadTemplate(String path) {

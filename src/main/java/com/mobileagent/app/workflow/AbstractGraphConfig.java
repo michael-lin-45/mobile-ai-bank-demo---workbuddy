@@ -10,6 +10,7 @@ import com.alibaba.cloud.ai.graph.exception.GraphStateException;
 import com.alibaba.cloud.ai.graph.state.strategy.AppendStrategy;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mobileagent.app.util.JsonParseUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -179,15 +180,7 @@ public abstract class AbstractGraphConfig {
 
     /** 从LLM返回内容中提取JSON */
     protected String extractJson(String content) {
-        String trimmed = content.trim();
-        if (trimmed.startsWith("```json")) trimmed = trimmed.substring(7);
-        else if (trimmed.startsWith("```")) trimmed = trimmed.substring(3);
-        if (trimmed.endsWith("```")) trimmed = trimmed.substring(0, trimmed.length() - 3);
-        trimmed = trimmed.trim();
-        int start = trimmed.indexOf('{');
-        int end = trimmed.lastIndexOf('}');
-        if (start >= 0 && end > start) return trimmed.substring(start, end + 1);
-        return trimmed;
+        return JsonParseUtils.extractJson(content);
     }
 
     /** 判断字符是否为标点或空格(用于精确词匹配的边界判断) */

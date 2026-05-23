@@ -5,6 +5,7 @@ import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.manager.AgentStateManager;
 import com.mobileagent.app.util.ChatHistoryUtils;
+import com.mobileagent.app.util.JsonParseUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -159,7 +160,7 @@ public class IntentRouter {
 
     private RoutingResult parseRewriteResponse(String content, RoutingResult phase1Result) {
         try {
-            String json = extractJson(content);
+            String json = JsonParseUtils.extractJson(content);
             var node = objectMapper.readTree(json);
 
             String intentName = node.has("intent_name") ? node.get("intent_name").asText() : "UNKNOWN";
@@ -236,26 +237,6 @@ public class IntentRouter {
         }
 
         return "SWITCH_NEW";
-    }
-
-    private String extractJson(String content) {
-        String trimmed = content.trim();
-        if (trimmed.startsWith("```json")) {
-            trimmed = trimmed.substring(7);
-        } else if (trimmed.startsWith("```")) {
-            trimmed = trimmed.substring(3);
-        }
-        if (trimmed.endsWith("```")) {
-            trimmed = trimmed.substring(0, trimmed.length() - 3);
-        }
-        trimmed = trimmed.trim();
-
-        int start = trimmed.indexOf('{');
-        int end = trimmed.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            return trimmed.substring(start, end + 1);
-        }
-        return trimmed;
     }
 
     private String loadTemplate(String path) {

@@ -1,6 +1,7 @@
 package com.mobileagent.app.router;
 
 import com.mobileagent.app.util.ChatHistoryUtils;
+import com.mobileagent.app.util.JsonParseUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -270,7 +271,7 @@ public class DomainRouter {
 
     private DomainResult parseDomainResponse(String content) {
         try {
-            String json = extractJson(content);
+            String json = JsonParseUtils.extractJson(content);
             var node = objectMapper.readTree(json);
 
             String domain = node.has("domain") ? node.get("domain").asText() : "CHAT";
@@ -299,19 +300,6 @@ public class DomainRouter {
             case "UNSUPPORTED" -> "UNSUPPORTED";
             default -> "CHAT";
         };
-    }
-
-    private String extractJson(String content) {
-        String trimmed = content.trim();
-        if (trimmed.startsWith("```json")) trimmed = trimmed.substring(7);
-        else if (trimmed.startsWith("```")) trimmed = trimmed.substring(3);
-        if (trimmed.endsWith("```")) trimmed = trimmed.substring(0, trimmed.length() - 3);
-        trimmed = trimmed.trim();
-
-        int start = trimmed.indexOf('{');
-        int end = trimmed.lastIndexOf('}');
-        if (start >= 0 && end > start) return trimmed.substring(start, end + 1);
-        return trimmed;
     }
 
     // ==================== 模板加载 ====================

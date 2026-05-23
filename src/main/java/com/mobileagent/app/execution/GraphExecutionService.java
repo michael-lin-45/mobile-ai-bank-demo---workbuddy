@@ -186,42 +186,6 @@ public class GraphExecutionService {
         }
     }
 
-    /**
-     * 读取Graph中断状态(不执行) - 用于RESUME时恢复上下文
-     */
-    public WorkflowOutput readGraphInterruptState(String intent, String threadId, String sessionId) {
-        CompiledGraph graph = intentRegistry.getGraph(intent);
-        if (graph == null) {
-            return WorkflowOutput.error("Graph not found for intent: " + intent);
-        }
-
-        try {
-            RunnableConfig config = RunnableConfig.builder().threadId(threadId).build();
-            var snapshot = graph.getState(config);
-
-            if (snapshot != null) {
-                String nextNode = snapshot.next();
-                OverAllState currentState = snapshot.state();
-                String question = currentState != null
-                        ? (String) currentState.value("_question").orElse("")
-                        : "";
-
-                if (nextNode != null && !nextNode.isEmpty() && !nextNode.equals("__END__")) {
-                    log.info("[GraphExec] RESUME restored context: intent={}, nextNode={}, question={}", intent, nextNode, question);
-                    return WorkflowOutput.interrupted(intent, threadId, question);
-                }
-            }
-
-            // graph已完成
-            stateManager.completeAgent(sessionId, intent);
-            return WorkflowOutput.completed(intent, "该任务已完成");
-
-        } catch (Exception e) {
-            log.error("[GraphExec] Failed to read graph state for RESUME", e);
-            return WorkflowOutput.error("恢复上下文出错: " + e.getMessage());
-        }
-    }
-
     /** 从graph state中提取已收集的参数 */
     public Map<String, Object> extractAccumulatedParams(String intent, OverAllState state) {
         Map<String, Object> params = new HashMap<>();
