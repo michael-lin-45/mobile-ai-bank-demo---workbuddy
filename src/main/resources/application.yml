@@ -7,17 +7,17 @@ models:
   domain:
     base-url: ${DOMAIN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     api-key: ${DOMAIN_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
-    model: ${DOMAIN_MODEL:Qwen3-8B}
+    model: ${DOMAIN_MODEL:qwen-plus}
   # L1 上下文路由 (FOLLOW_UP/SWITCH_NEW/RESUME)
   context:
     base-url: ${CONTEXT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     api-key: ${CONTEXT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
-    model: ${CONTEXT_MODEL:Qwen3.5-4B}
+    model: ${CONTEXT_MODEL:qwen-plus}
   # L1 意图识别+改写 (理财L1)
   intent:
     base-url: ${INTENT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     api-key: ${INTENT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
-    model: ${INTENT_MODEL:Qwen3-8B}
+    model: ${INTENT_MODEL:qwen-plus}
   # L2 子Graph提参
   param-extract:
     base-url: ${PARAM_EXTRACT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
