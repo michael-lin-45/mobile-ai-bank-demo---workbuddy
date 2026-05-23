@@ -197,6 +197,12 @@ public abstract class AbstractDomainService {
                 active.getAccumulatedParams());
         saveAccumulatedParams(sessionId, resumeResult);
         recordSystemReply(sessionId, resumeResult);
+
+        // 完成后清空activeThread，避免下次FOLLOW_UP复用旧参数
+        if ("COMPLETED".equals(resumeResult.getStatus())) {
+            clearOwnActiveThread(sessionId);
+        }
+
         return resumeResult;
     }
 
