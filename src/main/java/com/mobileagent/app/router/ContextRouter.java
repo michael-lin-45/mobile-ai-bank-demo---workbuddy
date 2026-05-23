@@ -1,9 +1,10 @@
-package com.mobileagent.app.service;
+package com.mobileagent.app.router;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mobileagent.app.model.IntentRegistry;
-import com.mobileagent.app.model.RoutingResult;
-import com.mobileagent.app.state.AgentStateManager;
+import com.mobileagent.app.router.IntentRegistry;
+import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.manager.AgentStateManager;
+import com.mobileagent.app.util.ChatHistoryUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -234,10 +235,13 @@ public class ContextRouter {
             
             判断路由类型:
             1. FOLLOW_UP: 用户的话顺着最近一轮对话继续,回答系统刚才的问题或补充信息
-            2. SWITCH_NEW: 用户另起了一个完全不同的话题
+            2. SWITCH_NEW: 用户另起了一个完全不同的话题,或同一领域内切换了不同意图
             3. RESUME: 用户的话和当前话题有转折,但和之前某个被挂起的任务形成了顺延
             
-            注意: 用户表达取消/放弃(如"不查了""算了""取消")应归FOLLOW_UP,这是对当前agent的回应,由agent自行处理。
+            注意: 
+            - 同领域内切换不同意图 = SWITCH_NEW！例: 当前WEALTH_CONSULT(推荐),用户说"解读朝朝盈" → SWITCH_NEW
+            - 用户表达取消/放弃(如"不查了""算了""取消")应归FOLLOW_UP,这是对当前agent的回应,由agent自行处理。
+            - 如果用户不是在回答系统刚问的问题,而是提出了新需求(即使还在同一领域),必须归SWITCH_NEW
             
             严格输出JSON,不要输出其他内容:
             {

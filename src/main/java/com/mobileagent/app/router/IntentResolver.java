@@ -1,9 +1,8 @@
-package com.mobileagent.app.service;
+package com.mobileagent.app.router;
 
-import com.mobileagent.app.model.IntentRegistry;
-import com.mobileagent.app.model.RoutingResolution;
-import com.mobileagent.app.model.RoutingResult;
-import com.mobileagent.app.state.AgentStateManager;
+import com.mobileagent.app.data.RoutingResolution;
+import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.manager.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,7 +11,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 /**
- * 路由服务 - 封装Phase2(改写+识别) + 消歧 + 模糊匹配
+ * 意图决议器 - 封装Phase2(改写+识别) + 消歧 + 模糊匹配
  *
  * 核心设计:
  * - 一个方法(resolve)，一次调用，一个结果
@@ -31,9 +30,9 @@ import java.util.List;
  */
 @Slf4j
 @Service
-public class RoutingService {
+public class IntentResolver {
 
-    private final IntentionRouter intentionRouter;
+    private final IntentRouter intentRouter;
     private final IntentRegistry intentRegistry;
     private final AgentStateManager stateManager;
 
@@ -45,10 +44,10 @@ public class RoutingService {
     @Value("${routing.confidence.high-confidence-bypass:0.85}")
     private double highConfidenceBypass;
 
-    public RoutingService(IntentionRouter intentionRouter,
-                          IntentRegistry intentRegistry,
-                          AgentStateManager stateManager) {
-        this.intentionRouter = intentionRouter;
+    public IntentResolver(IntentRouter intentRouter,
+                              IntentRegistry intentRegistry,
+                              AgentStateManager stateManager) {
+        this.intentRouter = intentRouter;
         this.intentRegistry = intentRegistry;
         this.stateManager = stateManager;
     }
@@ -72,7 +71,7 @@ public class RoutingService {
         if (stateManager.isInDisambiguation(sessionId)) {
             return handleDisambiguationAnswer(sessionId, userInput, phase1Result, chatMemory);
         }
-        return resolveNewIntent(sessionId, userInput, phase1Result, chatMemory);
+        return resolveNewIntention(sessionId, userInput, phase1Result, chatMemory);
     }
 
     // ==================== 新意图识别 ====================
@@ -91,11 +90,11 @@ public class RoutingService {
      * 4. !hasIntent? → fuzzyMatch → 可能消歧或拒绝
      * 5. hasIntent? → RESOLVED
      */
-     private RoutingResolution resolveNewIntent(String sessionId, String userInput, RoutingResult phase1Result,
+     private RoutingResolution resolveNewIntention(String sessionId, String userInput, RoutingResult phase1Result,
                                                  ChatMemory chatMemory) {
         // Phase2: 上下文改写 + 意图识别
-        RoutingResult phase2 = intentionRouter.rewriteAndIdentify(sessionId, userInput, phase1Result, stateManager, chatMemory);
-        log.info("[RoutingService] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
+        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, phase1Result, stateManager, chatMemory);
+        log.info("[IntentResolver] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence(), phase2.getCandidateIntents());
 
         // 1. 置信度增强的消歧判断
@@ -104,13 +103,13 @@ public class RoutingService {
             if (phase2.getConfidence() < highConfidenceBypass) {
                 String groupId = resolveGroupId(phase2.getGroupId(), phase2.getCandidateIntents());
                 if (groupId != null && intentRegistry.getGroup(groupId) != null) {
-                    log.info("[RoutingService] Disambiguation: ambiguous + low confidence ({}) < bypass ({})",
+                    log.info("[IntentResolver] Disambiguation: ambiguous + low confidence ({}) < bypass ({})",
                             phase2.getConfidence(), highConfidenceBypass);
                     return triggerDisambiguation(sessionId, groupId, phase2);
                 }
             }
             // 1b. LLM标ambiguous + 高置信度 → 信任首选意图,不消歧
-            log.info("[RoutingService] Ambiguous but high confidence ({}) >= bypass ({}), trusting top intent: {}",
+            log.info("[IntentResolver] Ambiguous but high confidence ({}) >= bypass ({}), trusting top intent: {}",
                     phase2.getConfidence(), highConfidenceBypass, phase2.getIntentName());
         }
 
@@ -119,7 +118,7 @@ public class RoutingService {
         if (!phase2.isAmbiguous() && effectiveIntent != null && phase2.getConfidence() < disambiguationThreshold) {
             IntentRegistry.IntentGroup group = intentRegistry.findGroupByIntent(effectiveIntent);
             if (group != null) {
-                log.info("[RoutingService] Supplemental disambiguation: low confidence ({}) < threshold ({}), intent={} belongs to group={}",
+                log.info("[IntentResolver] Supplemental disambiguation: low confidence ({}) < threshold ({}), intent={} belongs to group={}",
                         phase2.getConfidence(), disambiguationThreshold, effectiveIntent, group.getGroupId());
                 return triggerDisambiguation(sessionId, group.getGroupId(), phase2);
             }
@@ -127,7 +126,7 @@ public class RoutingService {
 
         // 2. 完全无法识别 → 拒绝
         if (effectiveIntent == null || "UNKNOWN".equalsIgnoreCase(effectiveIntent)) {
-            log.info("[RoutingService] Intent completely unidentifiable");
+            log.info("[IntentResolver] Intent completely unidentifiable");
             return RoutingResolution.rejected();
         }
 
@@ -141,7 +140,7 @@ public class RoutingService {
 
         // 4. 意图不在注册表 → 模糊匹配
         if (!intentRegistry.hasIntent(effectiveIntent)) {
-            log.warn("[RoutingService] Unknown intent: {}, attempting fuzzy match", effectiveIntent);
+            log.warn("[IntentResolver] Unknown intent: {}, attempting fuzzy match", effectiveIntent);
             effectiveIntent = intentRegistry.fuzzyMatchIntent(effectiveIntent, userInput);
             if (effectiveIntent == null) {
                 return RoutingResolution.rejected();
@@ -153,7 +152,7 @@ public class RoutingService {
                     return triggerDisambiguation(sessionId, effectiveIntent, phase2);
                 }
             }
-            log.info("[RoutingService] Fuzzy matched to: {}", effectiveIntent);
+            log.info("[IntentResolver] Fuzzy matched to: {}", effectiveIntent);
         }
 
         // 5. 意图明确 → RESOLVED
@@ -170,13 +169,13 @@ public class RoutingService {
     private RoutingResolution triggerDisambiguation(String sessionId, String groupId, RoutingResult phase2) {
         IntentRegistry.IntentGroup group = intentRegistry.getGroup(groupId);
         if (group == null) {
-            log.warn("[RoutingService] Disambiguation failed: no group found for groupId={}", groupId);
+            log.warn("[IntentResolver] Disambiguation failed: no group found for groupId={}", groupId);
             return RoutingResolution.rejected();
         }
 
         stateManager.setDisambiguationState(sessionId,
                 new AgentStateManager.DisambiguationState(groupId));
-        log.info("[RoutingService] Entering disambiguation: groupId={}", groupId);
+        log.info("[IntentResolver] Entering disambiguation: groupId={}", groupId);
 
         return RoutingResolution.disambiguation(group.getDisambiguationQuestion(), group.getIntentNames());
     }
@@ -207,8 +206,8 @@ public class RoutingService {
         // 重新Phase2识别
         RoutingResult rePhase1 = RoutingResult.builder()
                 .routeType("SWITCH_NEW").confidence(0.8).reasoning("消歧回答重新识别").build();
-        RoutingResult phase2 = intentionRouter.rewriteAndIdentify(sessionId, userInput, rePhase1, stateManager, chatMemory);
-        log.info("[RoutingService] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
+        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, rePhase1, stateManager, chatMemory);
+        log.info("[IntentResolver] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence());
 
         // 识别到组内具体意图 → RESOLVED (消歧上下文已强,不再要求高置信度)
@@ -222,7 +221,7 @@ public class RoutingService {
 
         if (isInGroupIntent) {
             stateManager.clearDisambiguationState(sessionId);
-            log.info("[RoutingService] Disambiguation resolved (in-group intent): intent={}, confidence={}",
+            log.info("[IntentResolver] Disambiguation resolved (in-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
             String routeType = resolveRouteType(sessionId, phase1Result, phase2);
@@ -236,7 +235,7 @@ public class RoutingService {
                 && intentRegistry.hasIntent(identifiedIntent)
                 && !intentRegistry.isGroupName(identifiedIntent)) {
             stateManager.clearDisambiguationState(sessionId);
-            log.info("[RoutingService] Disambiguation resolved (out-group intent): intent={}, confidence={}",
+            log.info("[IntentResolver] Disambiguation resolved (out-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
             String routeType = resolveRouteType(sessionId, phase1Result, phase2);
@@ -250,7 +249,7 @@ public class RoutingService {
                 && identifiedIntent.equals(groupId)) {
             String defaultIntent = group.getIntentNames().get(0);
             stateManager.clearDisambiguationState(sessionId);
-            log.info("[RoutingService] Disambiguation resolved (group name, using first candidate): group={}, default={}",
+            log.info("[IntentResolver] Disambiguation resolved (group name, using first candidate): group={}, default={}",
                     identifiedIntent, defaultIntent);
 
             String routeType = resolveRouteType(sessionId, phase1Result, phase2);
@@ -260,7 +259,7 @@ public class RoutingService {
 
         // 1次追问后仍无法识别 → 直接拒绝
         stateManager.clearDisambiguationState(sessionId);
-        log.info("[RoutingService] Disambiguation answer still ambiguous → rejected");
+        log.info("[IntentResolver] Disambiguation answer still ambiguous → rejected");
         return RoutingResolution.rejected();
     }
 
@@ -291,7 +290,7 @@ public class RoutingService {
         if (effectiveIntent != null && !"UNKNOWN".equalsIgnoreCase(effectiveIntent)) {
             AgentStateManager.SuspendedInfo suspended = stateManager.getSuspendedThread(sessionId, effectiveIntent);
             if (suspended != null) {
-                log.info("[RoutingService] State-based RESUME override: intent={} is in suspendedAgents (phase1 was {})",
+                log.info("[IntentResolver] State-based RESUME override: intent={} is in suspendedAgents (phase1 was {})",
                         effectiveIntent, phase1Result.getRouteType());
                 return "RESUME";
             }

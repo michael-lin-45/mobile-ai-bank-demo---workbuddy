@@ -109,7 +109,7 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
             Map<String, Object> extracted = callExtractModel(userInput);
             // 守卫: 验证LLM返回的expenseType是否与用户输入有关联
             validateExtractedExpenseType(extracted, userInput);
-            result.putAll(extracted);
+            mergeExtractedWithoutOverwrite(result, extracted, state);
             log.info("[BillQueryGraph.extractParams] extracted: {}", extracted);
         } catch (Exception e) {
             log.error("[BillQueryGraph.extractParams] LLM extraction failed", e);

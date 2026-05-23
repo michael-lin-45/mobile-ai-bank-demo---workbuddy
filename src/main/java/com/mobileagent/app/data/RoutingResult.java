@@ -1,4 +1,4 @@
-package com.mobileagent.app.model;
+package com.mobileagent.app.data;
 
 import lombok.Data;
 import lombok.Builder;

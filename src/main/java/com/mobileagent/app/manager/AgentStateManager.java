@@ -1,4 +1,4 @@
-package com.mobileagent.app.state;
+package com.mobileagent.app.manager;
 
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -71,8 +71,23 @@ public class AgentStateManager {
     public void suspendAgent(String sessionId, String intent, String threadId) {
         Map<String, SuspendedInfo> sessionMap = suspendedAgents.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
 
+        // 同一intent已挂起 → 合并累积参数，保留原有的（更完整），不覆盖
+        if (sessionMap.containsKey(intent)) {
+            SuspendedInfo existing = sessionMap.get(intent);
+            ActiveThreadInfo active = activeThreads.get(sessionId);
+            if (active != null && active.getIntent().equals(intent)) {
+                // 合并: 原有参数 + 新参数(新参数不覆盖已有)
+                Map<String, Object> merged = new HashMap<>(active.getAccumulatedParams());
+                existing.getAccumulatedParams().forEach(merged::putIfAbsent);
+                existing.setAccumulatedParams(merged);
+            }
+            log.debug("[StateMgr] Suspended agent already exists, merged params: session={}, intent={}, params={}",
+                    sessionId, intent, existing.getAccumulatedParams());
+            return;
+        }
+
         // 检查深度限制
-        if (!sessionMap.containsKey(intent) && sessionMap.size() >= maxSuspendedDepth) {
+        if (sessionMap.size() >= maxSuspendedDepth) {
             // 移除最早的挂起项
             String oldestKey = sessionMap.entrySet().stream()
                     .min(Comparator.comparing(e -> e.getValue().getSuspendedAt()))

@@ -108,7 +108,7 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         Map<String, Object> result = new HashMap<>();
         try {
             Map<String, Object> extracted = callExtractModel(userInput);
-            result.putAll(extracted);
+            mergeExtractedWithoutOverwrite(result, extracted, state);
             log.info("[WealthConsultGraph.extractParams] extracted: {}", extracted);
         } catch (Exception e) {
             log.error("[WealthConsultGraph.extractParams] LLM extraction failed", e);

@@ -1,9 +1,9 @@
-package com.mobileagent.app.service;
+package com.mobileagent.app.execution;
 
 import com.alibaba.cloud.ai.graph.*;
-import com.mobileagent.app.model.IntentRegistry;
-import com.mobileagent.app.model.WorkflowOutput;
-import com.mobileagent.app.state.AgentStateManager;
+import com.mobileagent.app.router.IntentRegistry;
+import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.manager.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -84,18 +84,25 @@ public class GraphExecutionService {
      * 原因: interruptBefore在resume后不会重新触发,导致多轮提问失败。
      */
     public WorkflowOutput resumeGraph(String intent, String threadId, String userInput, String sessionId) {
+        Map<String, Object> accumulatedParams = getAccumulatedParamsFromActive(sessionId, intent);
+        return resumeGraph(intent, threadId, userInput, sessionId, accumulatedParams);
+    }
+
+    /**
+     * 恢复执行Graph - 使用指定的累积参数(从suspendedInfo传入)
+     */
+    public WorkflowOutput resumeGraph(String intent, String threadId, String userInput,
+                                      String sessionId, Map<String, Object> accumulatedParams) {
         CompiledGraph graph = intentRegistry.getGraph(intent);
         if (graph == null) {
             return WorkflowOutput.error("Graph not found for intent: " + intent);
         }
 
-        // 先保存累积参数(在setActiveThread覆盖前)
-        Map<String, Object> accumulatedParams = getAccumulatedParamsFromActive(sessionId, intent);
         // 重新执行准备: 生成新threadId + 恢复累积参数
         String newThreadId = prepareReExecution(sessionId, intent, accumulatedParams);
 
-        log.info("[GraphExec] Resume graph (new execution): intent={}, oldThread={}, newThread={}, userInput={}",
-                intent, threadId, newThreadId, userInput);
+        log.info("[GraphExec] Resume graph (new execution): intent={}, oldThread={}, newThread={}, params={}, userInput={}",
+                intent, threadId, newThreadId, accumulatedParams, userInput);
 
         return executeGraph(graph, intent, newThreadId, userInput, sessionId, accumulatedParams);
     }

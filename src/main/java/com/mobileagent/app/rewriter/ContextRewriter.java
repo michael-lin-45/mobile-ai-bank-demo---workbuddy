@@ -1,6 +1,7 @@
-package com.mobileagent.app.service;
+package com.mobileagent.app.rewriter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mobileagent.app.util.ChatHistoryUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -21,7 +22,7 @@ import java.nio.charset.StandardCharsets;
  * - 改写后的输入传给子智能体，使参数提取更准确
  * - 原始用户话术由L1 Service保存到ChatMemory，改写后的仅传给Graph执行
  *
- * 参考WealthService的IntentionRouter改写机制，但更简洁:
+ * 参考WealthService的IntentRouter改写机制，但更简洁:
  * - 无意图识别(L0已确定领域)
  * - 无消歧(转账/账单各自只有一个意图)
  * - 只做上下文改写

@@ -109,7 +109,7 @@ public class TransferGraphConfig extends AbstractGraphConfig {
         Map<String, Object> result = new HashMap<>();
         try {
             Map<String, Object> extracted = callExtractModel(userInput);
-            result.putAll(extracted);
+            mergeExtractedWithoutOverwrite(result, extracted, state);
             log.info("[TransferGraph.extractParams] extracted: {}", extracted);
         } catch (Exception e) {
             log.error("[TransferGraph.extractParams] LLM extraction failed", e);

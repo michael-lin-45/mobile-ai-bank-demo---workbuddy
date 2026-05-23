@@ -21,7 +21,7 @@ import java.util.List;
  * - after():  不把LLM回复存入ChatMemory（原版会存）
  *
  * 使用场景:
- * - 路由层(ContextRouter/IntentionRouter)需要读取对话历史理解上下文
+ * - 路由层(ContextRouter/IntentRouter)需要读取对话历史理解上下文
  * - 但路由层的LLM输出是JSON（路由决策），不应作为ASSISTANT消息污染ChatMemory
  * - ChatMemory的写入由BankController统一管理（只存用户可见文本）
  *

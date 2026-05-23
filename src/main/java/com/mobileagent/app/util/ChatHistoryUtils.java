@@ -1,4 +1,4 @@
-package com.mobileagent.app.service;
+package com.mobileagent.app.util;
 
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;
@@ -12,7 +12,7 @@ import java.util.List;
  * 4个服务共用:
  * - DomainRouter (L0) - 领域路由
  * - ContextRouter (L1) - 上下文路由
- * - IntentionRouter (L1) - 意图识别+改写
+ * - IntentRouter (L1) - 意图识别+改写
  * - ContextRewriter (L1) - 上下文改写
  *
  * 截断策略:

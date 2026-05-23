@@ -1,4 +1,4 @@
-package com.mobileagent.app.model;
+package com.mobileagent.app.router;
 
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import jakarta.annotation.PostConstruct;

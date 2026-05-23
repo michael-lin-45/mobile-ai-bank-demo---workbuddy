@@ -1,7 +1,7 @@
 package com.mobileagent.app.config;
 
 import com.alibaba.cloud.ai.graph.CompiledGraph;
-import com.mobileagent.app.model.IntentRegistry;
+import com.mobileagent.app.router.IntentRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Configuration;

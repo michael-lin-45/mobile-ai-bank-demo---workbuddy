@@ -23,13 +23,13 @@ import org.springframework.context.annotation.Configuration;
  * 用途:
  *   domain        - L0 领域路由 (DomainRouter, qwen-turbo)
  *   context       - L1 上下文路由判断 (ContextRouter, FOLLOW_UP/SWITCH_NEW/RESUME)
- *   intent        - L1 意图识别+上下文改写 (IntentionRouter, 理财L1)
+ *   intent        - L1 意图识别+上下文改写 (IntentRouter, 理财L1)
  *   paramExtract  - L2 子Graph参数提取+取消意图判断
  *   chat          - L1 闲聊 (ChatService, 32B+大模型)
  *
  * ChatMemory架构:
  *   chatMemory (全局)          - 全局对话记录，L0 DomainRouter手动读取，ChatService通过Advisor读取
- *   wealthChatMemory (理财)    - WealthService使用,只记录理财领域消息,传入ContextRouter/IntentionRouter
+ *   wealthChatMemory (理财)    - WealthService使用,只记录理财领域消息,传入ContextRouter/IntentRouter
  *   transferChatMemory (转账)  - TransferService使用,只记录转账领域消息,传入ContextRouter
  *   billChatMemory (账单)      - BillService使用,只记录账单领域消息,传入ContextRouter
  *   (闲聊无独立ChatMemory,使用全局ChatMemory)
@@ -37,7 +37,7 @@ import org.springframework.context.annotation.Configuration;
  * 历史注入方式:
  *   L0 DomainRouter   → 手动读取全局ChatMemory,格式化到{chat_history}(区分历史/当前消息)
  *   L1 ContextRouter   → 调用方传入领域ChatMemory,手动格式化到{chat_history}
- *   L1 IntentionRouter → 调用方传入领域ChatMemory,手动格式化到{chat_history}
+ *   L1 IntentRouter → 调用方传入领域ChatMemory,手动格式化到{chat_history}
  *   L1 ChatService     → 通过ReadOnlyMemoryAdvisor注入全局ChatMemory(标准对话,无需区分)
  */
 @Slf4j

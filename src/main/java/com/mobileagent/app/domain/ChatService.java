@@ -1,6 +1,6 @@
 package com.mobileagent.app.domain;
 
-import com.mobileagent.app.model.WorkflowOutput;
+import com.mobileagent.app.data.WorkflowOutput;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
  * 闲聊L1 Service - 直接使用32B+大模型与用户聊天
  *
  * 设计:
- * - 无ContextRouter, 无IntentionRouter, 无RoutingService
+ * - 无ContextRouter, 无IntentRouter, 无RoutingService
  * - 无activeThread, 无suspendedAgents
  * - 直接用ChatClient与用户对话
  * - 使用全局ChatMemory(L0注入的历史),不创建独立ChatMemory

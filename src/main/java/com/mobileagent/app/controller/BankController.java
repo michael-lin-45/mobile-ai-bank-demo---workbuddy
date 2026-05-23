@@ -1,8 +1,12 @@
 package com.mobileagent.app.controller;
 
-import com.mobileagent.app.domain.*;
-import com.mobileagent.app.model.WorkflowOutput;
-import com.mobileagent.app.state.AgentStateManager;
+import com.mobileagent.app.domain.BillService;
+import com.mobileagent.app.domain.ChatService;
+import com.mobileagent.app.domain.TransferService;
+import com.mobileagent.app.domain.WealthService;
+import com.mobileagent.app.router.DomainRouter;
+import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.manager.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -22,7 +26,7 @@ import java.util.Map;
  *
  * 对话历史管理:
  * - 全局ChatMemory: 记录所有对话,供L0 DomainRouter手动读取
- * - 领域ChatMemory: 各L1 Service独立维护,供ContextRouter/IntentionRouter手动读取
+ * - 领域ChatMemory: 各L1 Service独立维护,供ContextRouter/IntentRouter手动读取
  */
 @Slf4j
 @RestController
@@ -109,6 +113,7 @@ public class BankController {
     @DeleteMapping("/session")
     public Map<String, String> clearSession(@RequestParam String sessionId) {
         stateManager.clearSession(sessionId);
+        domainRouter.clearLastDomain(sessionId);
         chatMemory.clear(sessionId);
         return Map.of("status", "cleared", "sessionId", sessionId);
     }

@@ -1,19 +1,20 @@
 package com.mobileagent.app.domain;
 
-import com.mobileagent.app.model.IntentRegistry;
-import com.mobileagent.app.model.RoutingResolution;
-import com.mobileagent.app.model.RoutingResult;
-import com.mobileagent.app.model.WorkflowOutput;
-import com.mobileagent.app.service.ContextRouter;
-import com.mobileagent.app.service.GraphExecutionService;
-import com.mobileagent.app.service.RoutingService;
-import com.mobileagent.app.state.AgentStateManager;
+import com.mobileagent.app.router.IntentRegistry;
+import com.mobileagent.app.data.RoutingResolution;
+import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.router.ContextRouter;
+import com.mobileagent.app.execution.GraphExecutionService;
+import com.mobileagent.app.router.IntentResolver;
+import com.mobileagent.app.manager.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Service;
 
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -37,20 +38,20 @@ public class WealthService {
     private static final String DOMAIN_NAME = "理财";
 
     private final ContextRouter contextRouter;
-    private final RoutingService routingService;
+    private final IntentResolver intentResolver;
     private final GraphExecutionService graphExecutionService;
     private final IntentRegistry intentRegistry;
     private final AgentStateManager stateManager;
     private final ChatMemory wealthChatMemory;
 
     public WealthService(ContextRouter contextRouter,
-                         RoutingService routingService,
+                         IntentResolver intentResolver,
                          GraphExecutionService graphExecutionService,
                          IntentRegistry intentRegistry,
                          AgentStateManager stateManager,
                          @org.springframework.beans.factory.annotation.Qualifier("wealthChatMemory") ChatMemory wealthChatMemory) {
         this.contextRouter = contextRouter;
-        this.routingService = routingService;
+        this.intentResolver = intentResolver;
         this.graphExecutionService = graphExecutionService;
         this.intentRegistry = intentRegistry;
         this.stateManager = stateManager;
@@ -105,7 +106,7 @@ public class WealthService {
             }
 
             // ========== 路由决策 (Phase2 + 消歧) ==========
-            RoutingResolution resolution = routingService.resolve(sessionId, userInput, phase1, wealthChatMemory);
+            RoutingResolution resolution = intentResolver.resolve(sessionId, userInput, phase1, wealthChatMemory);
             log.info("[WealthService] Routing resolution: status={}, intent={}",
                     resolution.getStatus(), resolution.getIntentName());
 
@@ -139,6 +140,14 @@ public class WealthService {
     // ==================== 路由执行 ====================
 
     private WorkflowOutput executeRoute(String sessionId, RoutingResolution resolution) {
+        // 防御: 如果意图已suspended但路由判了SWITCH_NEW，自动升级为RESUME
+        // 场景: "继续推荐理财"语义上是恢复，但模型可能误判为SWITCH_NEW
+        if (!"RESUME".equals(resolution.getRouteType())
+                && stateManager.getSuspendedThread(sessionId, resolution.getIntentName()) != null) {
+            log.info("[WealthService] Auto-upgrade {}→RESUME for suspended intent={}",
+                    resolution.getRouteType(), resolution.getIntentName());
+            return handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
+        }
         return switch (resolution.getRouteType()) {
             case "RESUME" -> handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
             default -> handleSwitchNew(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
@@ -180,13 +189,11 @@ public class WealthService {
         stateManager.resumeAgent(sessionId, intent);
         stateManager.setActiveThread(sessionId, threadId, intent);
 
-        AgentStateManager.ActiveThreadInfo newActive = stateManager.getActiveThread(sessionId);
-        if (newActive != null && suspendedInfo.getAccumulatedParams() != null) {
-            newActive.setAccumulatedParams(suspendedInfo.getAccumulatedParams());
-        }
+        // RESUME: 从suspendedInfo取累积参数，不从activeThread取
+        Map<String, Object> suspendedParams = suspendedInfo.getAccumulatedParams();
+        log.info("[WealthService] RESUME with suspendedParams: intent={}, params={}", intent, suspendedParams);
 
-        log.info("[WealthService] RESUME with resumeGraph: intent={}, userInput={}", intent, userInput);
-        return graphExecutionService.resumeGraph(intent, threadId, userInput, sessionId);
+        return graphExecutionService.resumeGraph(intent, threadId, userInput, sessionId, suspendedParams);
     }
 
     private WorkflowOutput handleCancel(String sessionId) {

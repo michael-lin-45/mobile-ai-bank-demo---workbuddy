@@ -1,9 +1,10 @@
-package com.mobileagent.app.service;
+package com.mobileagent.app.router;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mobileagent.app.model.IntentRegistry;
-import com.mobileagent.app.model.RoutingResult;
-import com.mobileagent.app.state.AgentStateManager;
+import com.mobileagent.app.router.IntentRegistry;
+import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.manager.AgentStateManager;
+import com.mobileagent.app.util.ChatHistoryUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -31,14 +32,14 @@ import java.nio.charset.StandardCharsets;
  */
 @Slf4j
 @Service
-public class IntentionRouter {
+public class IntentRouter {
 
     private final ChatClient chatClient;
     private final IntentRegistry intentRegistry;
     private final ObjectMapper objectMapper;
     private final int judgmentMaxPairs;
 
-    public IntentionRouter(@Qualifier("intentChatClient") ChatClient chatClient,
+    public IntentRouter(@Qualifier("intentChatClient") ChatClient chatClient,
                            IntentRegistry intentRegistry,
                            @org.springframework.beans.factory.annotation.Value("${routing.history.judgment-max-pairs:5}") int judgmentMaxPairs) {
         this.chatClient = chatClient;
@@ -72,17 +73,17 @@ public class IntentionRouter {
                     .call()
                     .content();
             long elapsedMs = System.currentTimeMillis() - startMs;
-            log.info("[IntentionRouter] LLM call completed in {}ms | sessionId={}, userInput={}", elapsedMs, sessionId, userInput);
-            log.debug("[IntentionRouter] LLM raw response: {}", content);
+            log.info("[IntentRouter] LLM call completed in {}ms | sessionId={}, userInput={}", elapsedMs, sessionId, userInput);
+            log.debug("[IntentRouter] LLM raw response: {}", content);
 
             RoutingResult result = parseRewriteResponse(content, phase1Result);
-            log.info("[IntentionRouter] Result: intent={}, routeType={}, rewritten={}, confidence={}",
+            log.info("[IntentRouter] Result: intent={}, routeType={}, rewritten={}, confidence={}",
                     result.getIntentName(), result.getRefinedRouteType(),
                     result.getRewrittenInput(), result.getConfidence());
             return result;
 
         } catch (Exception e) {
-            log.error("[IntentionRouter] LLM call failed", e);
+            log.error("[IntentRouter] LLM call failed", e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
                     .refinedRouteType("SWITCH_NEW")
@@ -202,7 +203,7 @@ public class IntentionRouter {
                     .groupId(groupId)
                     .build();
         } catch (Exception e) {
-            log.warn("[IntentionRouter] Failed to parse rewrite response: {}", content, e);
+            log.warn("[IntentRouter] Failed to parse rewrite response: {}", content, e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
                     .refinedRouteType("SWITCH_NEW")
@@ -262,7 +263,7 @@ public class IntentionRouter {
             ClassPathResource resource = new ClassPathResource(path);
             return StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            log.warn("[IntentionRouter] Failed to load template: {}, using fallback", path);
+            log.warn("[IntentRouter] Failed to load template: {}, using fallback", path);
             return getDefaultRewritePrompt();
         }
     }

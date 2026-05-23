@@ -1,13 +1,13 @@
 package com.mobileagent.app.domain;
 
 import com.alibaba.cloud.ai.graph.CompiledGraph;
-import com.mobileagent.app.model.IntentRegistry;
-import com.mobileagent.app.model.RoutingResult;
-import com.mobileagent.app.model.WorkflowOutput;
-import com.mobileagent.app.service.ContextRewriter;
-import com.mobileagent.app.service.ContextRouter;
-import com.mobileagent.app.service.GraphExecutionService;
-import com.mobileagent.app.state.AgentStateManager;
+import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.rewriter.ContextRewriter;
+import com.mobileagent.app.router.ContextRouter;
+import com.mobileagent.app.router.IntentRegistry;
+import com.mobileagent.app.execution.GraphExecutionService;
+import com.mobileagent.app.manager.AgentStateManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -89,15 +89,24 @@ public class BillService {
                     return cancelResult;
                 }
 
-                // ========== FOLLOW_UP + activeThread → resumeGraph ==========
-                if (active != null) {
-                    log.info("[BillService] FOLLOW_UP with activeThread: intent={}", active.getIntent());
+                // ========== FOLLOW_UP + 本领域activeThread → resumeGraph ==========
+                if (active != null && INTENT.equals(active.getIntent())) {
+                    log.info("[BillService] FOLLOW_UP with same-domain activeThread: intent={}", active.getIntent());
                     billChatMemory.add(sessionId, new UserMessage(userInput));
                     // 使用resumeGraph: 不走SAA的resume()，而是重新执行graph+注入accumulatedParams
                     WorkflowOutput resumeResult = graphExecutionService.resumeGraph(
                             active.getIntent(), active.getThreadId(), userInput, sessionId);
                     recordSystemReply(sessionId, resumeResult);
                     return resumeResult;
+                }
+
+                // ========== FOLLOW_UP + 异领域activeThread → 挂起+降级SWITCH_NEW ==========
+                if (active != null) {
+                    log.info("[BillService] FOLLOW_UP but activeThread is different domain: activeIntent={}, thisDomain={} → suspend and SWITCH_NEW",
+                            active.getIntent(), INTENT);
+                    String rewrittenInput = contextRewriter.rewrite(sessionId, userInput, billChatMemory, DOMAIN_NAME);
+                    billChatMemory.add(sessionId, new UserMessage(userInput));
+                    return handleSwitchNew(sessionId, userInput, rewrittenInput);
                 }
 
                 // FOLLOW_UP但无activeThread → 上下文改写后降级为SWITCH_NEW

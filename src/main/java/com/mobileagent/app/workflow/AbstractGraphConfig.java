@@ -124,6 +124,47 @@ public abstract class AbstractGraphConfig {
         return value != null ? value.toString() : null;
     }
 
+    /**
+     * 合并LLM提取结果到result，但不覆盖state中已有的非空参数值。
+     *
+     * 解决resume场景下的问题: graph重新执行时extractParamsNode会用LLM从新userInput重新提取参数，
+     * 如果新userInput不包含原始参数信息(如"继续推荐"不含"科技类")，LLM会返回null覆盖已有的值。
+     * 此方法确保: 已收集的参数不会被LLM的null/空值覆盖，只有新提取到的非空值才会写入。
+     *
+     * @param result 要写入的result map
+     * @param extracted LLM提取的结果
+     * @param state 当前graph state，用于检查已有值
+     */
+    protected void mergeExtractedWithoutOverwrite(Map<String, Object> result,
+                                                   Map<String, Object> extracted,
+                                                   OverAllState state) {
+        for (Map.Entry<String, Object> entry : extracted.entrySet()) {
+            String key = entry.getKey();
+            Object newValue = entry.getValue();
+
+            // 检查state中是否已有非空值
+            Object existingValue = state.value(key).orElse(null);
+            boolean hasExisting = existingValue != null && !existingValue.toString().isEmpty();
+
+            if (hasExisting) {
+                // state中已有值: 只有新值也是非空时才覆盖(允许用户更新参数)
+                if (newValue != null && !newValue.toString().isEmpty()) {
+                    result.put(key, newValue);
+                    log.debug("[{}.mergeExtracted] Overwrite existing: key={} old={} new={}",
+                            getGraphName(), key, existingValue, newValue);
+                } else {
+                    log.debug("[{}.mergeExtracted] Keep existing: key={} value={} (LLM returned null/empty)",
+                            getGraphName(), key, existingValue);
+                }
+            } else {
+                // state中无值: 新值非空才写入
+                if (newValue != null && !newValue.toString().isEmpty()) {
+                    result.put(key, newValue);
+                }
+            }
+        }
+    }
+
     /** 调用LLM提取参数: buildExtractPrompt → LLM call → parseExtractResult */
     protected Map<String, Object> callExtractModel(String userInput) {
         String prompt = buildExtractPrompt(userInput);
