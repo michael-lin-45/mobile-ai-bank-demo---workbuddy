@@ -26,6 +26,8 @@ import java.util.UUID;
  * - 有suspendedAgents(推荐↔解读切换场景)
  * - 有消歧(WEALTH_CONSULT vs WEALTH_INTERPRET)
  * - 独立ChatMemory实例(只记录本领域消息)
+ * - 取消由子workflow处理(cancelAwareExtractParams → cancelExecutionNode)
+ * - 消歧中取消由IntentResolver检测,返回CANCELLED状态
  *
  * 理财领域的意图只包含:
  * - WEALTH_CONSULT: 理财咨询/推荐
@@ -74,17 +76,6 @@ public class WealthService {
                     "prompts/l1-routing.st", DOMAIN_NAME, wealthChatMemory);
             log.info("[WealthService] Phase1: routeType={}, confidence={}", phase1.getRouteType(), phase1.getConfidence());
 
-            // ========== CANCEL during disambiguation ==========
-            if (phase1.isFollowUp() && stateManager.isInDisambiguation(sessionId)) {
-                if (isCancelExpression(userInput)) {
-                    log.info("[WealthService] Cancel detected during disambiguation");
-                    wealthChatMemory.add(sessionId, new UserMessage(userInput));
-                    WorkflowOutput cancelResult = handleCancel(sessionId);
-                    recordSystemReply(sessionId, cancelResult);
-                    return cancelResult;
-                }
-            }
-
             // ========== FOLLOW_UP + activeThread → 直接resume (消歧中除外) ==========
             if (phase1.isFollowUp() && !stateManager.isInDisambiguation(sessionId)) {
                 AgentStateManager.ActiveThreadInfo activeThread = stateManager.getActiveThread(sessionId);
@@ -126,6 +117,7 @@ public class WealthService {
                     yield WorkflowOutput.disambiguation(resolution.getQuestion(), resolution.getCandidateIntents());
                 }
                 case REJECTED -> WorkflowOutput.completed(null, "该理财功能暂不支持，目前仅支持理财咨询和理财产品解读");
+                case CANCELLED -> WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
             };
 
             recordSystemReply(sessionId, output);
@@ -196,32 +188,9 @@ public class WealthService {
         return graphExecutionService.resumeGraph(intent, threadId, userInput, sessionId, suspendedParams);
     }
 
-    private WorkflowOutput handleCancel(String sessionId) {
-        AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
-
-        if (active == null && !stateManager.isInDisambiguation(sessionId)) {
-            return WorkflowOutput.completed(null, "当前没有进行中的操作。有什么可以帮您的吗？");
-        }
-
-        if (active != null) {
-            stateManager.clearDisambiguationState(sessionId);
-            return graphExecutionService.cancelGraph(active.getIntent(), active.getThreadId(), sessionId);
-        }
-
-        stateManager.clearDisambiguationState(sessionId);
-        return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
-    }
-
     // ==================== ChatMemory管理 ====================
 
     private void recordSystemReply(String sessionId, WorkflowOutput output) {
         ChatHistoryUtils.recordReply(wealthChatMemory, sessionId, output, "WealthService");
-    }
-
-    private boolean isCancelExpression(String input) {
-        if (input == null) return false;
-        String trimmed = input.trim();
-        // 只匹配纯取消表达，不含新意图。"算了X"等由L0判断路由到新领域
-        return trimmed.matches("^(取消|算了|不要了|不了|放弃|算了不问了)$");
     }
 }

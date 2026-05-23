@@ -69,6 +69,12 @@ public class IntentResolver {
     public RoutingResolution resolve(String sessionId, String userInput, RoutingResult phase1Result,
                                       ChatMemory chatMemory) {
         if (stateManager.isInDisambiguation(sessionId)) {
+            // 消歧中取消: 清理消歧状态,返回CANCELLED
+            if (isCancelExpression(userInput)) {
+                log.info("[IntentResolver] Cancel detected during disambiguation");
+                stateManager.clearDisambiguationState(sessionId);
+                return RoutingResolution.cancelled();
+            }
             return handleDisambiguationAnswer(sessionId, userInput, phase1Result, chatMemory);
         }
         return resolveNewIntention(sessionId, userInput, phase1Result, chatMemory);
@@ -318,5 +324,17 @@ public class IntentResolver {
             }
         }
         return null;
+    }
+
+    /**
+     * 判断是否为取消表达 - 用于消歧中检测用户取消
+     *
+     * 只匹配通用取消词(领域特定取消词如"不转了""别查了"由子workflow处理)
+     * 允许标点后缀: "算了。" "取消！" 但不允许追加内容: "算了查账单"
+     */
+    private boolean isCancelExpression(String input) {
+        if (input == null) return false;
+        String trimmed = input.trim();
+        return trimmed.matches("^(取消|算了|不要了|不了|放弃)[\\s，。！？、；]*$");
     }
 }

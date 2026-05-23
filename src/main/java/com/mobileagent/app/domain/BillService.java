@@ -26,6 +26,7 @@ import java.util.UUID;
  * - SWITCH_NEW → 新建thread + BillQueryGraph
  * - 完成后activeThread = null
  * - 独立ChatMemory实例(只记录本领域消息)
+ * - 取消由子workflow处理(cancelAwareExtractParams → cancelExecutionNode)
  *
  * resumeGraph机制(与WealthService一致):
  * - 不使用SAA的resume()，而是重新执行graph + 注入accumulatedParams
@@ -67,7 +68,7 @@ public class BillService {
      * 2. FOLLOW_UP + 本领域activeThread → resumeGraph(与WealthService一致的resume机制)
      * 3. FOLLOW_UP + 无activeThread → 降级为SWITCH_NEW
      * 4. SWITCH_NEW → 新建thread + executeGraph
-     * 5. CANCEL: 只在FOLLOW_UP分支中处理(纯取消表达)
+     * 5. 取消由子workflow处理(cancelAwareExtractParams检测取消意图)
      */
     public WorkflowOutput handle(String sessionId, String userInput) {
         log.info("[BillService] Handling: sessionId={}, input={}", sessionId, userInput);
@@ -78,16 +79,9 @@ public class BillService {
                     "prompts/l1-routing-simple.st", DOMAIN_NAME, billChatMemory);
             log.info("[BillService] Phase1: routeType={}, confidence={}", phase1.getRouteType(), phase1.getConfidence());
 
-            // ========== CANCEL检测: 只在FOLLOW_UP + 本领域activeThread时处理 ==========
+            // ========== FOLLOW_UP分支 ==========
             if (phase1.isFollowUp()) {
                 AgentStateManager.ActiveThreadInfo active = stateManager.getActiveThread(sessionId);
-                if (active != null && INTENT.equals(active.getIntent()) && isCancelExpression(userInput)) {
-                    log.info("[BillService] Cancel detected during FOLLOW_UP");
-                    billChatMemory.add(sessionId, new UserMessage(userInput));
-                    WorkflowOutput cancelResult = graphExecutionService.cancelGraph(INTENT, active.getThreadId(), sessionId);
-                    recordSystemReply(sessionId, cancelResult);
-                    return cancelResult;
-                }
 
                 // ========== FOLLOW_UP + 本领域activeThread → resumeGraph ==========
                 if (active != null && INTENT.equals(active.getIntent())) {
@@ -150,12 +144,5 @@ public class BillService {
 
     private void recordSystemReply(String sessionId, WorkflowOutput output) {
         ChatHistoryUtils.recordReply(billChatMemory, sessionId, output, "BillService");
-    }
-
-    private boolean isCancelExpression(String input) {
-        if (input == null) return false;
-        String trimmed = input.trim();
-        // 只匹配纯取消表达，不含新意图。"算了X"/"不查了查账单"等由L0判断路由到新领域
-        return trimmed.matches("^(取消|算了|不要了|不查了|不了|放弃|别查了|取消查询)$");
     }
 }

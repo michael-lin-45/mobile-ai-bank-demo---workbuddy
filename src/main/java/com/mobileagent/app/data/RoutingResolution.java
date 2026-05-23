@@ -46,7 +46,9 @@ public class RoutingResolution {
         /** 意图模糊，需要追问 */
         DISAMBIGUATION,
         /** 无法识别，拒绝 */
-        REJECTED
+        REJECTED,
+        /** 用户取消当前操作(如消歧中取消) */
+        CANCELLED
     }
 
     // ==================== 工厂方法 ====================
@@ -74,6 +76,12 @@ public class RoutingResolution {
                 .build();
     }
 
+    public static RoutingResolution cancelled() {
+        return RoutingResolution.builder()
+                .status(RoutingStatus.CANCELLED)
+                .build();
+    }
+
     // ==================== 便捷判断 ====================
 
     public boolean isResolved() {
@@ -86,5 +94,9 @@ public class RoutingResolution {
 
     public boolean isRejected() {
         return status == RoutingStatus.REJECTED;
+    }
+
+    public boolean isCancelled() {
+        return status == RoutingStatus.CANCELLED;
     }
 }
