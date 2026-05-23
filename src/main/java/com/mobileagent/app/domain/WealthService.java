@@ -8,9 +8,9 @@ import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.execution.GraphExecutionService;
 import com.mobileagent.app.router.IntentResolver;
 import com.mobileagent.app.manager.AgentStateManager;
+import com.mobileagent.app.util.ChatHistoryUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Service;
 
@@ -215,27 +215,7 @@ public class WealthService {
     // ==================== ChatMemory管理 ====================
 
     private void recordSystemReply(String sessionId, WorkflowOutput output) {
-        if (output == null) return;
-        String reply = extractReplyContent(output);
-        if (reply != null && !reply.isEmpty()) {
-            wealthChatMemory.add(sessionId, new AssistantMessage(reply));
-            log.debug("[WealthService] Recorded system reply: session={}, reply={}", sessionId, truncate(reply, 50));
-        }
-    }
-
-    private String extractReplyContent(WorkflowOutput output) {
-        return switch (output.getStatus()) {
-            case "INTERRUPTED" -> output.getQuestion();
-            case "COMPLETED" -> output.getContent();
-            case "DISAMBIGUATION" -> output.getQuestion();
-            case "ERROR" -> output.getErrorMessage();
-            default -> null;
-        };
-    }
-
-    private String truncate(String s, int maxLen) {
-        if (s == null) return "null";
-        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
+        ChatHistoryUtils.recordReply(wealthChatMemory, sessionId, output, "WealthService");
     }
 
     private boolean isCancelExpression(String input) {

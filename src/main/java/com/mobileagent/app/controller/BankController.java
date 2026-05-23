@@ -7,9 +7,9 @@ import com.mobileagent.app.domain.WealthService;
 import com.mobileagent.app.router.DomainRouter;
 import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.manager.AgentStateManager;
+import com.mobileagent.app.util.ChatHistoryUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.web.bind.annotation.*;
 
@@ -121,19 +121,6 @@ public class BankController {
     // ==================== 内部方法 ====================
 
     private void recordSystemReply(String sessionId, WorkflowOutput output) {
-        if (output == null) return;
-        String reply = extractReplyContent(output);
-        if (reply != null && !reply.isEmpty()) {
-            chatMemory.add(sessionId, new AssistantMessage(reply));
-        }
-    }
-
-    private String extractReplyContent(WorkflowOutput output) {
-        return switch (output.getStatus()) {
-            case "INTERRUPTED", "DISAMBIGUATION" -> output.getQuestion();
-            case "COMPLETED" -> output.getContent();
-            case "ERROR" -> output.getErrorMessage();
-            default -> null;
-        };
+        ChatHistoryUtils.recordReply(chatMemory, sessionId, output, null);
     }
 }

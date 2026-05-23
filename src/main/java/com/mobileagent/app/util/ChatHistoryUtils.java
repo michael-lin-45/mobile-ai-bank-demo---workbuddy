@@ -1,6 +1,8 @@
 package com.mobileagent.app.util;
 
+import com.mobileagent.app.data.WorkflowOutput;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import lombok.extern.slf4j.Slf4j;
 
@@ -66,5 +68,23 @@ public class ChatHistoryUtils {
             log.warn("[ChatHistoryUtils] Failed to read chat history for sessionId={}", sessionId, e);
             return "(无法读取历史对话)";
         }
+    }
+
+    /** 将WorkflowOutput的回复内容记录到ChatMemory */
+    public static void recordReply(ChatMemory chatMemory, String sessionId, WorkflowOutput output, String logLabel) {
+        if (output == null) return;
+        String reply = output.getReplyContent();
+        if (reply != null && !reply.isEmpty()) {
+            chatMemory.add(sessionId, new AssistantMessage(reply));
+            if (logLabel != null) {
+                log.debug("[{}] Recorded system reply: session={}, reply={}", logLabel, sessionId, truncate(reply, 50));
+            }
+        }
+    }
+
+    /** 截断字符串,用于日志输出 */
+    public static String truncate(String s, int maxLen) {
+        if (s == null) return "null";
+        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
     }
 }

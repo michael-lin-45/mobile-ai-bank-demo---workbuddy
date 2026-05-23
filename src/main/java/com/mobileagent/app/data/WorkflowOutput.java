@@ -71,4 +71,14 @@ public class WorkflowOutput {
                 .errorMessage(errorMessage)
                 .build();
     }
+
+    /** 根据状态提取回复内容 */
+    public String getReplyContent() {
+        return switch (status) {
+            case "COMPLETED" -> content;
+            case "INTERRUPTED", "DISAMBIGUATION" -> question;
+            case "ERROR" -> errorMessage;
+            default -> null;
+        };
+    }
 }
