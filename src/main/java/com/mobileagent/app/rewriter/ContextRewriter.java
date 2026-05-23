@@ -42,13 +42,6 @@ public class ContextRewriter {
     private static final String DEFAULT_TEMPLATE_PATH = "prompts/l1-context-rewrite.st";
 
     /**
-     * 上下文改写 - 将依赖历史的用户输入改写为自包含描述 (使用默认模板)
-     */
-    public String rewrite(String sessionId, String userInput, ChatMemory chatMemory, String domainName) {
-        return rewrite(sessionId, userInput, chatMemory, domainName, DEFAULT_TEMPLATE_PATH);
-    }
-
-    /**
      * 上下文改写 - 将依赖历史的用户输入改写为自包含描述
      *
      * @param sessionId 会话ID

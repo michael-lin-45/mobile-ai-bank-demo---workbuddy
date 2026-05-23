@@ -42,19 +42,6 @@ public class IntentRouter {
     private static final String DEFAULT_TEMPLATE_PATH = "prompts/l1-intention.st";
 
     /**
-     * Phase2: 意图识别 + 上下文改写 (使用默认模板)
-     */
-    public RoutingResult rewriteAndIdentify(String sessionId, String userInput,
-                                             RoutingResult phase1Result,
-                                             String currentAgent, String pendingAgents,
-                                             String sessionState, String disambigContext,
-                                             ChatMemory chatMemory) {
-        return rewriteAndIdentify(sessionId, userInput, phase1Result,
-                currentAgent, pendingAgents, sessionState, disambigContext,
-                DEFAULT_TEMPLATE_PATH, chatMemory);
-    }
-
-    /**
      * Phase2: 意图识别 + 上下文改写 (使用指定模板)
      *
      * @param sessionId 会话ID

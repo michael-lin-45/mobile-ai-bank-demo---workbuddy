@@ -55,21 +55,7 @@ public class IntentResolver {
     private static final String DEFAULT_INTENTION_TEMPLATE = "prompts/l1-intention.st";
 
     /**
-     * 路由决策 - 统一入口 (使用默认模板)
-     */
-    public RoutingResolution resolve(String sessionId, String userInput, RoutingResult phase1Result,
-                                      ChatMemory chatMemory,
-                                      boolean inDisambiguation, String disambiguationGroupId,
-                                      boolean hasSuspendedAgents,
-                                      Map<String, ?> suspendedAgents) {
-        return resolve(sessionId, userInput, phase1Result, chatMemory,
-                inDisambiguation, disambiguationGroupId,
-                hasSuspendedAgents, suspendedAgents,
-                DEFAULT_INTENTION_TEMPLATE);
-    }
-
-    /**
-     * 路由决策 - 统一入口 (使用指定模板)
+     * 路由决策 - 统一入口
      */
     public RoutingResolution resolve(String sessionId, String userInput, RoutingResult phase1Result,
                                       ChatMemory chatMemory,
