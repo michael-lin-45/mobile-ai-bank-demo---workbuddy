@@ -42,7 +42,7 @@ routing:
     # 对话历史存储对数(1对=1条用户+1条助手),默认10对=20条消息,ChatMemory存储上限
     max-pairs: 10
     # L0/L1意图判断和改写节点使用的历史对数,默认6对=12条消息,超出部分截断不传给LLM
-    judgment-max-pairs: 6
+    judgment-max-pairs: 8
   verification:
     max-retries: 1
 

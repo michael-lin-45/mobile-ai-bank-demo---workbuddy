@@ -1,1078 +1,1391 @@
-# 手机银行 AI Agent L0→L1→L2 架构完整文档
+# 手机银行AI Agent 全架构文档
 
-## 目录
-1. [全景架构图](#1-全景架构图)
-2. [L0 领域调度层](#2-l0-领域调度层)
-3. [L1 领域路由层](#3-l1-领域路由层)
-4. [L2 子智能体 Graph 层](#4-l2-子智能体-graph-层)
-5. [AgentStateManager 状态管理](#5-agentstatemanager-状态管理)
-6. [场景流程图](#6-场景流程图)
-7. [类图与调用关系](#7-类图与调用关系)
-8. [关键代码分析](#8-关键代码分析)
-9. [配置项说明](#9-配置项说明)
-10. [完整文件清单](#10-完整文件清单)
+> 最后更新: 2026-05-24 | 基于代码commit `eec0ada`
 
 ---
 
-## 1. 全景架构图
+## 目录
 
-### 1.1 L0→L1→L2 分层组件图
+1. [系统总览](#1-系统总览)
+2. [类继承体系](#2-类继承体系)
+3. [数据结构](#3-数据结构)
+4. [意图直达流程](#4-意图直达流程)
+5. [意图接续流程](#5-意图接续流程)
+6. [意图跳转流程](#6-意图跳转流程)
+7. [意图恢复流程](#7-意图恢复流程)
+8. [模糊识别/消歧流程](#8-模糊识别消歧流程)
+9. [取消流程](#9-取消流程)
+10. [状态管理与TTL](#10-状态管理与ttl)
+11. [L2子Graph架构](#11-l2子graph架构)
+12. [SAA Graph Resume机制缺陷与Workaround](#12-saa-graph-resume机制缺陷与workaround)
+13. [Prompt模板体系](#13-prompt模板体系)
+14. [Spring Bean配置](#14-spring-bean配置)
+15. [已知限制与改进方向](#15-已知限制与改进方向)
+
+---
+
+## 1. 系统总览
+
+### 1.1 三层架构
+
+```
+L0 (领域路由)  →  L1 (领域服务)  →  L2 (子智能体Graph)
+DomainRouter      AbstractDomainService    AbstractGraphConfig
+                  ├─ SingleSubAgent        ├─ TransferGraph
+                  └─ MultiSubAgent         ├─ BillQueryGraph
+                                          ├─ WealthConsultGraph
+                                          └─ WealthInterpretGraph
+```
+
+| 层级 | 职责 | 输入 | 输出 |
+|------|------|------|------|
+| **L0** | 判断领域(WEALTH/TRANSFER/BILL/UNSUPPORTED/CHAT) | 用户原始输入 | 领域名 |
+| **L1** | 领域内意图路由(FOLLOW_UP/SWITCH_NEW/RESUME) + 状态管理 | 用户输入 + 领域 | WorkflowOutput |
+| **L2** | 参数提取 + 多轮提问 + 业务执行 | 改写后输入 + accumulatedParams | WorkflowOutput |
+
+### 1.2 系统全图
 
 ```mermaid
 graph TB
-    Client["📱 前端/客户端"]
-    
-    subgraph L0["L0 — 领域调度层 (无状态)"]
-        BC["BankController<br/>POST /api/bank/chat"]
-        DR["DomainRouter<br/>qwen2.5-7b-instruct<br/>5领域分类"]
-        GCM["全局ChatMemory<br/>所有对话记录"]
+    subgraph API["API层"]
+        BC[BankController<br/>POST /api/bank/chat<br/>GET /api/bank/state<br/>DELETE /api/bank/session]
     end
-    
-    subgraph L1["L1 — 领域路由层 (各有状态)"]
-        direction LR
-        subgraph WL1["💰 理财 WealthService"]
-            WCM["理财ChatMemory"]
-            WCR["ContextRouter<br/>FOLLOW_UP/SWITCH_NEW/RESUME"]
-            WIR["IntentionRouter<br/>推荐 vs 解读 + 改写"]
-            WRS["RoutingService<br/>消歧+置信度+模糊匹配"]
-        end
-        subgraph TL1["💸 转账 TransferService"]
-            TCM["转账ChatMemory"]
-            TCR["ContextRouter<br/>FOLLOW_UP/SWITCH_NEW"]
-            TRW["ContextRewriter<br/>上下文改写"]
-        end
-        subgraph BL1["📊 账单 BillService"]
-            BCM["账单ChatMemory"]
-            BCR["ContextRouter<br/>FOLLOW_UP/SWITCH_NEW"]
-            BRW["ContextRewriter<br/>上下文改写"]
-        end
-        subgraph CL1["💬 闲聊 ChatService"]
-            CCL["ChatClient<br/>qwen-turbo 直接对话"]
-        end
+
+    subgraph L0["L0 领域路由"]
+        DR[DomainRouter<br/>确定性关键词 + LLM兜底]
     end
-    
-    subgraph L2["L2 — 子智能体 Graph"]
-        WCG["WealthConsultGraph<br/>理财推荐"]
-        WIG["WealthInterpretGraph<br/>理财解读"]
-        TG["TransferGraph<br/>转账"]
-        BG["BillQueryGraph<br/>账单查询"]
+
+    subgraph L1["L1 领域服务"]
+        ADS[AbstractDomainService<br/>activeThread管理 + TTL]
+        SSAD[SingleSubAgentDomainService<br/>转账/账单 1-1]
+        MSAD[MultiSubAgentDomainService<br/>理财 1-N]
+        
+        ADS --> SSAD
+        ADS --> MSAD
+        
+        CR[ContextRouter<br/>Phase1: FOLLOW_UP/SWITCH_NEW/RESUME]
+        IR[IntentRouter<br/>Phase2: 意图识别+上下文改写]
+        IRes[IntentResolver<br/>消歧+置信度增强]
+        CW[ContextRewriter<br/>Single域FOLLOW_UP改写]
     end
-    
-    subgraph STATE["状态管理 (跨层共享)"]
-        ASM["AgentStateManager<br/>activeThreads<br/>suspendedAgents<br/>disambiguationStates<br/>@Scheduled 过期清理"]
-        IR["IntentRegistry<br/>意图注册表 + Graph绑定"]
-        CHU["ChatHistoryUtils<br/>历史格式化 + 截断"]
-        GES["GraphExecutionService<br/>execute/resume/cancel"]
+
+    subgraph L2["L2 子智能体"]
+        AGC[AbstractGraphConfig<br/>取消检测+参数提取+ask节点]
+        TG[TransferGraph]
+        BG[BillQueryGraph]
+        WCG[WealthConsultGraph]
+        WIG[WealthInterpretGraph]
+        
+        AGC --> TG & BG & WCG & WIG
     end
-    
-    Client --> BC
+
+    subgraph Infra["基础设施"]
+        GES[GraphExecutionService]
+        IReg[IntentRegistry<br/>意图注册+组管理+模糊匹配]
+        TU[TemplateUtils<br/>模板缓存+预热]
+        CM[ChatMemory<br/>全局 + 领域独立]
+    end
+
     BC --> DR
-    DR -.->|读取历史| GCM
-    DR -->|"WEALTH"| WL1
-    DR -->|"TRANSFER"| TL1
-    DR -->|"BILL"| BL1
-    DR -->|"CHAT"| CL1
-    DR -->|"UNSUPPORTED"| BC
-    
-    WCR --> WIR --> WRS
-    WRS --> WCG
-    WRS --> WIG
-    TCR --> TRW --> TG
-    BCR --> BRW --> BG
-    
-    WL1 -.-> ASM
-    TL1 -.-> ASM
-    BL1 -.-> ASM
+    BC --> SSAD & MSAD
+    SSAD --> CR & CW & GES
+    MSAD --> CR & IR & IRes & GES
+    IRes --> IR
+    GES --> IReg
+    SSAD & MSAD --> IReg
+    CR & IR --> TU
 ```
 
-### 1.2 模型配置图
+### 1.3 API端点
 
-```mermaid
-graph LR
-    subgraph "模型实例 (ModelConfig)"
-        DM["domainChatClient<br/>qwen2.5-7b-instruct<br/>L0 领域路由"]
-        CM["contextChatClient<br/>qwen2.5-7b-instruct<br/>L1 Phase1 上下文路由"]
-        IM["intentChatClient<br/>qwen2.5-7b-instruct<br/>L1 Phase2 意图识别+改写<br/>+ L1 上下文改写"]
-        PM["paramExtractChatClient<br/>qwen-plus<br/>L2 Graph 参数提取"]
-        CHM["chatChatClient<br/>qwen-turbo<br/>L1 闲聊"]
-    end
-```
-
-### 1.3 ChatMemory 隔离架构
-
-```mermaid
-graph LR
-    subgraph "全局 ChatMemory"
-        GM["chatMemory<br/>sessionId → [所有对话]<br/>L0 DomainRouter 手动读取<br/>ChatService Advisor 自动注入"]
-    end
-    
-    subgraph "领域 ChatMemory (隔离)"
-        WM["wealthChatMemory<br/>理财领域消息<br/>ContextRouter + IntentionRouter 读取"]
-        TM["transferChatMemory<br/>转账领域消息<br/>ContextRouter + ContextRewriter 读取"]
-        BM["billChatMemory<br/>账单领域消息<br/>ContextRouter + ContextRewriter 读取"]
-    end
-    
-    subgraph "历史截断 (ChatHistoryUtils)"
-        H["judgment-max-pairs=5<br/>只取最后5对(10条)消息<br/>4个服务共用"]
-    end
-    
-    GM --> H
-    WM --> H
-    TM --> H
-    BM --> H
-```
-
----
-
-## 2. L0 领域调度层
-
-### 2.1 L0 架构图
-
-```mermaid
-flowchart LR
-    REQ["POST /api/bank/chat<br/>sessionId + message"] --> BC["BankController"]
-    BC --> GCM1["chatMemory.add(user)"]
-    BC --> DR["DomainRouter.route()"]
-    
-    DR --> FH["formatChatHistory()<br/>ChatHistoryUtils<br/>取最后5对"]
-    FH --> LLM["domainChatClient<br/>qwen2.5-7b-instruct<br/>l0-domain.st"]
-    LLM --> PARSE["parseDomainResponse()<br/>JSON → DomainResult"]
-    
-    PARSE -->|"WEALTH"| WS["WealthService"]
-    PARSE -->|"TRANSFER"| TS["TransferService"]
-    PARSE -->|"BILL"| BS["BillService"]
-    PARSE -->|"CHAT"| CS["ChatService"]
-    PARSE -->|"UNSUPPORTED"| UNS["直接返回'功能暂不支持'"]
-    
-    WS & TS & BS & CS & UNS --> REC["chatMemory.add(assistant)<br/>记录系统回复"]
-    REC --> RESP["返回 WorkflowOutput"]
-```
-
-### 2.2 L0 领域分类特征
-
-**模型**: qwen2.5-7b-instruct（指令遵循能力更强）
-
-**5个领域**:
-
-| 领域 | 子意图 | 关键词 | 路由说明 |
-|------|--------|--------|---------|
-| WEALTH | WEALTH_CONSULT, WEALTH_INTERPRET | 理财/投资/收益/推荐/咨询/解读 | 只路由到领域，子意图由L1识别 |
-| TRANSFER | TRANSFER | 转账/转钱/汇款/打款/转给 | "赚钱给X""转500块"也是转账 |
-| BILL | BILL_QUERY | 账单/明细/消费/支出/收入/收支 | "收入多少"是查账单不是理财 |
-| UNSUPPORTED | 无 | 贷款/信用卡/积分/挂失/存款/保险 | 银行业务但不支持，返回"X功能暂不支持" |
-| CHAT | 无 | 闲聊/你好/天气 | 非银行业务话题 |
-
-**L0 判断规则** (l0-domain.st，42行精简提示词):
-
-| 规则 | 说明 | 示例 |
+| 端点 | 方法 | 说明 |
 |------|------|------|
-| 规则1: 当前消息意图清晰 → 按当前消息路由 | 历史不影响判断 | "先看看账单"→BILL，即使之前在转账 |
-| 规则2: 短回答/无领域关键词 → 结合历史 | 依赖上下文理解 | 历史问"转给谁"，"张三"→TRANSFER |
-| 规则3: 纯取消词 → 路由到历史活跃领域 | 取消是对当前agent的回应 | "算了"→TRANSFER（如果之前在转账） |
-| 绝对禁止 | 当前消息含领域关键词时，不能因历史在其他流程就路由到历史领域 | "查账单"必须→BILL，即使之前在转账 |
-
-**关键设计**: L0完全无状态，每轮重新判断。手动读取全局ChatMemory格式化到`{chat_history}`，不使用MemoryAdvisor。
+| `/api/bank/chat?sessionId=xxx` | POST | 主对话入口，body: `{"message": "..."}` |
+| `/api/bank/state?sessionId=xxx` | GET | 聚合各L1状态 |
+| `/api/bank/session?sessionId=xxx` | DELETE | 清除所有L1状态+全局ChatMemory |
 
 ---
 
-## 3. L1 领域路由层
+## 2. 类继承体系
 
-### 3.1 L1 核心概念
-
-L1层有三种路由类型，这是整个系统最关键的概念：
-
-| 路由类型 | 含义 | 触发条件 | 处理方式 |
-|----------|------|---------|---------|
-| **FOLLOW_UP** | 用户在继续当前对话，回答系统问题或补充参数 | 短回答、补充参数、取消表达 | 有activeThread→resumeGraph；无activeThread→ContextRewriter改写后SWITCH_NEW |
-| **SWITCH_NEW** | 用户开了全新话题 | 新意图、与历史无关 | 挂起当前activeThread，新建thread+executeGraph |
-| **RESUME** | 用户要恢复之前被挂起的任务 | "继续X""回到X""还是X吧" | 从suspendedAgents恢复线程+accumulatedParams，resumeGraph |
-
-**FOLLOW_UP vs RESUME 的关键区别**:
-- FOLLOW_UP: 回答系统**刚问的问题**（助手问"转给谁"，用户说"张三"）
-- RESUME: **主动要回到**之前被挂起的任务（挂起列表有TRANSFER，用户说"继续转账"）
-
-### 3.2 L1 两种模式对比
-
-| 特性 | 💰 理财L1 | 💸 转账L1 / 📊 账单L1 | 💬 闲聊L1 |
-|------|-----------|---------------------|-----------|
-| Service | WealthService | TransferService / BillService | ChatService |
-| Phase1路由 | ContextRouter (F/S/R 三种) | ContextRouter (F/S 简化) | 无 |
-| Phase2路由 | IntentionRouter + RoutingService | 无 | 无 |
-| 上下文改写 | IntentionRouter (改写+识别一体) | ContextRewriter (仅改写) | 无 |
-| 消歧 | ✅ WEALTH_CONSULT vs INTERPRET | ❌ | ❌ |
-| suspendedAgents | ✅ (推荐↔解读切换) | ✅ (跨领域切换时挂起) | ❌ |
-| Prompt模板 | l1-routing.st | l1-routing-simple.st | — |
-| ChatMemory | wealthChatMemory | transfer/billChatMemory | 全局chatMemory |
-
-### 3.3 理财L1 — 双Phase路由架构图
+### 2.1 L1领域服务类图
 
 ```mermaid
-flowchart TD
-    INPUT["WealthService.handle()"] --> P1["Phase1: ContextRouter<br/>(l1-routing.st)<br/>FOLLOW_UP / SWITCH_NEW / RESUME"]
-    
-    P1 -->|"FOLLOW_UP + 在消歧中 + 取消"| CANCEL["handleCancel()"]
-    P1 -->|"FOLLOW_UP + 非消歧 + 有activeThread"| RESUME_FAST["⚡ 快速路径: resumeGraph()<br/>不经IntentionRouter"]
-    P1 -->|"FOLLOW_UP + 无activeThread + 无suspended"| FALLBACK["降级为SWITCH_NEW"]
-    P1 -->|"SWITCH_NEW / RESUME / 降级"| RS["RoutingService.resolve()"]
-    
-    RS -->|"在消歧中"| DISAMBIG_ANS["handleDisambiguationAnswer()"]
-    RS -->|"新意图"| P2_FLOW["Phase2: IntentionRouter<br/>(l1-intention.st)"]
-    
-    P2_FLOW --> DISAMBIG_CHECK{"置信度消歧判断"}
-    DISAMBIG_CHECK -->|"ambiguous + 低置信度"| TRIGGER_DIS["触发消歧"]
-    DISAMBIG_CHECK -->|"ambiguous + 高置信度 ≥0.85"| TRUST["信任首选意图"]
-    DISAMBIG_CHECK -->|"非ambiguous + 低置信度 <0.7 + 属歧义组"| SUPP_DIS["补充消歧"]
-    DISAMBIG_CHECK -->|"明确意图"| RESOLVED["✅ RESOLVED"]
-    
-    DISAMBIG_ANS -->|"映射到组内意图"| RESOLVED
-    DISAMBIG_ANS -->|"仍模糊"| REJECTED["❌ REJECTED"]
-    
-    TRIGGER_DIS --> DISAMBIG_OUT["DISAMBIGUATION输出"]
-    SUPP_DIS --> DISAMBIG_OUT
-    REJECTED --> REJECT_OUT["COMPLETED: 该功能暂不支持"]
-    TRUST --> RESOLVED
-    
-    RESOLVED --> EXEC{"routeType?"}
-    EXEC -->|"SWITCH_NEW"| SWITCH["handleSwitchNew()<br/>挂起当前 + 新建thread + executeGraph"]
-    EXEC -->|"RESUME"| RESUME_S["handleResume()<br/>从suspended恢复 + resumeGraph"]
-```
-
-**理财L1的快速路径**: FOLLOW_UP + 有activeThread → 直接resumeGraph，**跳过IntentionRouter**。原因：用户正在回答子智能体的追问，意图已经明确，无需再次识别，降低延迟。
-
-### 3.4 转账/账单L1 — 简化路由架构图
-
-```mermaid
-flowchart TD
-    INPUT["TransferService/BillService.handle()"] --> P1["Phase1: ContextRouter<br/>(l1-routing-simple.st)<br/>FOLLOW_UP / SWITCH_NEW"]
-    
-    P1 -->|"FOLLOW_UP"| FU_CHECK{"检查条件"}
-    FU_CHECK -->|"本领域activeThread + 取消表达"| CANCEL["cancelGraph()<br/>注入_cancelSignal"]
-    FU_CHECK -->|"有activeThread (任何领域)"| RESUME["resumeGraph()<br/>注入accumulatedParams"]
-    FU_CHECK -->|"无activeThread"| REWRITE["ContextRewriter.rewrite()<br/>上下文改写后降级SWITCH_NEW"]
-    
-    P1 -->|"SWITCH_NEW"| SN["handleSwitchNew()<br/>挂起当前activeThread + 新建thread + executeGraph"]
-    REWRITE --> SN
-    
-    subgraph "ContextRewriter 改写流程"
-        CR_LLM["intentChatClient<br/>l1-context-rewrite.st"] --> CR_PARSE["解析JSON<br/>rewritten_input"]
-    end
-    
-    REWRITE --> CR_LLM
-    CR_PARSE --> SN
-```
-
-**ContextRewriter 使用场景**: 用户在转账/账单领域完成操作后(activeThread已清空)，继续追问如"那上个月的呢"。此时FOLLOW_UP但无activeThread → 改写为自包含描述("查上个月的收入") → 作为新操作执行。**ChatMemory保存原始话术，Graph接收改写后的输入**。
-
-### 3.5 L1 意图识别与改写特征
-
-#### ContextRouter — Phase1 路由判断
-
-| 特征 | 说明 |
-|------|------|
-| 模型 | qwen2.5-7b-instruct |
-| 两种模板 | l1-routing.st (理财, F/S/R) / l1-routing-simple.st (转账/账单, F/S) |
-| 输入 | 领域ChatMemory + 会话状态 + 当前消息 |
-| 输出 | `{route_type, confidence}` |
-| 简化模式 | RESUME自动降级为SWITCH_NEW，只输出F/S |
-| 降级策略 | LLM调用失败 → 默认SWITCH_NEW |
-
-#### IntentionRouter — Phase2 意图识别+改写 (仅理财)
-
-| 特征 | 说明 |
-|------|------|
-| 模型 | qwen2.5-7b-instruct |
-| 输入 | 理财ChatMemory + 会话状态 + 消歧上下文 + Phase1结果 |
-| 输出 | `{intent_name, rewritten_input, route_type, confidence, is_ambiguous, candidate_intents}` |
-| 核心约束 | 只在WEALTH_CONSULT和WEALTH_INTERPRET中选择 |
-| 改写目的 | 将依赖历史的模糊表达改为自包含描述，方便子智能体提取参数 |
-| 消歧上下文 | 注入追问问题和候选意图描述，帮助映射短回答 |
-
-#### ContextRewriter — 上下文改写 (仅转账/账单)
-
-| 特征 | 说明 |
-|------|------|
-| 模型 | qwen2.5-7b-instruct (复用intentChatClient) |
-| 输入 | 领域ChatMemory + 当前消息 + 领域名 |
-| 输出 | `{rewritten_input, need_rewrite}` |
-| 与IntentionRouter区别 | 无意图识别(L0已确定)、无消歧(单意图)、只做改写 |
-
-#### RoutingService — 消歧+置信度增强
-
-```mermaid
-flowchart TD
-    P2["Phase2: IntentionRouter结果"] --> CHECK{"置信度消歧判断"}
-    
-    CHECK -->|"ambiguous=true<br/>+ confidence < 0.85"| DIS1["触发消歧<br/>(LLM自己不确定)"]
-    CHECK -->|"ambiguous=true<br/>+ confidence ≥ 0.85"| TRUST["信任首选意图<br/>(LLM虽标歧义但很自信)"]
-    CHECK -->|"ambiguous=false<br/>+ confidence < 0.7<br/>+ 意图属歧义组"| DIS2["补充消歧<br/>(LLM不够自信)"]
-    CHECK -->|"ambiguous=false<br/>+ confidence ≥ 0.7"| RESOLVED["直接RESOLVED"]
-    
-    DIS1 & DIS2 --> QUESTION["返回DISAMBIGUATION<br/>追问用户"]
-    QUESTION --> ANSWER["用户回答"]
-    ANSWER --> RE_ID["重新Phase2识别"]
-    RE_ID -->|"映射到组内意图"| RESOLVED2["✅ RESOLVED"]
-    RE_ID -->|"仍模糊"| REJECTED["❌ REJECTED<br/>(1次追问后不过度追问)"]
-```
-
-**RESUME判定优先级** (RoutingService.resolveRouteType):
-1. Phase2 LLM明确判断为RESUME → RESUME
-2. Phase1已经是RESUME → RESUME
-3. 识别到的意图在suspendedAgents中 → RESUME (状态兜底，防止LLM漏判)
-4. Phase1是FOLLOW_UP但无activeThread → SWITCH_NEW
-5. 兜底: Phase1的routeType
-
----
-
-## 4. L2 子智能体 Graph 层
-
-### 4.1 Graph 通用架构
-
-所有L2 Graph继承自`AbstractGraphConfig`，共享统一的结构：
-
-```mermaid
-graph LR
-    START --> DC["detectCancel<br/>LLM判断取消意图"]
-    DC -->|"非取消"| EP["extractParams<br/>LLM提取参数"]
-    DC -->|"取消"| CE["cancelExecution<br/>输出'已取消' → END"]
-    EP --> PR["paramRouter<br/>检查参数完整性"]
-    PR -->|"缺参数"| ASK["askXxx节点<br/>interruptBefore触发"]
-    PR -->|"参数齐全"| EXEC["executeXxx<br/>调用MockBankingService"]
-    PR -->|"取消信号"| CE
-    ASK -->|"用户回答→CONTINUE"| EP2["重新extractParams"]
-    EXEC --> END2["END"]
-    CE --> END3["END"]
-```
-
-### 4.2 四个Graph参数对照表
-
-| Graph | 必填参数 | 可选参数 | State Key前缀 | 追问节点 |
-|-------|---------|---------|-------------|---------|
-| TransferGraph | receiver, amount | purpose | `transfer.` | askReceiver, askAmount |
-| BillQueryGraph | timePeriod | expenseType | `bill.` | askTime, askType |
-| WealthConsultGraph | riskLevel | focusArea | `wealthConsult.` | askRiskLevel, askFocusArea |
-| WealthInterpretGraph | productName | — | `wealthInterpret.` | askProductName |
-
-### 4.3 resumeGraph 核心机制
-
-**不使用SAA框架的resume()**，原因是Bug#4519: interruptBefore在resume后不会重新触发。
-
-```mermaid
-sequenceDiagram
-    participant L1 as L1 Service
-    participant GES as GraphExecutionService
-    participant ASM as AgentStateManager
-    participant Graph as L2 Graph
-    
-    Note over L1,Graph: resumeGraph 流程
-    L1->>GES: resumeGraph(intent, threadId, userInput, sessionId)
-    GES->>ASM: getActiveThread(sessionId)
-    ASM-->>GES: activeThread (含accumulatedParams)
-    GES->>GES: getAccumulatedParamsFromActive()<br/>提取 {transfer.receiver: 张三}
-    GES->>ASM: setActiveThread(sessionId, newThreadId, intent)<br/>生成新threadId
-    GES->>ASM: newActive.setAccumulatedParams(...)<br/>恢复累积参数
-    GES->>Graph: executeGraph(graph, intent, newThreadId, userInput, sessionId, accumulatedParams)
-    Note over Graph: input注入accumulatedParams<br/>extractParams提取新参数<br/>paramRouter跳过已满足参数
-    Graph-->>GES: 检查结果
-```
-
-### 4.4 interruptBefore 中断检测
-
-GraphExecutionService.checkGraphResult() 的判断逻辑：
-
-```
-1. nextNode非空且非__END__ → INTERRUPTED (interruptBefore触发)
-2. nextNode为__END__ 但 _question非空 → INTERRUPTED (ask→END兜底)
-3. nextNode为__END__ 且 _question为空 → COMPLETED
-```
-
-中断时：suspendAgent → setActiveThread → 保存accumulatedParams → 返回INTERRUPTED+question
-
----
-
-## 5. AgentStateManager 状态管理
-
-### 5.1 数据结构
-
-```mermaid
-erDiagram
-    SESSION ||--o| ActiveThreadInfo : "有且仅有一个"
-    SESSION ||--o{ SuspendedInfo : "可有多个(按intent索引)"
-    SESSION ||--o| DisambiguationState : "至多一个"
-    
-    ActiveThreadInfo {
-        string threadId PK
-        string intent "TRANSFER/BILL_QUERY/WEALTH_CONSULT/WEALTH_INTERPRET"
-        Instant createdAt
-        map accumulatedParams "如{transfer.receiver: 张三, transfer.amount: 500}"
+classDiagram
+    class AbstractDomainService {
+        <<abstract>>
+        #String domainName
+        #String logTag
+        #ChatMemory chatMemory
+        #ContextRouter contextRouter
+        #GraphExecutionService graphExecutionService
+        #IntentRegistry intentRegistry
+        #long activeThreadExpireMinutes
+        -Map~String,ActiveThreadInfo~ activeThreads
+        
+        +handle(sessionId, userInput)* WorkflowOutput
+        +clearSession(sessionId)*
+        +getSessionStateDescription(sessionId)* String
+        +getHandledIntents()* List~IntentInfo~
+        +getDomainName() String
+        
+        #getOwnActiveThread(sessionId) ActiveThreadInfo
+        #setOwnActiveThread(sessionId, threadId, intent)
+        #clearOwnActiveThread(sessionId)
+        #cleanupExpiredActiveThreads()
+        #addUserMessage(sessionId, userInput)
+        #recordSystemReply(sessionId, output)
+        #saveAccumulatedParams(sessionId, output)
+        #resumeActiveThread(sessionId, userInput, active) WorkflowOutput
+        #executeNewThread(sessionId, intent, rewrittenInput) WorkflowOutput
+        #generateThreadId() String
+        #buildCurrentAgent(sessionId) String
     }
-    
-    SuspendedInfo {
-        string threadId PK
-        string intent "被挂起的意图"
-        Instant suspendedAt "挂起时间"
-        Instant expiresAt "超时时间(默认20分钟, 可配置)"
-        map accumulatedParams "从activeThread继承"
+
+    class SingleSubAgentDomainService {
+        -String intent
+        -String intentDescription
+        -String routingTemplatePath
+        -String rewriterTemplatePath
+        -ContextRewriter contextRewriter
+        
+        +handle(sessionId, userInput) WorkflowOutput
+        -handleSwitchNew(sessionId, rewrittenInput) WorkflowOutput
+        +scheduledCleanup()
     }
-    
-    DisambiguationState {
-        string groupId "如WEALTH"
+
+    class MultiSubAgentDomainService {
+        -IntentResolver intentResolver
+        -String routingTemplatePath
+        -String intentionTemplatePath
+        -String rejectedMessage
+        -List~IntentInfo~ handledIntents
+        -int maxSuspendedDepth
+        -long suspendedExpireMinutes
+        -Map suspendedAgents
+        -Map disambiguationStates
+        
+        +handle(sessionId, userInput) WorkflowOutput
+        +getPendingAgentsDescription(sessionId) String
+        +cleanupExpiredSuspended()
+        -executeRoute(sessionId, resolution) WorkflowOutput
+        -handleSwitchNew(sessionId, intent, rewrittenInput) WorkflowOutput
+        -handleResume(sessionId, intent, userInput) WorkflowOutput
+        -suspendOwnAgent(sessionId, intent, threadId)
+        -getOwnSuspendedThread(sessionId, intent) SuspendedInfo
+        -isInDisambiguation(sessionId) boolean
     }
+
+    AbstractDomainService <|-- SingleSubAgentDomainService
+    AbstractDomainService <|-- MultiSubAgentDomainService
 ```
 
-### 5.2 线程生命周期
-
-```mermaid
-stateDiagram-v2
-    [*] --> Active: setActiveThread()
-    
-    Active --> Active: setActiveThread() 更新
-    Active --> Suspended: suspendAgent()<br/>(切换意图时)
-    Active --> Completed: completeAgent()<br/>(操作完成/取消)
-    
-    Suspended --> Active: resumeAgent() + setActiveThread()<br/>(恢复挂起任务)
-    Suspended --> Expired: @Scheduled cleanupExpiredSuspended()<br/>(超过20分钟)
-    
-    Completed --> [*]
-    Expired --> [*]
-```
-
-### 5.3 关键方法
-
-| 方法 | 作用 | 调用场景 |
-|------|------|---------|
-| `setActiveThread(sessionId, threadId, intent)` | 设置/清除活跃线程 | 新建意图、恢复意图 |
-| `suspendAgent(sessionId, intent, threadId)` | 挂起意图线程(继承accumulatedParams) | 切换意图、消歧时 |
-| `resumeAgent(sessionId, intent)` | 从suspendedAgents恢复 | RESUME路由 |
-| `completeAgent(sessionId, intent)` | 完成(清空active+移除suspended) | 操作完成/取消 |
-| `getSuspendedThread(sessionId, intent)` | 获取挂起线程(自动检查过期) | RESUME判定 |
-| `cleanupExpiredSuspended()` | 定时清理过期挂起记录(@Scheduled每分钟) | 自动执行 |
-
-### 5.4 配置项
-
-| 配置 | 默认值 | 说明 |
-|------|-------|------|
-| `session.pending-agents.max-depth` | 3 | 最大挂起深度，超出时淘汰最早的 |
-| `session.pending-agents.expire-minutes` | 20 | 挂起超时(分钟)，超时自动清理 |
-
-### 5.5 accumulatedParams 传递链
-
-```
-Graph中断 → checkGraphResult() → extractAccumulatedParams() → active.setAccumulatedParams()
-                                ↓
-suspendAgent() → info.setAccumulatedParams(active.getAccumulatedParams())  // 继承
-                                ↓
-resumeAgent() → newActive.setAccumulatedParams(suspendedInfo.getAccumulatedParams())  // 恢复
-                                ↓
-resumeGraph() → executeGraph(..., accumulatedParams) → input.putAll(accumulatedParams)  // 注入Graph
-```
-
----
-
-## 6. 场景流程图
-
-### 6.1 一句直达
-
-用户一句话包含所有必要参数，L0路由→L1 SWITCH_NEW→L2直接完成。
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant L0 as L0 DomainRouter
-    participant L1 as L1 Service
-    participant L2 as L2 Graph
-    
-    U->>L0: "转账给张三500元"
-    L0->>L0: 关键词"转账"→TRANSFER
-    L0->>L1: TRANSFER
-    L1->>L1: ContextRouter→SWITCH_NEW
-    L1->>L2: executeGraph(input="转账给张三500元")
-    L2->>L2: extractParams→receiver=张三, amount=500
-    L2->>L2: paramRouter→ALL_GOOD
-    L2->>L2: executeTransfer→成功
-    L2-->>L1: COMPLETED "转账成功！"
-    L1-->>U: {status:"COMPLETED"}
-```
-
-### 6.2 意图接续 (FOLLOW_UP)
-
-用户回答子智能体的追问，参数逐步收集。
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant L0 as L0
-    participant L1 as L1 TransferService
-    participant L2 as L2 TransferGraph
-    participant SM as AgentStateManager
-    
-    U->>L0: "我要转账"
-    L0->>L1: TRANSFER
-    L1->>L1: ContextRouter→SWITCH_NEW
-    L1->>SM: setActiveThread(TRANSFER)
-    L1->>L2: executeGraph("我要转账")
-    L2-->>L1: INTERRUPTED "转给谁？"
-    L1->>SM: suspendAgent(TRANSFER) + setActiveThread(TRANSFER)
-    L1-->>U: {status:"INTERRUPTED", question:"转给谁？"}
-    
-    U->>L0: "张三"
-    L0->>L1: TRANSFER (短回答→历史领域)
-    L1->>L1: ContextRouter→FOLLOW_UP
-    L1->>SM: getActiveThread()→TRANSFER
-    L1->>L2: resumeGraph("张三", params={})
-    L2-->>L1: INTERRUPTED "转多少？"
-    L1->>SM: 保存accumulatedParams={receiver:张三}
-    L1-->>U: {status:"INTERRUPTED", question:"转多少？"}
-    
-    U->>L0: "500"
-    L0->>L1: TRANSFER
-    L1->>L1: ContextRouter→FOLLOW_UP
-    L1->>L2: resumeGraph("500", params={receiver:张三})
-    L2->>L2: extractParams→amount=500
-    L2->>L2: paramRouter→ALL_GOOD(receiver已有)
-    L2-->>L1: COMPLETED "转账成功！"
-    L1->>SM: completeAgent(TRANSFER)
-    L1-->>U: {status:"COMPLETED"}
-```
-
-### 6.3 中断恢复 (INTERRUPTED→resume)
-
-子智能体因缺参数中断，用户回答后恢复执行。流程同6.2，核心是resumeGraph机制。
-
-### 6.4 跨领域意图切换
-
-用户在A流程中被B打断，A被挂起，可后续恢复。
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant L0 as L0
-    participant TS as L1 TransferService
-    participant BS as L1 BillService
-    participant SM as AgentStateManager
-    
-    U->>L0: "我要转账"
-    L0->>TS: TRANSFER
-    TS->>SM: setActiveThread(TRANSFER)
-    TS-->>U: INTERRUPTED "转给谁？"
-    
-    U->>L0: "张三"
-    L0->>TS: TRANSFER (FOLLOW_UP)
-    TS-->>U: INTERRUPTED "转多少？"
-    Note over SM: activeThread=TRANSFER<br/>accumulatedParams={receiver:张三}
-    
-    U->>L0: "算了查账单"
-    Note over L0: "算了+新意图"→BILL
-    L0->>BS: BILL
-    BS->>L1: ContextRouter→SWITCH_NEW
-    BS->>SM: suspendAgent(TRANSFER) ← 挂起！
-    Note over SM: suspendedAgents={TRANSFER: {receiver:张三}}<br/>activeThread=BILL_QUERY
-    BS-->>U: INTERRUPTED "哪个时间段的账单？"
-```
-
-### 6.5 意图恢复 (RESUME)
-
-用户从挂起列表恢复之前被中断的任务。
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant L0 as L0
-    participant WS as L1 WealthService
-    participant SM as AgentStateManager
-    
-    Note over SM: 挂起列表: {WEALTH_CONSULT: {riskLevel:稳健}}
-    Note over SM: activeThread=TRANSFER(已完成)
-    
-    U->>L0: "继续看理财推荐"
-    Note over L0: "继续"→WEALTH
-    L0->>WS: WEALTH
-    WS->>WS: ContextRouter→RESUME
-    WS->>WS: RoutingService.resolve()
-    WS->>WS: IntentionRouter→WEALTH_CONSULT, routeType=RESUME
-    WS->>SM: getSuspendedThread(WEALTH_CONSULT)→找到！
-    WS->>SM: resumeAgent(WEALTH_CONSULT)
-    WS->>SM: setActiveThread(原threadId, WEALTH_CONSULT)
-    WS->>WS: resumeGraph(input, params={riskLevel:稳健})
-    Note over WS: 注入accumulatedParams→paramRouter跳过riskLevel
-    WS-->>U: INTERRUPTED/COMPLETED
-```
-
-### 6.6 取消操作
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant L0 as L0
-    participant TS as L1 TransferService
-    participant SM as AgentStateManager
-    
-    U->>L0: "我要转账"
-    L0->>TS: TRANSFER
-    TS->>SM: setActiveThread(TRANSFER)
-    TS-->>U: INTERRUPTED "转给谁？"
-    
-    U->>L0: "取消"
-    Note over L0: 纯取消词→路由到活跃领域TRANSFER
-    L0->>TS: TRANSFER
-    TS->>TS: ContextRouter→FOLLOW_UP
-    TS->>TS: isCancelExpression("取消")=true ✅
-    TS->>SM: cancelGraph(TRANSFER, threadId)
-    Note over TS: 注入_cancelSignal=true<br/>Graph执行cancelExecution→END
-    TS->>SM: completeAgent(TRANSFER)
-    TS-->>U: COMPLETED "好的,已取消当前操作"
-```
-
-### 6.7 闲聊
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant L0 as L0
-    participant CS as ChatService
-    
-    U->>L0: "今天天气怎么样"
-    L0->>L0: 无银行关键词→CHAT
-    L0->>CS: CHAT
-    CS->>CS: chatChatClient.prompt()<br/>Advisor自动注入全局ChatMemory
-    CS-->>U: COMPLETED {intent:"CHAT", content:"..."}
-```
-
-### 6.8 FOLLOW_UP无activeThread → ContextRewriter
-
-用户完成操作后继续追问，此时activeThread已清空。
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant L0 as L0
-    participant BS as L1 BillService
-    participant CR as ContextRewriter
-    participant SM as AgentStateManager
-    
-    U->>L0: "查这个月收入"
-    L0->>BS: BILL
-    BS-->>U: COMPLETED "本月收入: 15000元"
-    Note over SM: completeAgent()→activeThread=null
-    
-    U->>L0: "那上个月的呢"
-    L0->>BS: BILL
-    BS->>BS: ContextRouter→FOLLOW_UP
-    BS->>SM: getActiveThread()→null!
-    BS->>CR: rewrite("那上个月的呢", billChatMemory)
-    CR->>CR: 读取历史→"查这个月收入"
-    CR->>CR: 改写→"查上个月的收入"
-    CR-->>BS: rewrittenInput="查上个月的收入"
-    BS->>BS: handleSwitchNew(sessionId, "那上个月的呢", "查上个月的收入")
-    Note over BS: ChatMemory保存原始"那上个月的呢"<br/>Graph接收改写后"查上个月的收入"
-    BS-->>U: INTERRUPTED/COMPLETED
-```
-
-### 6.9 消歧 (理财领域)
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant L0 as L0
-    participant WS as WealthService
-    participant RS as RoutingService
-    participant SM as AgentStateManager
-    
-    U->>L0: "理财"
-    L0->>WS: WEALTH
-    WS->>RS: resolve("理财")
-    RS->>RS: IntentionRouter→ambiguous=true, WEALTH组
-    RS->>SM: setDisambiguationState(WEALTH)
-    RS-->>WS: DISAMBIGUATION "咨询还是解读？"
-    WS-->>U: {status:"DISAMBIGUATION", candidates:[CONSULT,INTERPRET]}
-    
-    U->>L0: "推荐"
-    L0->>WS: WEALTH
-    WS->>WS: ContextRouter→FOLLOW_UP (在消歧中)
-    WS->>RS: resolve("推荐") → handleDisambiguationAnswer()
-    RS->>RS: IntentionRouter→"推荐"映射到WEALTH_CONSULT
-    RS->>SM: clearDisambiguationState()
-    RS-->>WS: RESOLVED, intent=WEALTH_CONSULT
-    WS-->>U: INTERRUPTED "风险偏好？"
-```
-
----
-
-## 7. 类图与调用关系
-
-### 7.1 核心类继承关系
+### 2.2 L2子Graph类图
 
 ```mermaid
 classDiagram
     class AbstractGraphConfig {
         <<abstract>>
-        #intentChatClient: ChatClient
-        #paramExtractChatClient: ChatClient
-        #mockBankingService: MockBankingService
-        +detectCancel(state): String
-        +callExtractModel(prompt, schema): Map
-        +extractParams(state): Map
-        +paramRouter(state): String
-        +cancelExecution(state): Map
-        +buildGraph(): CompiledGraph
+        #ChatModel chatModel
+        #ObjectMapper objectMapper
+        
+        +getGraphName()* String
+        +buildExtractPrompt(userInput)* String
+        +parseExtractResult(content)* Map
+        +registerCustomKeys(strategies)*
+        +getCancelDetectionContext()* String
+        +getCancelKeywords() List~String~
+        
+        #getLatestInput(state) String
+        #callExtractModel(userInput) Map
+        #cancelAwareExtractParams(state) Map
+        #cancelAwareParamRouter(state) Map
+        #detectCancelFromInput(state) boolean
+        #mergeExtractedWithoutOverwrite(result, extracted, state)
+        #addCancelNode(graph)
+        #addCancelEdge(edges)
+        #addAskConditionalEdges(graph, askNodeName)
+        #createKeyStrategyFactory() KeyStrategyFactory
+        #createSaverConfig() SaverConfig
+        #createCompileConfig(interruptBeforeNodes) CompileConfig
     }
-    
+
     class TransferGraphConfig {
-        +extractParams(state): Map
-        +paramRouter(state): String
-        +askReceiver(state): Map
-        +askAmount(state): Map
-        +executeTransfer(state): Map
+        -MockBankingService mockBankingService
+        +transferGraph() CompiledGraph
     }
-    
+
     class BillQueryGraphConfig {
-        +extractParams(state): Map
-        +paramRouter(state): String
-        +askTime(state): Map
-        +askType(state): Map
-        +executeBillQuery(state): Map
+        -MockBankingService mockBankingService
+        +billQueryGraph() CompiledGraph
     }
-    
+
     class WealthConsultGraphConfig {
-        +extractParams(state): Map
-        +paramRouter(state): String
-        +askRiskLevel(state): Map
-        +askFocusArea(state): Map
-        +executeWealthConsult(state): Map
+        -MockBankingService mockBankingService
+        +wealthConsultGraph() CompiledGraph
     }
-    
+
     class WealthInterpretGraphConfig {
-        +extractParams(state): Map
-        +paramRouter(state): String
-        +askProductName(state): Map
-        +executeWealthInterpret(state): Map
+        -MockBankingService mockBankingService
+        +wealthInterpretGraph() CompiledGraph
     }
-    
+
     AbstractGraphConfig <|-- TransferGraphConfig
     AbstractGraphConfig <|-- BillQueryGraphConfig
     AbstractGraphConfig <|-- WealthConsultGraphConfig
     AbstractGraphConfig <|-- WealthInterpretGraphConfig
 ```
 
-### 7.2 L1 Service 调用关系
+### 2.3 路由组件类图
 
 ```mermaid
 classDiagram
-    class BankController {
-        -domainRouter: DomainRouter
-        -wealthService: WealthService
-        -transferService: TransferService
-        -billService: BillService
-        -chatService: ChatService
-        -chatMemory: ChatMemory
-        -stateManager: AgentStateManager
-        +chat(sessionId, message): WorkflowOutput
-        +getState(sessionId): Map
-        +clearSession(sessionId): Map
-    }
-    
     class DomainRouter {
-        -domainChatClient: ChatClient
-        -chatMemory: ChatMemory
-        -judgmentMaxPairs: int
-        +route(sessionId, userInput): DomainResult
+        -ChatClient domainChatClient
+        -ChatMemory chatMemory
+        -Map~String,LastDomainEntry~ lastActiveDomains
+        -long lastDomainExpireMinutes
+        +route(sessionId, userInput) DomainResult
+        +clearLastDomain(sessionId)
+        +cleanupExpiredLastDomains()
     }
-    
-    class WealthService {
-        -contextRouter: ContextRouter
-        -routingService: RoutingService
-        -graphExecutionService: GraphExecutionService
-        -intentRegistry: IntentRegistry
-        -stateManager: AgentStateManager
-        -wealthChatMemory: ChatMemory
-        +handle(sessionId, userInput): WorkflowOutput
-    }
-    
-    class TransferService {
-        -contextRouter: ContextRouter
-        -contextRewriter: ContextRewriter
-        -graphExecutionService: GraphExecutionService
-        -intentRegistry: IntentRegistry
-        -stateManager: AgentStateManager
-        -transferChatMemory: ChatMemory
-        +handle(sessionId, userInput): WorkflowOutput
-    }
-    
-    class BillService {
-        -contextRouter: ContextRouter
-        -contextRewriter: ContextRewriter
-        -graphExecutionService: GraphExecutionService
-        -intentRegistry: IntentRegistry
-        -stateManager: AgentStateManager
-        -billChatMemory: ChatMemory
-        +handle(sessionId, userInput): WorkflowOutput
-    }
-    
+
     class ContextRouter {
-        -chatClient: ChatClient
-        -intentRegistry: IntentRegistry
-        -judgmentMaxPairs: int
-        +route(sessionId, userInput, stateManager, template, domain, chatMemory): RoutingResult
+        -ChatClient chatClient
+        -IntentRegistry intentRegistry
+        +route(sessionId, userInput, currentAgent, pendingAgents, templatePath, domainName, chatMemory) RoutingResult
     }
-    
-    class IntentionRouter {
-        -chatClient: ChatClient
-        -intentRegistry: IntentRegistry
-        -judgmentMaxPairs: int
-        +rewriteAndIdentify(sessionId, userInput, phase1, stateManager, chatMemory): RoutingResult
+
+    class IntentRouter {
+        -ChatClient chatClient
+        -IntentRegistry intentRegistry
+        +rewriteAndIdentify(sessionId, userInput, phase1Result, currentAgent, pendingAgents, sessionState, disambigContext, templatePath, chatMemory) RoutingResult
     }
-    
+
+    class IntentResolver {
+        -IntentRouter intentRouter
+        -IntentRegistry intentRegistry
+        -double disambiguationThreshold
+        -double highConfidenceBypass
+        +resolve(sessionId, userInput, phase1Result, chatMemory, inDisambiguation, disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentionTemplatePath) RoutingResolution
+        -isCancelExpression(input) boolean
+    }
+
     class ContextRewriter {
-        -chatClient: ChatClient
-        -judgmentMaxPairs: int
-        +rewrite(sessionId, userInput, chatMemory, domainName): String
+        -ChatClient chatClient
+        +rewrite(sessionId, userInput, chatMemory, domainName, templatePath) String
     }
-    
-    class RoutingService {
-        -intentionRouter: IntentionRouter
-        -intentRegistry: IntentRegistry
-        -stateManager: AgentStateManager
-        -disambiguationThreshold: double
-        -highConfidenceBypass: double
-        +resolve(sessionId, userInput, phase1, chatMemory): RoutingResolution
+
+    class IntentRegistry {
+        -Map~String,IntentConfig~ registry
+        -Map~String,IntentGroup~ groups
+        +init()
+        +register(name, description, paramSchema, writeOp)
+        +bindGraph(intentName, graph)
+        +getGraph(intentName) CompiledGraph
+        +fuzzyMatchIntent(intent, userInput) String
+        +isGroupName(name) boolean
+        +findGroupByIntent(intentName) IntentGroup
+        +getIntentListDescription() String
     }
-    
+
     class GraphExecutionService {
-        -intentRegistry: IntentRegistry
-        -stateManager: AgentStateManager
-        +executeGraph(graph, intent, threadId, userInput, sessionId, params): WorkflowOutput
-        +resumeGraph(intent, threadId, userInput, sessionId): WorkflowOutput
-        +cancelGraph(intent, threadId, sessionId): WorkflowOutput
-        +checkGraphResult(graph, config, intent, threadId, sessionId): WorkflowOutput
+        -IntentRegistry intentRegistry
+        +executeGraph(graph, intent, threadId, userInput, sessionId, accumulatedParams) WorkflowOutput
+        +resumeGraph(intent, newThreadId, userInput, sessionId, accumulatedParams) WorkflowOutput
+        +cancelGraph(intent, newThreadId, sessionId, accumulatedParams) WorkflowOutput
+        +checkGraphResult(graph, config, intent, threadId, sessionId) WorkflowOutput
+        +extractAccumulatedParams(intent, state) Map
     }
-    
-    BankController --> DomainRouter
-    BankController --> WealthService
-    BankController --> TransferService
-    BankController --> BillService
-    WealthService --> ContextRouter
-    WealthService --> RoutingService
-    WealthService --> GraphExecutionService
-    TransferService --> ContextRouter
-    TransferService --> ContextRewriter
-    TransferService --> GraphExecutionService
-    BillService --> ContextRouter
-    BillService --> ContextRewriter
-    BillService --> GraphExecutionService
-    RoutingService --> IntentionRouter
 ```
 
-### 7.3 共享服务调用图
+---
+
+## 3. 数据结构
+
+### 3.1 WorkflowOutput — Controller返回给前端的统一响应
+
+```java
+@Data @Builder
+public class WorkflowOutput {
+    WorkflowStatus status;           // COMPLETED / INTERRUPTED / DISAMBIGUATION / ERROR
+    String content;                  // COMPLETED时的输出内容
+    String question;                 // INTERRUPTED/DISAMBIGUATION时的提问
+    String intent;                   // 当前意图
+    String threadId;                 // 线程ID
+    String errorMessage;             // ERROR时的错误信息
+    List<String> candidateIntents;   // DISAMBIGUATION时的候选意图
+    Map<String, Object> accumulatedParams; // 从Graph state提取的已收集参数
+}
+```
+
+### 3.2 WorkflowStatus — 执行状态枚举
+
+```java
+public enum WorkflowStatus {
+    COMPLETED("COMPLETED"),       // 操作完成
+    INTERRUPTED("INTERRUPTED"),   // 需要用户补充参数
+    DISAMBIGUATION("DISAMBIGUATION"), // 意图消歧
+    ERROR("ERROR");               // 错误
+
+    @JsonValue  // JSON序列化仍输出字符串，保持API兼容
+    public String getValue() { return value; }
+}
+```
+
+### 3.3 RoutingResult — LLM路由结果
+
+```java
+@Data @Builder
+public class RoutingResult {
+    String routeType;           // Phase1: FOLLOW_UP / SWITCH_NEW / RESUME
+    String rewrittenInput;      // Phase2: 改写后的输入
+    String intentName;          // Phase2: 识别的意图
+    String refinedRouteType;    // Phase2: 细化路由类型 SWITCH_NEW/RESUME
+    String resumeTarget;        // RESUME时的恢复目标
+    List<String> candidateIntents; // 消歧候选
+    String groupId;             // 歧义组ID
+    boolean ambiguous;          // 是否歧义
+    double confidence;          // 置信度 0.0~1.0
+    String reasoning;           // 判断理由
+}
+```
+
+### 3.4 RoutingResolution — IntentResolver返回的最终决议
+
+```java
+@Data @Builder
+public class RoutingResolution {
+    RoutingStatus status;       // RESOLVED / DISAMBIGUATION / REJECTED / CANCELLED
+    String intentName;          // RESOLVED时
+    String rewrittenInput;      // RESOLVED时
+    String routeType;           // RESOLVED时: SWITCH_NEW/RESUME
+    String question;            // DISAMBIGUATION时
+    List<String> candidateIntents; // DISAMBIGUATION时
+}
+```
+
+### 3.5 ActiveThreadInfo — 活跃线程信息
+
+```java
+@Data
+public static class ActiveThreadInfo {
+    String threadId;            // 当前线程ID
+    String intent;              // 当前意图(TRANSFER/BILL_QUERY/WEALTH_CONSULT等)
+    Instant createdAt;          // 创建时间
+    Instant expiresAt;          // 过期时间(20分钟TTL)
+    Map<String, Object> accumulatedParams; // 累积参数(如transfer.receiver)
+}
+```
+
+### 3.6 SuspendedInfo — 挂起意图信息（仅Multi）
+
+```java
+@Data
+public static class SuspendedInfo {
+    String threadId;            // 挂起时的线程ID
+    String intent;              // 挂起的意图名
+    Instant suspendedAt;        // 挂起时间
+    Instant expiresAt;          // 过期时间(20分钟TTL)
+    Map<String, Object> accumulatedParams; // 从activeThread继承的参数
+}
+```
+
+### 3.7 DisambiguationState — 消歧状态（仅Multi）
+
+```java
+@Data
+public static class DisambiguationState {
+    String groupId;   // 歧义组ID(如"WEALTH")
+}
+```
+
+### 3.8 IntentRegistry数据
+
+```java
+// 已注册意图
+TRANSFER:       "转账给他人"    参数: 收款人名称, 转账金额, 用途(可选)  writeOp=true
+BILL_QUERY:     "查询账单明细"  参数: 时间范围, 收支类型                  writeOp=false
+WEALTH_CONSULT: "理财咨询/推荐" 参数: 风险偏好(激进/稳健/保守)          writeOp=false
+WEALTH_INTERPRET: "理财产品解读" 参数: 理财产品名称                     writeOp=false
+
+// 意图组(需消歧)
+WEALTH → [WEALTH_CONSULT, WEALTH_INTERPRET]
+         追问: "请问您需要理财咨询还是理财产品解读？"
+```
+
+---
+
+## 4. 意图直达流程
+
+**场景**: 用户说"我想转账" → 从零开始进入转账流程
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant BC as BankController(L0)
+    participant DR as DomainRouter
+    participant SSAD as SingleSubAgent<br/>(TransferService)
+    participant CR as ContextRouter<br/>(simple模板)
+    participant GES as GraphExecutionService
+    participant TG as TransferGraph(L2)
+
+    U->>BC: POST /chat "我想转账"
+    BC->>DR: route(sessionId, "我想转账")
+    Note over DR: 关键词"转账"命中<br/>确定性路由 → TRANSFER
+    DR-->>BC: DomainResult(TRANSFER)
+    
+    BC->>SSAD: handle(sessionId, "我想转账")
+    Note over SSAD: ① getOwnActiveThread → null<br/>（无活跃线程）
+    Note over SSAD: ② 走ContextRouter
+    SSAD->>CR: route(..., "l1-routing-simple.st", "转账")
+    Note over CR: LLM判断: 意图明确<br/>→ SWITCH_NEW
+    CR-->>SSAD: RoutingResult(SWITCH_NEW)
+    
+    Note over SSAD: ③ addUserMessage<br/>④ executeNewThread
+    SSAD->>GES: executeGraph(transferGraph, TRANSFER, threadId, "我想转账")
+    GES->>TG: stream(input) → interruptBefore
+    Note over TG: extractParams: 提取"我想转账"→ receiver=null<br/>paramRouter: 缺收款人 → ASK_RECEIVER
+    TG-->>GES: INTERRUPTED, question="请问您要转给谁？"
+    GES-->>SSAD: WorkflowOutput(INTERRUPTED, question=...)
+    
+    Note over SSAD: ⑤ saveAccumulatedParams<br/>⑥ recordSystemReply
+    SSAD-->>BC: WorkflowOutput(INTERRUPTED)
+    BC-->>U: {status:"INTERRUPTED", question:"请问您要转给谁？"}
+```
+
+**关键代码 — SingleSubAgentDomainService.handle()**:
+
+```java
+public WorkflowOutput handle(String sessionId, String userInput) {
+    // 核心逻辑: activeThread在 → 直接FOLLOW_UP，不走ContextRouter
+    ActiveThreadInfo ownActive = getOwnActiveThread(sessionId);
+    if (ownActive != null) {
+        return resumeActiveThread(sessionId, userInput, ownActive);
+    }
+    // 无activeThread → 走ContextRouter判断
+    RoutingResult phase1 = contextRouter.route(..., routingTemplatePath, ...);
+    if (phase1.isFollowUp()) {
+        // FOLLOW_UP但无activeThread → 改写后降级SWITCH_NEW
+        String rewrittenInput = contextRewriter.rewrite(...);
+        return handleSwitchNew(sessionId, rewrittenInput);
+    }
+    return handleSwitchNew(sessionId, userInput);
+}
+```
+
+---
+
+## 5. 意图接续流程
+
+### 5.1 Single域: activeThread在 → 直接resume（跳过ContextRouter）
+
+**场景**: 用户已进入转账流程（问过收款人），继续回答"张三"
+
+**核心设计**: 1-1域只有1个子意图，activeThread在=用户一定在继续。跳过ContextRouter避免LLM非确定性误判。
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant BC as BankController(L0)
+    participant SSAD as SingleSubAgent<br/>(TransferService)
+    participant GES as GraphExecutionService
+    participant TG as TransferGraph(L2)
+
+    U->>BC: POST /chat "张三"
+    BC->>SSAD: handle(sessionId, "张三")
+    
+    Note over SSAD: ① getOwnActiveThread → 存在!<br/>intent=TRANSFER<br/>params={transfer.amount: 500}
+    Note over SSAD: ② 跳过ContextRouter<br/>直接FOLLOW_UP
+    
+    SSAD->>SSAD: resumeActiveThread(sessionId, "张三", active)
+    Note over SSAD: addUserMessage → 新threadId<br/>setOwnActiveThread(新, TRANSFER)
+    SSAD->>GES: resumeGraph(TRANSFER, newThreadId, "张三",<br/>accumulatedParams={transfer.amount:500})
+    GES->>TG: stream(注入accumulatedParams)
+    Note over TG: extractParams: 提取"张三"→ receiver=张三<br/>mergeExtractedWithoutOverwrite<br/>paramRouter: 全齐 → ALL_GOOD<br/>executeTransfer → COMPLETED
+    TG-->>GES: COMPLETED
+    GES-->>SSAD: WorkflowOutput(COMPLETED, "转账成功...")
+    
+    Note over SSAD: COMPLETED → clearOwnActiveThread<br/>释放accumulatedParams
+    SSAD-->>BC: WorkflowOutput(COMPLETED)
+    BC-->>U: {status:"COMPLETED", content:"转账成功..."}
+```
+
+**关键代码 — resumeActiveThread()**:
+
+```java
+protected WorkflowOutput resumeActiveThread(String sessionId, String userInput, ActiveThreadInfo active) {
+    addUserMessage(sessionId, userInput);
+    String newThreadId = generateThreadId();
+    setOwnActiveThread(sessionId, newThreadId, active.getIntent()); // TTL刷新！
+    
+    WorkflowOutput resumeResult = graphExecutionService.resumeGraph(
+            active.getIntent(), newThreadId, userInput, sessionId,
+            active.getAccumulatedParams());  // 注入已收集参数
+    saveAccumulatedParams(sessionId, resumeResult);
+    recordSystemReply(sessionId, resumeResult);
+    
+    // 完成后清空，避免下次复用旧参数
+    if (WorkflowStatus.COMPLETED.equals(resumeResult.getStatus())) {
+        clearOwnActiveThread(sessionId);
+    }
+    return resumeResult;
+}
+```
+
+### 5.2 Multi域: activeThread在 + 非消歧 → ContextRouter → FOLLOW_UP → resume
+
+**场景**: 用户在理财推荐中（问了风险偏好），回答"稳健"
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant MSAD as MultiSubAgent<br/>(WealthService)
+    participant CR as ContextRouter<br/>(full模板)
+
+    U->>MSAD: handle(sessionId, "稳健")
+    Note over MSAD: getOwnActiveThread → 存在<br/>intent=WEALTH_CONSULT
+    Note over MSAD: isInDisambiguation → false
+    MSAD->>CR: route(sessionId, "稳健", currentAgent, pendingAgents, ...)
+    Note over CR: LLM: "稳健"是回答风险偏好问题<br/>→ FOLLOW_UP
+    CR-->>MSAD: RoutingResult(FOLLOW_UP)
+    Note over MSAD: FOLLOW_UP + activeThread → resumeActiveThread
+    MSAD-->>U: INTERRUPTED/COMPLETED (继续流程)
+```
+
+**为什么Multi不跳过ContextRouter？** 因为Multi域有多个子意图。用户可能在对话推荐时说"帮我解读一下朝朝盈"——这是同域内切换子意图，需要ContextRouter判断是FOLLOW_UP还是SWITCH_NEW。跳过会导致用户意图被错误地当作继续推荐。
+
+---
+
+## 6. 意图跳转流程
+
+### 6.1 Single域: SWITCH_NEW
+
+**场景**: 用户在转账流程中，突然说"查账单"
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant BC as BankController(L0)
+    participant DR as DomainRouter
+    participant SSAD as SingleSubAgent<br/>(TransferService)
+
+    U->>BC: POST /chat "查账单"
+    BC->>DR: route(sessionId, "查账单")
+    DR-->>BC: DomainResult(BILL)
+    Note over BC: 路由到billDomainService<br/>（不是transferDomainService）
+    BC->>SSAD: billDomainService.handle(sessionId, "查账单")
+    Note over SSAD: getOwnActiveThread(bill) → null<br/>走ContextRouter → SWITCH_NEW
+    SSAD-->>U: BILL_QUERY/INTERRUPTED
+```
+
+**注意**: Single域的SWITCH_NEW不需要suspend——因为L0已经路由到了不同的L1 Service。转账Service的activeThread不受影响。
+
+### 6.2 Multi域: SWITCH_NEW（含suspend）
+
+**场景**: 用户在理财推荐中（WEALTH_CONSULT/INTERRUPTED），说"帮我解读朝朝盈"
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant MSAD as MultiSubAgent<br/>(WealthService)
+    participant CR as ContextRouter
+    participant IRes as IntentResolver
+    participant IR as IntentRouter
+
+    U->>MSAD: handle(sessionId, "帮我解读朝朝盈")
+    
+    Note over MSAD: ① getOwnActiveThread → 存在<br/>intent=WEALTH_CONSULT
+    MSAD->>CR: route(sessionId, "帮我解读朝朝盈", ...)
+    Note over CR: LLM: 同域不同意图 → SWITCH_NEW
+    CR-->>MSAD: RoutingResult(SWITCH_NEW)
+    
+    Note over MSAD: ② Phase2: IntentResolver
+    MSAD->>IRes: resolve(sessionId, "帮我解读朝朝盈", phase1=SWITCH_NEW, ...)
+    IRes->>IR: rewriteAndIdentify(...)
+    Note over IR: LLM: intent=WEALTH_INTERPRET<br/>rewritten="解读理财产品朝朝盈"
+    IR-->>IRes: RoutingResult(intent=WEALTH_INTERPRET)
+    IRes-->>MSAD: RoutingResolution(RESOLVED, WEALTH_INTERPRET, "解读理财产品朝朝盈", SWITCH_NEW)
+    
+    Note over MSAD: ③ addUserMessage<br/>④ executeRoute → handleSwitchNew
+    MSAD->>MSAD: handleSwitchNew(sessionId, WEALTH_INTERPRET, ...)
+    Note over MSAD: suspendOwnAgent(WEALTH_CONSULT)<br/>→ 保存accumulatedParams到SuspendedInfo<br/>clearOwnActiveThread
+    MSAD->>MSAD: executeNewThread(sessionId, WEALTH_INTERPRET, ...)
+    Note over MSAD: 新activeThread(intent=WEALTH_INTERPRET)
+    MSAD-->>U: WEALTH_INTERPRET/COMPLETED
+```
+
+**关键代码 — suspendOwnAgent()**:
+
+```java
+private void suspendOwnAgent(String sessionId, String intent, String threadId) {
+    Map<String, SuspendedInfo> sessionMap = suspendedAgents.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
+    
+    // 深度限制: 超过maxSuspendedDepth(3) → 驱逐最老的
+    if (sessionMap.size() >= maxSuspendedDepth) {
+        String oldestKey = sessionMap.entrySet().stream()
+                .min(Comparator.comparing(e -> e.getValue().getSuspendedAt()))
+                .map(Map.Entry::getKey).orElse(null);
+        if (oldestKey != null) sessionMap.remove(oldestKey);
+    }
+    
+    // 创建SuspendedInfo，继承activeThread的累积参数
+    SuspendedInfo info = new SuspendedInfo(threadId, intent, Instant.now(),
+            Instant.now().plusSeconds(suspendedExpireMinutes * 60));
+    ActiveThreadInfo active = getOwnActiveThread(sessionId);
+    if (active != null && active.getIntent().equals(intent)) {
+        info.setAccumulatedParams(active.getAccumulatedParams());
+    }
+    sessionMap.put(intent, info);
+}
+```
+
+---
+
+## 7. 意图恢复流程
+
+**仅Multi域**。用户说"回到刚才的推荐"恢复挂起的意图。
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant MSAD as MultiSubAgent<br/>(WealthService)
+    participant CR as ContextRouter
+    participant IRes as IntentResolver
+    participant GES as GraphExecutionService
+
+    U->>MSAD: handle(sessionId, "继续推荐理财")
+    
+    MSAD->>CR: route(sessionId, "继续推荐理财", currentAgent=WEALTH_INTERPRET, pendingAgents=WEALTH_CONSULT)
+    Note over CR: LLM: 与挂起的推荐相关 → RESUME
+    CR-->>MSAD: RoutingResult(RESUME)
+    
+    MSAD->>IRes: resolve(...)
+    IRes-->>MSAD: RoutingResolution(RESOLVED, WEALTH_CONSULT, routeType=RESUME)
+    
+    Note over MSAD: addUserMessage
+    MSAD->>MSAD: executeRoute → handleResume
+    
+    Note over MSAD: ① getOwnSuspendedThread(WEALTH_CONSULT)<br/>→ SuspendedInfo(含之前的风险偏好参数)<br/>② suspendOwnAgent(当前WEALTH_INTERPRET)<br/>③ resumeOwnAgent(WEALTH_CONSULT) 移除挂起记录<br/>④ setOwnActiveThread(new, WEALTH_CONSULT)
+    
+    MSAD->>GES: resumeGraph(WEALTH_CONSULT, newThreadId, "继续推荐理财",<br/>suspendedParams={wealthConsult.riskPreference:稳健})
+    Note over GES: 注入suspendedParams，Graph从上次中断处继续
+    GES-->>MSAD: WorkflowOutput(INTERRUPTED/COMPLETED)
+    MSAD-->>U: 结果
+```
+
+**自动升级**: 如果ContextRouter判断SWITCH_NEW，但IntentResolver识别的意图已在suspendedAgents中，自动升级为RESUME：
+
+```java
+private WorkflowOutput executeRoute(String sessionId, RoutingResolution resolution) {
+    // 防御: 意图已suspended但路由判了SWITCH_NEW → 自动升级为RESUME
+    if (!"RESUME".equals(resolution.getRouteType())
+            && getOwnSuspendedThread(sessionId, resolution.getIntentName()) != null) {
+        return handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
+    }
+    return switch (resolution.getRouteType()) {
+        case "RESUME" -> handleResume(...);
+        default -> handleSwitchNew(...);
+    };
+}
+```
+
+---
+
+## 8. 模糊识别/消歧流程
+
+### 8.1 触发条件
+
+当用户输入匹配到**意图组**（如"理财"匹配WEALTH组）但无法区分具体意图时触发。
+
+### 8.2 完整流程
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant MSAD as MultiSubAgent<br/>(WealthService)
+    participant CR as ContextRouter
+    participant IRes as IntentResolver
+    participant IR as IntentRouter
+
+    U->>MSAD: handle(sessionId, "帮我理财")
+    MSAD->>CR: route(...)
+    CR-->>MSAD: RoutingResult(SWITCH_NEW)
+    MSAD->>IRes: resolve(..., inDisambiguation=false)
+    IRes->>IR: rewriteAndIdentify(...)
+    Note over IR: LLM: intent=WEALTH(组名)<br/>或confidence<0.7
+    IR-->>IRes: RoutingResult(intent=WEALTH, ambiguous=true)
+    
+    Note over IRes: 置信度增强判断:<br/>① LLM标ambiguous + 低置信度 → 消歧<br/>② 非ambiguous + 低置信度 + 属歧义组 → 补充消歧<br/>③ 高置信度(≥0.85) → 信任首选意图，不消歧
+    
+    Note over IRes: 情况①: 消歧
+    IRes-->>MSAD: RoutingResolution(DISAMBIGUATION,<br/>question="请问您需要理财咨询还是理财产品解读？",<br/>candidates=[WEALTH_CONSULT, WEALTH_INTERPRET])
+    
+    Note over MSAD: suspend当前activeThread<br/>setDisambiguationState(groupId=WEALTH)
+    MSAD-->>U: {status:"DISAMBIGUATION", question:"请问您需要理财咨询还是理财产品解读？"}
+    
+    U->>MSAD: handle(sessionId, "咨询")
+    Note over MSAD: isInDisambiguation → true
+    MSAD->>IRes: resolve(..., inDisambiguation=true, disambiguationGroupId=WEALTH)
+    Note over IRes: handleDisambiguationAnswer<br/>→ 重新Phase2识别
+    IRes->>IR: rewriteAndIdentify(..., disambigContext="系统追问+候选意图")
+    Note over IR: LLM: intent=WEALTH_CONSULT(组内具体意图)
+    IR-->>IRes: RoutingResult(intent=WEALTH_CONSULT)
+    IRes-->>MSAD: RoutingResolution(RESOLVED, WEALTH_CONSULT)
+    
+    Note over MSAD: clearDisambiguationState<br/>executeRoute → handleSwitchNew
+    MSAD-->>U: WEALTH_CONSULT/INTERRUPTED
+```
+
+### 8.3 消歧中的取消
+
+```java
+// IntentResolver.isCancelExpression() — 消歧中取消检测
+private boolean isCancelExpression(String input) {
+    String trimmed = input.trim();
+    return trimmed.matches("^(取消|算了|不要了|不了|放弃)[\\s，。！？、；]*$");
+}
+// 匹配 → RoutingResolution.CANCELLED → MultiSubAgent.handle()中clearDisambiguationState
+```
+
+### 8.4 置信度阈值配置
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `disambiguationThreshold` | 0.7 | confidence低于此值且意图属于歧义组 → 补充消歧 |
+| `highConfidenceBypass` | 0.85 | confidence高于此值时，即使LLM标ambiguous也信任首选意图 |
+
+---
+
+## 9. 取消流程
+
+### 9.1 路径一: 子智能体执行中的取消
+
+**场景**: 转账流程中（问过收款人），用户说"算了不转了"
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant SSAD as SingleSubAgent
+    participant GES as GraphExecutionService
+    participant TG as TransferGraph(L2)
+
+    U->>SSAD: handle(sessionId, "算了不转了")
+    Note over SSAD: getOwnActiveThread → 存在<br/>直接FOLLOW_UP
+    SSAD->>GES: resumeGraph(TRANSFER, newThreadId, "算了不转了", accumulatedParams)
+    GES->>TG: stream(input)
+    
+    Note over TG: extractParamsNode:<br/>① cancelAwareExtractParams(state)<br/>② detectCancelFromInput(state)
+    
+    Note over TG: 第1层: 关键字匹配(0ms)<br/>"不转了" ∈ getCancelKeywords() → 命中!
+    
+    Note over TG: → 返回 {_cancelSignal: true}
+    Note over TG: paramRouterNode:<br/>cancelAwareParamRouter → CANCEL
+    Note over TG: cancelExecutionNode:<br/>onCleanup() → _outputContent="操作已取消"
+    TG-->>GES: COMPLETED("操作已取消")
+    GES-->>SSAD: WorkflowOutput(COMPLETED)
+    Note over SSAD: COMPLETED → clearOwnActiveThread
+    SSAD-->>U: {status:"COMPLETED", content:"操作已取消"}
+```
+
+**取消检测分层策略**:
+
+```
+第1层: 关键字匹配 (0ms)
+  通用: "取消", "算了", "不要了", "放弃", "不了"
+  Transfer特有: "不转了", "别转了", "取消转账", "不想转了", "不用转了"
+  
+第2层: LLM判断 (200-500ms)  — 关键字未命中时
+  prompt含: 当前场景 + 用户输入 + 判断标准
+  输出: {"cancel": true/false}
+  
+  不是取消: "先看看账单"(先做别的事), "不是"(否定回答), "查账单"(意图切换)
+```
+
+### 9.2 路径二: 消歧中的取消
+
+**场景**: 消歧追问时，用户说"算了"
+
+```
+用户说"算了" → IntentResolver.isCancelExpression() 命中
+→ RoutingResolution.CANCELLED
+→ MultiSubAgentDomainService.handle()的switch分支:
+  case CANCELLED -> {
+      clearDisambiguationState(sessionId);
+      yield WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
+  }
+```
+
+### 9.3 取消的完整代码路径
 
 ```mermaid
 graph TD
-    subgraph "L0"
-        DR["DomainRouter"]
-    end
+    A[用户说取消/算了/不转了] --> B{在哪个阶段?}
+    B -->|L2子Graph执行中| C[FOLLOW_UP → resumeGraph]
+    C --> D[cancelAwareExtractParams]
+    D --> E{关键字匹配?}
+    E -->|命中| F[_cancelSignal=true]
+    E -->|未命中| G[LLM判断]
+    G --> H{cancel=true?}
+    H -->|是| F
+    H -->|否| I[正常提取参数]
+    F --> J[cancelAwareParamRouter → CANCEL]
+    J --> K[cancelExecutionNode → END]
     
-    subgraph "L1 Service"
-        WS["WealthService"]
-        TS["TransferService"]
-        BS["BillService"]
-    end
-    
-    subgraph "L1 共享服务"
-        CR["ContextRouter"]
-        IR["IntentionRouter"]
-        CW["ContextRewriter"]
-        RS["RoutingService"]
-        GES["GraphExecutionService"]
-    end
-    
-    subgraph "状态层"
-        ASM["AgentStateManager"]
-        IRG["IntentRegistry"]
-        CHU["ChatHistoryUtils"]
-    end
-    
-    DR -->|读取全局ChatMemory| CHU
-    WS --> CR
-    WS --> RS
-    RS --> IR
-    TS --> CR
-    TS --> CW
-    BS --> CR
-    BS --> CW
-    WS & TS & BS --> GES
-    
-    CR -->|格式化历史| CHU
-    IR -->|格式化历史| CHU
-    CW -->|格式化历史| CHU
-    CR --> ASM
-    IR --> ASM
-    RS --> ASM
-    GES --> ASM
-    GES --> IRG
-    RS --> IRG
+    B -->|消歧中| L[IntentResolver.isCancelExpression]
+    L --> M{正则匹配?}
+    M -->|命中| N[RoutingResolution.CANCELLED]
+    M -->|未命中| O[handleDisambiguationAnswer继续]
+    N --> P[clearDisambiguationState]
 ```
 
 ---
 
-## 8. 关键代码分析
+## 10. 状态管理与TTL
 
-### 8.1 BankController — L0调度入口
+### 10.1 状态存储全景
+
+```mermaid
+graph TB
+    subgraph L0["L0 (DomainRouter)"]
+        LAD[lastActiveDomains<br/>Map sessionId→LastDomainEntry<br/>TTL: 5分钟]
+    end
+    
+    subgraph L1_Single["L1 Single (TransferService)"]
+        AT_T[activeThreads<br/>Map sessionId→ActiveThreadInfo<br/>TTL: 20分钟]
+    end
+    
+    subgraph L1_Single2["L1 Single (BillService)"]
+        AT_B[activeThreads<br/>Map sessionId→ActiveThreadInfo<br/>TTL: 20分钟]
+    end
+    
+    subgraph L1_Multi["L1 Multi (WealthService)"]
+        AT_W[activeThreads<br/>Map sessionId→ActiveThreadInfo<br/>TTL: 20分钟]
+        SA[suspendedAgents<br/>Map sessionId→Map intent→SuspendedInfo<br/>TTL: 20分钟]
+        DS[disambiguationStates<br/>Map sessionId→DisambiguationState<br/>无TTL,短生命周期]
+    end
+    
+    subgraph Global["全局"]
+        GCM[ChatMemory(全局)<br/>无TTL,clear时清除]
+    end
+```
+
+### 10.2 TTL机制详解
+
+| 状态 | 存储位置 | TTL | 过期行为 | 刷新时机 |
+|------|---------|-----|---------|---------|
+| **activeThread** | 各L1 Service | 20分钟 | getOwnActiveThread()返回null,视为无活跃线程 | FOLLOW_UP时setOwnActiveThread()创建新info |
+| **suspendedAgent** | Multi L1 | 20分钟 | getOwnSuspendedThread()返回null,降级为SWITCH_NEW | — (不刷新,挂起就是挂起) |
+| **lastActiveDomain** | DomainRouter | 5分钟 | getLastDomain()返回null | 每次路由到非CHAT/UNSUPPORTED时更新 |
+| **disambiguationState** | Multi L1 | 无 | — | — (消歧1次追问后自动清除) |
+
+### 10.3 Lazy过期检查 + 定时清理（双重保障）
+
+**Lazy过期**: 每次读取时检查，过期立即删除并返回null
 
 ```java
-@PostMapping("/chat")
-public WorkflowOutput chat(@RequestParam String sessionId, @RequestBody Map<String, String> req) {
-    // L0: 领域路由
-    DomainRouter.DomainResult domainResult = domainRouter.route(sessionId, userInput);
+// ActiveThreadInfo的lazy过期 (AbstractDomainService)
+protected ActiveThreadInfo getOwnActiveThread(String sessionId) {
+    ActiveThreadInfo info = activeThreads.get(sessionId);
+    if (info != null && info.getExpiresAt().isBefore(Instant.now())) {
+        activeThreads.remove(sessionId);
+        return null;  // 过期 → 视为无活跃线程
+    }
+    return info;
+}
+
+// SuspendedInfo的lazy过期 (MultiSubAgentDomainService)
+private SuspendedInfo getOwnSuspendedThread(String sessionId, String intent) {
+    SuspendedInfo info = sessionMap.get(intent);
+    if (info != null && info.getExpiresAt().isBefore(Instant.now())) {
+        sessionMap.remove(intent);
+        return null;  // 过期 → 视为无挂起记录
+    }
+    return info;
+}
+
+// lastActiveDomain的lazy过期 (DomainRouter)
+private String getLastDomain(String sessionId) {
+    LastDomainEntry entry = lastActiveDomains.get(sessionId);
+    if (entry == null) return null;
+    if (entry.setAt().plusSeconds(lastDomainExpireMinutes * 60).isBefore(Instant.now())) {
+        lastActiveDomains.remove(sessionId);
+        return null;
+    }
+    return entry.domain();
+}
+```
+
+**定时清理**: `@Scheduled(fixedRate=60_000)` 每分钟扫描清除过期条目（防止泄漏）
+
+| 组件 | 方法 | 清理对象 |
+|------|------|---------|
+| SingleSubAgentDomainService | `scheduledCleanup()` | activeThreads |
+| MultiSubAgentDomainService | `cleanupExpiredSuspended()` | suspendedAgents + activeThreads |
+| DomainRouter | `cleanupExpiredLastDomains()` | lastActiveDomains |
+
+### 10.4 activeThread TTL刷新机制
+
+FOLLOW_UP时，`resumeActiveThread()`调用`setOwnActiveThread()`，创建**全新的ActiveThreadInfo**，`expiresAt`从当前时间重新计算：
+
+```java
+protected void setOwnActiveThread(String sessionId, String threadId, String intent) {
+    Instant now = Instant.now();
+    Instant expiresAt = now.plusSeconds(activeThreadExpireMinutes * 60); // 重新计算
+    activeThreads.put(sessionId, new ActiveThreadInfo(threadId, intent, now, expiresAt));
+}
+```
+
+**设计理由**: 用户持续交互=活跃会话，TTL从**最后一次交互**开始算，不是从第一次创建开始算。如果用户离开超过20分钟再回来，activeThread已过期清空，用户重新开始输入（不会带着忘记的旧参数）。
+
+---
+
+## 11. L2子Graph架构
+
+### 11.1 TransferGraph流程图
+
+```mermaid
+graph TD
+    START --> extractParams
+    extractParams --> paramRouter
+    paramRouter -->|ASK_RECEIVER| askReceiver
+    paramRouter -->|ASK_AMOUNT| askAmount
+    paramRouter -->|ALL_GOOD| executeTransfer
+    paramRouter -->|CANCEL| cancelExecution
+    askReceiver -->|CONTINUE| paramRouter
+    askReceiver -->|WAIT| END
+    askAmount -->|CONTINUE| paramRouter
+    askAmount -->|WAIT| END
+    executeTransfer --> END
+    cancelExecution --> END
     
-    // 分发到L1
-    output = switch (domainResult.domain()) {
-        case "WEALTH"   -> wealthService.handle(sessionId, userInput);
-        case "TRANSFER" -> transferService.handle(sessionId, userInput);
-        case "BILL"     -> billService.handle(sessionId, userInput);
-        default         -> chatService.handle(sessionId, userInput);
+    style extractParams fill:#e1f5fe
+    style paramRouter fill:#fff3e0
+    style askReceiver fill:#f3e5f5
+    style askAmount fill:#f3e5f5
+    style executeTransfer fill:#e8f5e9
+    style cancelExecution fill:#ffebee
+```
+
+**interruptBefore机制**: `createCompileConfig("askReceiver", "askAmount")` 使graph在执行到askReceiver/askAmount前暂停，控制权返回L1。L1收到INTERRUPTED结果，将question返回给用户。下次用户输入时，L1通过`resumeActiveThread()`注入accumulatedParams重新执行graph。
+
+### 11.2 Graph执行模式
+
+```
+executeGraph:  新线程，无accumulatedParams → 全新开始
+resumeGraph:   新线程，注入accumulatedParams → 跳过已满足参数
+cancelGraph:   新线程，注入_cancelSignal → 子Graph检测后取消
+```
+
+**注意**: resumeGraph不使用SAA的resume()机制，而是每次都重新执行graph。原因：interruptBefore在resume后不会重新触发，导致多轮提问失败。
+
+### 11.3 accumulatedParams提取
+
+GraphExecutionService按意图前缀从state中提取：
+
+```java
+public Map<String, Object> extractAccumulatedParams(String intent, OverAllState state) {
+    String prefix = switch (intent) {
+        case "TRANSFER"        -> "transfer.";
+        case "BILL_QUERY"      -> "bill.";
+        case "WEALTH_CONSULT"  -> "wealthConsult.";
+        case "WEALTH_INTERPRET" -> "wealthInterpret.";
+        default -> "";
     };
+    // 提取所有以prefix开头的非空值
+}
+```
+
+### 11.4 KeyStrategy
+
+| Key | Strategy | 说明 |
+|-----|----------|------|
+| messages | AppendStrategy | 消息追加 |
+| _latestUserInput | ReplaceStrategy | 最新输入覆盖 |
+| _question | ReplaceStrategy | 当前问题覆盖 |
+| _paramName | ReplaceStrategy | 路由参数覆盖 |
+| _outputContent | ReplaceStrategy | 输出覆盖 |
+| _cancelSignal | ReplaceStrategy | 取消信号覆盖 |
+| transfer.* / bill.* / wealth*.* | ReplaceStrategy | 业务参数覆盖 |
+
+### 11.5 mergeExtractedWithoutOverwrite
+
+Resume场景下的关键保护：LLM重新提取参数时，不会用null/空值覆盖state中已有的非空参数。
+
+```java
+// 已有值 + 新值非空 → 允许更新（用户可以改参数）
+// 已有值 + 新值null → 保留已有（LLM未提取不代表参数消失）
+// 无已有值 + 新值非空 → 写入
+// 无已有值 + 新值null → 不写
+```
+
+---
+
+## 12. SAA Graph Resume机制缺陷与Workaround
+
+### 12.1 问题背景
+
+spring-ai-alibaba-graph (v1.1.2.0) 的 `CompiledGraph` 没有提供可靠的 resume 机制。当 Graph 因 `interruptBefore` 暂停后，无法从暂停点恢复执行并保留 OverAllState。
+
+### 12.2 根因分析（基于反编译源码）
+
+**问题1: `stream()` 始终创建全新 OverAllState**
+
+```java
+// CompiledGraph.java (SAA源码)
+public Flux<NodeOutput> stream(Map<String, Object> inputs, RunnableConfig config) {
+    return this.streamFromInitialNode(this.stateCreate(inputs), config);  // ← 总是新state
+}
+
+private OverAllState stateCreate(Map<String, Object> inputs) {
+    // 完全忽略checkpoint，从零构建
+    return OverAllStateBuilder.builder()
+            .withKeyStrategies(this.getKeyStrategyMap())
+            .withData(inputs)
+            .build();
+}
+```
+
+虽然 `getInitialState()` 方法**存在**且能从 checkpoint 恢复状态：
+
+```java
+// 这个方法存在但 stream() 不调用它!
+public Map<String, Object> getInitialState(Map<String, Object> inputs, RunnableConfig config) {
+    return this.compileConfig.checkpointSaver().flatMap(saver -> saver.get(config))
+            .map(cp -> OverAllState.updateState(cp.getState(), inputs, this.keyStrategyMap))
+            .orElseGet(() -> OverAllState.updateState(new HashMap<>(), inputs, this.keyStrategyMap));
+}
+```
+
+**问题2: `interruptedNodes` 在新 RunnableConfig 中丢失**
+
+```java
+// RunnableConfig.java (SAA源码)
+private RunnableConfig(Builder builder) {
+    this.interruptedNodes = new ConcurrentHashMap<>();  // ← 永远是空map
+}
+
+// isInterrupted() 永远返回 false (因为是空map)
+public boolean isInterrupted(String nodeId) {
+    return this.interruptData(formatNodeId(nodeId))
+            .map(value -> Boolean.TRUE.equals(value)).orElse(false);
+}
+```
+
+中断信息只在**同一次执行**内通过 `markNodeAsInterrupted()` 写入，执行结束后 `RunnableConfig` 被丢弃，下次调用无法获知哪些节点曾被中断。
+
+**问题3: `withResume()` 是个空壳**
+
+```java
+// RunnableConfig.java (SAA源码)
+public RunnableConfig withResume() {
+    // 只在metadata加了个placeholder，没有实际恢复逻辑
+    return builder(this).addMetadata(HUMAN_FEEDBACK_METADATA_KEY, "placeholder").build();
+}
+```
+
+**问题4: interruptBefore 的触发条件依赖 `previousNodeId`**
+
+```java
+// CompiledGraph.java (SAA源码)
+private boolean shouldInterruptBefore(String nodeId, String previousNodeId) {
+    if (previousNodeId == null) {
+        return false;  // ← 首节点永远不中断
+    }
+    return this.compileConfig.interruptsBefore().contains(nodeId);
+}
+```
+
+即使能恢复状态，Graph 执行总是从 START 节点开始，`previousNodeId` 一路传递。但如果因为某种跳转直接到达被中断的节点，`previousNodeId` 的值可能不符合预期。
+
+### 12.3 影响链
+
+```
+interruptBefore暂停 → Graph执行结束 → Checkpoint已保存但stream()不读取
+                                          ↓
+用户FOLLOW_UP → 新stream()调用 → 全新OverAllState → 之前参数全丢
+                                          ↓
+                              paramRouter看不到已有参数 → 重新问所有问题
+```
+
+### 12.4 当前Workaround: 重新执行 + 注入accumulatedParams
+
+```mermaid
+graph TD
+    A["用户: 张三"] --> B["L1: resumeActiveThread()"]
+    B --> C["从activeThread取出<br/>accumulatedParams={transfer.amount:500}"]
+    C --> D["生成新threadId"]
+    D --> E["GES: resumeGraph()<br/>= executeGraph(newThreadId, accumulatedParams)"]
+    E --> F["SAA: stream(input+accumulatedParams)<br/>全新OverAllState,但params已注入"]
+    F --> G["extractParams: mergeExtractedWithoutOverwrite<br/>已有amount=500,新提取receiver=张三"]
+    G --> H["paramRouter: receiver=张三, amount=500<br/>→ ALL_GOOD"]
+    H --> I["executeTransfer → COMPLETED"]
     
-    // 统一记录全局ChatMemory (在Controller层，不在L1内)
-    chatMemory.add(sessionId, new UserMessage(userInput));
-    recordSystemReply(sessionId, output);
-}
+    style F fill:#fff3e0
+    style G fill:#e8f5e9
 ```
 
-**关键**: 全局ChatMemory在Controller层统一写入，保证L0 DomainRouter能读到完整历史。
-
-### 8.2 TransferService — FOLLOW_UP+无activeThread处理
+**核心思路**: 不依赖 SAA 的 checkpoint/resume，而是由 L1 自管 accumulatedParams，每次 FOLLOW_UP 都从 START 重新执行 Graph，但注入已收集的参数，让 paramRouter 跳过已满足的参数直接路由到缺失的 ask 节点。
 
 ```java
-if (phase1.isFollowUp()) {
-    // 取消检测
-    if (active != null && INTENT.equals(active.getIntent()) && isCancelExpression(userInput)) {
-        return graphExecutionService.cancelGraph(INTENT, active.getThreadId(), sessionId);
-    }
-    // 有activeThread → resume
-    if (active != null) {
-        return graphExecutionService.resumeGraph(active.getIntent(), active.getThreadId(), userInput, sessionId);
-    }
-    // 无activeThread → ContextRewriter改写后SWITCH_NEW
-    String rewrittenInput = contextRewriter.rewrite(sessionId, userInput, transferChatMemory, DOMAIN_NAME);
-    transferChatMemory.add(sessionId, new UserMessage(userInput));  // 保存原始话术
-    return handleSwitchNew(sessionId, userInput, rewrittenInput);    // Graph用改写后输入
-}
-```
-
-### 8.3 GraphExecutionService — resumeGraph核心
-
-```java
-public WorkflowOutput resumeGraph(String intent, String threadId, String userInput, String sessionId) {
-    // 1. 提取累积参数 (在setActiveThread覆盖前!)
-    Map<String, Object> accumulatedParams = getAccumulatedParamsFromActive(sessionId, intent);
-    // 2. 生成新threadId + 恢复参数
-    String newThreadId = prepareReExecution(sessionId, intent, accumulatedParams);
-    // 3. 重新执行Graph，注入accumulatedParams
+// GraphExecutionService.resumeGraph() — 实际是重新执行
+public WorkflowOutput resumeGraph(String intent, String newThreadId, String userInput,
+                                  String sessionId, Map<String, Object> accumulatedParams) {
+    CompiledGraph graph = intentRegistry.getGraph(intent);
+    // 不是SAA的resume()，而是全新的executeGraph，注入accumulatedParams
     return executeGraph(graph, intent, newThreadId, userInput, sessionId, accumulatedParams);
 }
-```
 
-**为什么每次resume用新threadId**: 每次Graph执行都是全新的，accumulatedParams通过input注入让paramRouter跳过已收集参数。
-
-### 8.4 ChatHistoryUtils — 统一历史截断
-
-```java
-public static String formatAndTruncate(ChatMemory chatMemory, String sessionId, int judgmentMaxPairs) {
-    List<Message> messages = chatMemory.get(sessionId);
-    int maxMessages = judgmentMaxPairs * 2;  // 5对=10条
-    int start = Math.max(0, messages.size() - maxMessages);
-    List<Message> truncated = messages.subList(start, messages.size());
-    // 格式化为 "用户: xxx\n助手: yyy"
+// executeGraph 将 accumulatedParams 注入到 input map
+public WorkflowOutput executeGraph(CompiledGraph graph, String intent, String threadId,
+                                   String userInput, String sessionId,
+                                   Map<String, Object> accumulatedParams) {
+    Map<String, Object> input = new HashMap<>();
+    input.put("messages", userInput);
+    input.put("_latestUserInput", userInput);
+    if (accumulatedParams != null && !accumulatedParams.isEmpty()) {
+        input.putAll(accumulatedParams);  // ← 关键: 注入已有参数
+    }
+    graph.stream(input, config).blockLast();
+    return checkGraphResult(graph, config, intent, threadId, sessionId);
 }
 ```
 
-4个服务共用：DomainRouter、ContextRouter、IntentionRouter、ContextRewriter。
-
-### 8.5 AgentStateManager — @Scheduled过期清理
+**Graph内部的保护 — mergeExtractedWithoutOverwrite()**:
 
 ```java
-@Value("${session.pending-agents.expire-minutes:20}")
-private long suspendedExpireMinutes;
-
-@Scheduled(fixedRate = 60_000)
-public void cleanupExpiredSuspended() {
-    Instant now = Instant.now();
-    suspendedAgents.forEach((sessionId, sessionMap) -> {
-        sessionMap.entrySet().removeIf(e -> e.getValue().getExpiresAt().isBefore(now));
-        if (sessionMap.isEmpty()) suspendedAgents.remove(sessionId);
-    });
+// AbstractGraphConfig — 防止LLM重新提取时覆盖已有参数
+protected void mergeExtractedWithoutOverwrite(Map<String, Object> result,
+                                               Map<String, Object> extracted,
+                                               OverAllState state) {
+    for (Map.Entry<String, Object> entry : extracted.entrySet()) {
+        Object existingValue = state.value(entry.getKey()).orElse(null);
+        boolean hasExisting = existingValue != null && !existingValue.toString().isEmpty();
+        if (hasExisting) {
+            // 已有值: 新值非空才覆盖(允许用户更新参数)，否则保留
+            if (entry.getValue() != null && !entry.getValue().toString().isEmpty()) {
+                result.put(entry.getKey(), entry.getValue());
+            }
+        } else {
+            // 无已有值: 新值非空才写入
+            if (entry.getValue() != null && !entry.getValue().toString().isEmpty()) {
+                result.put(entry.getKey(), entry.getValue());
+            }
+        }
+    }
 }
 ```
 
-超时时间通过`session.pending-agents.expire-minutes`配置，默认20分钟。
+### 12.5 Workaround的代价与局限
+
+| 方面 | 影响 |
+|------|------|
+| **性能** | 每次FOLLOW_UP都从START重新执行Graph，extractParams LLM调用重复，增加200-500ms延迟 |
+| **LLM成本** | 每次FOLLOW_UP多一次参数提取LLM调用（正常resume不需要） |
+| **可靠性** | ✅ 不依赖SAA checkpoint，L1自管状态更可控 |
+| **状态一致性** | ✅ accumulatedParams是唯一source of truth，不存在SAA state与L1 state不一致的问题 |
+| **复杂Graph** | ⚠️ 如果Graph有side-effect节点(如发短信、写数据库)，重新执行会导致重复执行。当前4个子Graph的side-effect节点(executeXxx)只在ALL_GOOD时触发，但需要业务开发者注意 |
+
+### 12.6 长期解决方案
+
+**方案A: 修复SAA的stream()使其自动恢复checkpoint** (需要改SAA源码)
+
+```java
+// 修改 CompiledGraph.stream()
+public Flux<NodeOutput> stream(Map<String, Object> inputs, RunnableConfig config) {
+    Map<String, Object> initialState = this.getInitialState(inputs, config);  // ← 用checkpoint恢复
+    return this.streamFromInitialNode(this.stateCreate(initialState), config);
+}
+```
+
+同时需要让 `GraphRunnerContext` 从 checkpoint 恢复 `interruptedNodes` 和 `nextNode`，使 interruptBefore 在恢复后能正确工作。
+
+**方案B: 在应用层包装resume，使用updateState + nextNode** (不改SAA)
+
+```java
+// 利用SAA已有的updateState和nextNode机制
+public WorkflowOutput properResume(CompiledGraph graph, String threadId, 
+                                   String userInput, Map<String, Object> newParams) {
+    RunnableConfig config = RunnableConfig.builder().threadId(threadId).build();
+    
+    // 1. 更新state (合并新参数到checkpoint state)
+    RunnableConfig updatedConfig = graph.updateState(config, newParams);
+    
+    // 2. 用nextNode跳过已执行的节点
+    // updatedConfig.nextNode() 指向中断后的下一个节点
+    // 但stream()仍从START执行...需要interruptBeforeEdge配合
+    
+    // 3. 问题: stream()仍忽略checkpoint
+    // 结论: 此方案在当前SAA版本不可行
+}
+```
+
+**方案C: 维护独立的状态层，SAA只做无状态执行** (当前方案的正式化)
+
+```
+L1 = state owner (accumulatedParams, activeThread, suspendedAgent)
+SAA Graph = stateless executor (每次从START执行, L1注入参数)
+Checkpoint = 只用于graph内部的interruptBefore暂停(单次执行内), 不跨执行
+```
+
+当前代码实际上已经在做方案C。建议将其正式化：
+1. 明确文档约定：L2 Graph的side-effect节点只能在ALL_GOOD/最终执行路径上
+2. 考虑给extractParams增加cache：如果accumulatedParams已包含所有必要参数，跳过LLM提取
+3. 等SAA修复resume机制后再迁移
 
 ---
 
-## 9. 配置项说明
+## 13. Prompt模板体系
 
-```yaml
-# 模型配置
-models:
-  domain:     { model: qwen2.5-7b-instruct }  # L0 领域路由
-  context:    { model: qwen2.5-7b-instruct }  # L1 Phase1 上下文路由
-  intent:     { model: qwen2.5-7b-instruct }  # L1 Phase2 意图识别+改写
-  param-extract: { model: qwen-plus }          # L2 参数提取
-  chat:       { model: qwen-turbo }            # L1 闲聊
+### 12.1 模板列表
 
-# 路由配置
-routing:
-  deterministic:
-    cancel-keywords: ["算了", "不转了", "取消", "不要了", "放弃"]
-    short-answer-pattern: "^\\d+(\\.\\d+)?(元|块|万)?$|^(确认|好的|是的|对|继续|可以)$"
-  confidence:
-    disambiguation-threshold: 0.7    # 低置信度消歧阈值
-    high-confidence-bypass: 0.85     # 高置信度豁免阈值
-  history:
-    max-pairs: 10                    # ChatMemory存储对数
-    judgment-max-pairs: 5            # LLM判断使用对数
+| 模板 | 使用者 | 用途 | 占位符 |
+|------|--------|------|--------|
+| `l0-domain.st` | DomainRouter | L0领域路由 | {message}, {chat_history}, {last_domain_context} |
+| `l1-routing-simple.st` | ContextRouter(Single) | Phase1: FOLLOW_UP/SWITCH_NEW | {intent_list}, {message}, {current_agent}, {pending_agents}, {session_state}, {chat_history}, {domain_name} |
+| `l1-routing.st` | ContextRouter(Multi) | Phase1: FOLLOW_UP/SWITCH_NEW/RESUME | 同上(无domain_name) |
+| `l1-intention.st` | IntentRouter | Phase2: 意图识别+改写 | {intent_list}, {message}, {mode}, {intent_name}, {pending_agents}, {session_state}, {disambig_context}, {chat_history} |
+| `l1-context-rewrite.st` | ContextRewriter | Single域FOLLOW_UP改写 | {domain_name}, {chat_history}, {message} |
+| `planning-agent.st` | (预留) | 规划Agent | — |
+| L2提取prompt | 各GraphConfig | 参数提取 | 子类自定义 |
 
-# 会话状态
-session:
-  pending-agents:
-    max-depth: 3                     # 最大挂起深度
-    expire-minutes: 20               # 挂起超时(分钟)
-    prompt-max-times: 2              # 提参最大追问次数
-    prompt-timeout-seconds: 30       # 提参超时
-  last-agent:
-    expire-minutes: 5                # 上次agent过期
+### 12.2 模板缓存机制
+
+```java
+// TemplateUtils: 构造时warmUp，运行时零IO
+TemplateUtils.warmUp(routingPath, () -> "");   // Builder.build()中调用
+TemplateUtils.warmUp(intentionPath, () -> "");
+// 运行时: TemplateUtils.loadTemplate(path, fallbackSupplier)
 ```
 
 ---
 
-## 10. 完整文件清单
+## 14. Spring Bean配置
 
-| 文件 | 层 | 职责 |
-|------|-----|------|
-| `controller/BankController.java` | L0 | 入口+调度+全局ChatMemory写入 |
-| `router/DomainRouter.java` | L0 | 领域分类(qwen2.5-7b-instruct) |
-| `router/ContextRouter.java` | L1 | Phase1: F/S/R路由判断 |
-| `router/IntentRouter.java` | L1 | Phase2: 意图识别+上下文改写(理财) |
-| `router/IntentResolver.java` | L1 | 意图消歧+置信度增强+模糊匹配 |
-| `router/IntentRegistry.java` | 共享 | 意图注册表+Graph绑定+消歧组 |
-| `rewriter/ContextRewriter.java` | L1 | 上下文改写(转账/账单) |
-| `execution/GraphExecutionService.java` | L1→L2 | Graph执行/resume/cancel |
-| `util/ChatHistoryUtils.java` | 共享 | 历史格式化+截断 |
-| `domain/WealthService.java` | L1 | 理财路由(Phase1+Phase2+消歧) |
-| `domain/TransferService.java` | L1 | 转账路由(简化Phase1+ContextRewriter) |
-| `domain/BillService.java` | L1 | 账单路由(简化Phase1+ContextRewriter) |
-| `domain/ChatService.java` | L1 | 闲聊(直接ChatClient) |
-| `manager/AgentStateManager.java` | 共享 | 线程状态管理(active/suspended/disambig+@Scheduled清理) |
-| `data/WorkflowOutput.java` | 共享 | 统一响应DTO |
-| `data/RoutingResult.java` | L1 | Phase1/Phase2路由结果 |
-| `data/RoutingResolution.java` | L1 | 路由决议(RESOLVED/DISAMBIGUATION/REJECTED) |
-| `workflow/AbstractGraphConfig.java` | L2 | Graph基类(参数提取+取消检测) |
-| `workflow/TransferGraphConfig.java` | L2 | 转账Graph |
-| `workflow/BillQueryGraphConfig.java` | L2 | 账单Graph |
-| `workflow/WealthConsultGraphConfig.java` | L2 | 理财推荐Graph |
-| `workflow/WealthInterpretGraphConfig.java` | L2 | 理财解读Graph |
-| `config/ModelConfig.java` | 配置 | 多模型+ChatMemory Bean定义 |
-| `config/AppInitConfig.java` | 配置 | Graph→IntentRegistry绑定 |
-| `mock/MockBankingService.java` | Mock | 模拟银行服务(转账/账单/理财) |
-| `prompts/l0-domain.st` | Prompt | L0领域分类(42行) |
-| `prompts/l1-routing.st` | Prompt | L1理财Phase1(F/S/R) |
-| `prompts/l1-routing-simple.st` | Prompt | L1转账/账单Phase1(F/S) |
-| `prompts/l1-intention.st` | Prompt | L1理财Phase2意图识别+改写 |
-| `prompts/l1-context-rewrite.st` | Prompt | L1转账/账单上下文改写 |
+### 13.1 Bean依赖关系
+
+```mermaid
+graph LR
+    subgraph Config
+        DSC[DomainServiceConfig]
+        TGC[TransferGraphConfig]
+        BGC[BillQueryGraphConfig]
+        WCG[WealthConsultGraphConfig]
+        WIG[WealthInterpretGraphConfig]
+        MC[ModelConfig]
+    end
+    
+    subgraph Controller
+        BC[BankController]
+    end
+    
+    subgraph Router
+        DR[DomainRouter @Component]
+        CR[ContextRouter @Service]
+        IR[IntentRouter @Service]
+        IRes[IntentResolver @Service]
+        IReg[IntentRegistry @Component]
+    end
+    
+    subgraph Service
+        CW[ContextRewriter @Service]
+        GES[GraphExecutionService @Service]
+    end
+    
+    MC --> |ChatClient| DR & CR & IR & CW
+    DSC --> |@Bean| TDS[transferDomainService]
+    DSC --> |@Bean| BDS[billDomainService]
+    DSC --> |@Bean| WDS[wealthDomainService]
+    
+    TGC --> |@Bean transferGraph| IReg
+    BGC --> |@Bean billQueryGraph| IReg
+    WCG --> |@Bean wealthConsultGraph| IReg
+    WIG --> |@Bean wealthInterpretGraph| IReg
+    
+    BC --> |@Qualifier| TDS & BDS & WDS
+    BC --> DR
+```
+
+### 13.2 ChatMemory隔离
+
+| Bean名 | 使用者 | 用途 |
+|--------|--------|------|
+| (默认) | BankController + DomainRouter | 全局对话历史 |
+| transferChatMemory | TransferService | 转账域对话历史 |
+| billChatMemory | BillService | 账单域对话历史 |
+| wealthChatMemory | WealthService | 理财域对话历史 |
+
+### 13.3 ChatClient隔离
+
+| Bean名 | 使用者 | 用途 |
+|--------|--------|------|
+| domainChatClient | DomainRouter | L0领域路由LLM |
+| contextChatClient | ContextRouter | Phase1路由类型判断 |
+| intentChatClient | IntentRouter + ContextRewriter | Phase2意图识别 + 改写 |
+
+### 13.4 DomainServiceConfig示例
+
+```java
+@Configuration
+public class DomainServiceConfig {
+    @Bean("transferDomainService")
+    public SingleSubAgentDomainService transferDomainService(...) {
+        return SingleSubAgentDomainService.builder()
+                .domainName("转账").logTag("TransferService")
+                .intent("TRANSFER").intentDescription("转账操作")
+                .chatMemory(transferChatMemory)
+                .contextRouter(contextRouter).contextRewriter(contextRewriter)
+                .graphExecutionService(graphExecutionService).intentRegistry(intentRegistry)
+                .activeThreadExpireMinutes(20)
+                .build();
+    }
+    
+    @Bean("wealthDomainService")
+    public MultiSubAgentDomainService wealthDomainService(...) {
+        return MultiSubAgentDomainService.builder()
+                .domainName("理财").logTag("WealthService")
+                .chatMemory(wealthChatMemory)
+                .contextRouter(contextRouter).intentResolver(intentResolver)
+                .graphExecutionService(graphExecutionService).intentRegistry(intentRegistry)
+                .routingTemplatePath("prompts/l1-routing.st")
+                .intentionTemplatePath("prompts/l1-intention.st")
+                .rejectedMessage("该理财功能暂不支持，目前仅支持理财咨询和理财产品解读")
+                .handledIntents(List.of(
+                    new IntentInfo("WEALTH_CONSULT", "理财咨询与推荐"),
+                    new IntentInfo("WEALTH_INTERPRET", "理财产品解读")))
+                .maxSuspendedDepth(3)
+                .suspendedExpireMinutes(20)
+                .activeThreadExpireMinutes(20)
+                .build();
+    }
+}
+```
+
+---
+
+## 15. 已知限制与改进方向
+
+### 14.1 改进路线图
+
+| 优先级 | 项目 | 状态 | 说明 |
+|--------|------|------|------|
+| ~~P0~~ | Multi域跳过ContextRouter | **已撤回** | Multi有多个子意图，用户可能在域内切换，跳过会导致误判 |
+| P1 | L0误分类纠错(REROUTE) | 待定 | L1发现意图不匹配时返回REROUTE，L0重新路由。需防循环(排除列表+maxRerouteCount) |
+| ~~P2~~ | WorkflowStatus枚举 | ✅ 已完成 | 替代硬编码字符串，@JsonValue保证API兼容 |
+| P3 | 领域自注册机制 | 待定 | DomainServiceRegistry，L0自动发现L1服务，减少硬编码 |
+| P4 | accumulatedParams限制 | 待定 | 白名单+大小限制，防止注入攻击 |
+
+### 14.2 LLM非确定性问题
+
+WEALTH_CONSULT的INTERRUPTED↔COMPLETED翻转是主要噪声源（回归测试约8/59失败率）。根因：Graph内部extractParams LLM有时会幻觉出用户未提供的参数，导致paramRouter误判ALL_GOOD。解决方向：
+
+- 强化extractParams prompt约束"只提取用户明确提到的参数"
+- paramRouter增加确定性校验（不依赖LLM的提取结果做缺失判断）
+- 或将paramRouter改为纯规则路由
+
+### 14.3 其他已知问题
+
+- **TestRunner.java**: 仍使用硬编码字符串status值，未迁移到WorkflowStatus枚举
+- **内存状态**: 所有状态(ActiveThread/SuspendedAgent/Disambiguation/lastActiveDomain)均为ConcurrentHashMap内存存储，重启丢失。Redis迁移已在规划中
+- **ChatMemory截断**: `judgmentMaxPairs=5`，长对话可能导致LLM缺少关键上下文
+- **Single域FOLLOW_UP改写**: 当activeThread已清但ChatMemory有上下文时，ContextRewriter改写质量依赖LLM

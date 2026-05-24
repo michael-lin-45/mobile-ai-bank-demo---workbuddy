@@ -319,6 +319,14 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 }
             }
 
+            // ========== RESUME但无suspendedAgents → 降级为SWITCH_NEW ==========
+            if ("RESUME".equals(phase1.getRouteType()) && !hasOwnSuspendedAgents(sessionId)) {
+                log.info("[{}] RESUME but no suspended agents → fallback to SWITCH_NEW", logTag);
+                phase1 = RoutingResult.builder()
+                        .routeType("SWITCH_NEW").confidence(0.5)
+                        .reasoning("RESUME但无挂起线程,降级为新意图").build();
+            }
+
             // ========== 路由决策 (Phase2 + 消歧) ==========
             DisambiguationState disambigState = getDisambiguationState(sessionId);
             String disambigGroupId = disambigState != null ? disambigState.getGroupId() : null;
