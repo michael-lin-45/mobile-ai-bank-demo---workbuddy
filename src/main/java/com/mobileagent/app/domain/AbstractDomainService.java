@@ -1,6 +1,7 @@
 package com.mobileagent.app.domain;
 
 import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.execution.GraphExecutionService;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
@@ -199,7 +200,7 @@ public abstract class AbstractDomainService {
         recordSystemReply(sessionId, resumeResult);
 
         // 完成后清空activeThread，避免下次FOLLOW_UP复用旧参数
-        if ("COMPLETED".equals(resumeResult.getStatus())) {
+        if (WorkflowStatus.COMPLETED.equals(resumeResult.getStatus())) {
             clearOwnActiveThread(sessionId);
         }
 
@@ -236,7 +237,7 @@ public abstract class AbstractDomainService {
         WorkflowOutput result = graphExecutionService.executeGraph(graph, intent, newThreadId, rewrittenInput, sessionId, null);
         saveAccumulatedParams(sessionId, result);
 
-        if ("COMPLETED".equals(result.getStatus())) {
+        if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {
             clearOwnActiveThread(sessionId);
         }
 

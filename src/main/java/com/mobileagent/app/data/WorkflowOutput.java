@@ -9,18 +9,14 @@ import java.util.Map;
 /**
  * Graph执行结果DTO - Controller返回给前端的统一响应格式
  *
- * 状态类型:
- * - COMPLETED: 操作完成
- * - INTERRUPTED: 子智能体需要用户补充参数
- * - DISAMBIGUATION: 意图消歧,需要用户明确意图
- * - ERROR: 错误
+ * 状态类型: 见 {@link WorkflowStatus}
  */
 @Data
 @Builder
 public class WorkflowOutput {
 
-    /** 状态: COMPLETED / INTERRUPTED / DISAMBIGUATION / ERROR */
-    private String status;
+    /** 状态 */
+    private WorkflowStatus status;
 
     /** 输出内容 (COMPLETED时) */
     private String content;
@@ -45,7 +41,7 @@ public class WorkflowOutput {
 
     public static WorkflowOutput completed(String intent, String content) {
         return WorkflowOutput.builder()
-                .status("COMPLETED")
+                .status(WorkflowStatus.COMPLETED)
                 .intent(intent)
                 .content(content)
                 .build();
@@ -53,7 +49,7 @@ public class WorkflowOutput {
 
     public static WorkflowOutput interrupted(String intent, String threadId, String question) {
         return WorkflowOutput.builder()
-                .status("INTERRUPTED")
+                .status(WorkflowStatus.INTERRUPTED)
                 .intent(intent)
                 .threadId(threadId)
                 .question(question)
@@ -63,7 +59,7 @@ public class WorkflowOutput {
     /** 意图消歧 - 需要用户明确具体意图 */
     public static WorkflowOutput disambiguation(String question, List<String> candidates) {
         return WorkflowOutput.builder()
-                .status("DISAMBIGUATION")
+                .status(WorkflowStatus.DISAMBIGUATION)
                 .question(question)
                 .candidateIntents(candidates)
                 .build();
@@ -71,7 +67,7 @@ public class WorkflowOutput {
 
     public static WorkflowOutput error(String errorMessage) {
         return WorkflowOutput.builder()
-                .status("ERROR")
+                .status(WorkflowStatus.ERROR)
                 .errorMessage(errorMessage)
                 .build();
     }
@@ -79,10 +75,14 @@ public class WorkflowOutput {
     /** 根据状态提取回复内容 */
     public String getReplyContent() {
         return switch (status) {
-            case "COMPLETED" -> content;
-            case "INTERRUPTED", "DISAMBIGUATION" -> question;
-            case "ERROR" -> errorMessage;
-            default -> null;
+            case COMPLETED -> content;
+            case INTERRUPTED, DISAMBIGUATION -> question;
+            case ERROR -> errorMessage;
         };
+    }
+
+    /** 兼容旧代码: 获取状态的字符串值 */
+    public String getStatusString() {
+        return status != null ? status.getValue() : null;
     }
 }

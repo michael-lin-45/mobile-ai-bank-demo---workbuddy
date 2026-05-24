@@ -3,6 +3,7 @@ package com.mobileagent.app.domain;
 import com.mobileagent.app.data.RoutingResolution;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
@@ -404,7 +405,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         WorkflowOutput result = graphExecutionService.resumeGraph(intent, newThreadId, userInput, sessionId, suspendedParams);
         saveAccumulatedParams(sessionId, result);
 
-        if ("COMPLETED".equals(result.getStatus())) {
+        if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {
             clearOwnActiveThread(sessionId);
         }
 

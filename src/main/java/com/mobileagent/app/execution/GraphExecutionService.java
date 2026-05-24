@@ -3,6 +3,7 @@ package com.mobileagent.app.execution;
 import com.alibaba.cloud.ai.graph.*;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.data.WorkflowStatus;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -135,7 +136,7 @@ public class GraphExecutionService {
             if (nextNode != null && !nextNode.isEmpty() && !nextNode.equals("__END__")) {
                 log.info("[GraphExec] Interrupted by interruptBefore: nextNode={}, question={}", nextNode, question);
                 return WorkflowOutput.builder()
-                        .status("INTERRUPTED")
+                        .status(WorkflowStatus.INTERRUPTED)
                         .intent(intent)
                         .threadId(threadId)
                         .question(question)
@@ -147,7 +148,7 @@ public class GraphExecutionService {
             if (question != null && !question.isEmpty()) {
                 log.info("[GraphExec] Interrupted by ask→END: question={}", question);
                 return WorkflowOutput.builder()
-                        .status("INTERRUPTED")
+                        .status(WorkflowStatus.INTERRUPTED)
                         .intent(intent)
                         .threadId(threadId)
                         .question(question)
@@ -162,7 +163,7 @@ public class GraphExecutionService {
 
             log.info("[GraphExec] Graph completed: content={}", content);
             return WorkflowOutput.builder()
-                    .status("COMPLETED")
+                    .status(WorkflowStatus.COMPLETED)
                     .intent(intent)
                     .content(content)
                     .accumulatedParams(params)
