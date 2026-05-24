@@ -9,6 +9,7 @@ import com.mobileagent.app.execution.GraphExecutionService;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.util.List;
 import java.util.Objects;
@@ -45,7 +46,8 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
 
     private SingleSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.chatMemory,
-                builder.contextRouter, builder.graphExecutionService, builder.intentRegistry);
+                builder.contextRouter, builder.graphExecutionService, builder.intentRegistry,
+                builder.activeThreadExpireMinutes);
         this.intent = builder.intent;
         this.intentDescription = builder.intentDescription;
         this.routingTemplatePath = builder.routingTemplatePath != null
@@ -71,6 +73,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         private ContextRewriter contextRewriter;
         private GraphExecutionService graphExecutionService;
         private IntentRegistry intentRegistry;
+        private long activeThreadExpireMinutes = 20;
 
         public Builder domainName(String domainName) { this.domainName = domainName; return this; }
         public Builder logTag(String logTag) { this.logTag = logTag; return this; }
@@ -86,6 +89,8 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         public Builder contextRewriter(ContextRewriter contextRewriter) { this.contextRewriter = contextRewriter; return this; }
         public Builder graphExecutionService(GraphExecutionService graphExecutionService) { this.graphExecutionService = graphExecutionService; return this; }
         public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
+        /** activeThread过期时间(分钟)，默认20分钟 */
+        public Builder activeThreadExpireMinutes(long activeThreadExpireMinutes) { this.activeThreadExpireMinutes = activeThreadExpireMinutes; return this; }
 
         public SingleSubAgentDomainService build() {
             Objects.requireNonNull(domainName, "domainName is required");
@@ -155,6 +160,14 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
      */
     private WorkflowOutput handleSwitchNew(String sessionId, String rewrittenInput) {
         return executeNewThread(sessionId, intent, rewrittenInput);
+    }
+
+    // ==================== 定时清理 ====================
+
+    /** 定时清理过期的activeThread, 每分钟执行一次 */
+    @Scheduled(fixedRate = 60_000)
+    public void scheduledCleanup() {
+        cleanupExpiredActiveThreads();
     }
 
     // ==================== 状态管理 ====================

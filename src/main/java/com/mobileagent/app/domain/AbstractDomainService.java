@@ -57,6 +57,9 @@ public abstract class AbstractDomainService {
     /** 本领域自有的activeThread (per session) */
     private final Map<String, ActiveThreadInfo> activeThreads = new ConcurrentHashMap<>();
 
+    /** activeThread过期时间(分钟) - 与suspendedExpireMinutes保持一致 */
+    private final long activeThreadExpireMinutes;
+
     // ==================== 共享数据类 ====================
 
     @Data
@@ -64,13 +67,15 @@ public abstract class AbstractDomainService {
         private final String threadId;
         private final String intent;
         private final Instant createdAt;
+        private final Instant expiresAt;
         /** 累积的参数 (如transfer.receiver, wealthConsult.riskLevel等) */
         private Map<String, Object> accumulatedParams = new HashMap<>();
 
-        public ActiveThreadInfo(String threadId, String intent, Instant createdAt) {
+        public ActiveThreadInfo(String threadId, String intent, Instant createdAt, Instant expiresAt) {
             this.threadId = threadId;
             this.intent = intent;
             this.createdAt = createdAt;
+            this.expiresAt = expiresAt;
         }
 
         public void setAccumulatedParams(Map<String, Object> params) {
@@ -105,31 +110,55 @@ public abstract class AbstractDomainService {
                                     ChatMemory chatMemory,
                                     ContextRouter contextRouter,
                                     GraphExecutionService graphExecutionService,
-                                    IntentRegistry intentRegistry) {
+                                    IntentRegistry intentRegistry,
+                                    long activeThreadExpireMinutes) {
         this.domainName = domainName;
         this.logTag = logTag;
         this.chatMemory = chatMemory;
         this.contextRouter = contextRouter;
         this.graphExecutionService = graphExecutionService;
         this.intentRegistry = intentRegistry;
+        this.activeThreadExpireMinutes = activeThreadExpireMinutes;
     }
 
     // ==================== activeThread管理 ====================
 
     protected ActiveThreadInfo getOwnActiveThread(String sessionId) {
-        return activeThreads.get(sessionId);
+        ActiveThreadInfo info = activeThreads.get(sessionId);
+        if (info != null && info.getExpiresAt().isBefore(Instant.now())) {
+            activeThreads.remove(sessionId);
+            log.info("[{}] ActiveThread expired: session={}, intent={}, createdAt={}",
+                    logTag, sessionId, info.getIntent(), info.getCreatedAt());
+            return null;
+        }
+        return info;
     }
 
     protected void setOwnActiveThread(String sessionId, String threadId, String intent) {
         if (threadId == null || intent == null) {
             activeThreads.remove(sessionId);
         } else {
-            activeThreads.put(sessionId, new ActiveThreadInfo(threadId, intent, Instant.now()));
+            Instant now = Instant.now();
+            Instant expiresAt = now.plusSeconds(activeThreadExpireMinutes * 60);
+            activeThreads.put(sessionId, new ActiveThreadInfo(threadId, intent, now, expiresAt));
         }
     }
 
     protected void clearOwnActiveThread(String sessionId) {
         activeThreads.remove(sessionId);
+    }
+
+    /** 清理过期的activeThread (由子类的@Scheduled方法调用) */
+    protected void cleanupExpiredActiveThreads() {
+        Instant now = Instant.now();
+        activeThreads.entrySet().removeIf(entry -> {
+            if (entry.getValue().getExpiresAt().isBefore(now)) {
+                log.debug("[{}] Auto cleaned expired activeThread: session={}, intent={}",
+                        logTag, entry.getKey(), entry.getValue().getIntent());
+                return true;
+            }
+            return false;
+        });
     }
 
     // ==================== ChatMemory管理 ====================

@@ -95,7 +95,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     private MultiSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.chatMemory,
-                builder.contextRouter, builder.graphExecutionService, builder.intentRegistry);
+                builder.contextRouter, builder.graphExecutionService, builder.intentRegistry,
+                builder.activeThreadExpireMinutes);
         this.intentResolver = builder.intentResolver;
         this.routingTemplatePath = builder.routingTemplatePath != null
                 ? builder.routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
@@ -127,6 +128,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         private List<IntentInfo> handledIntents;
         private int maxSuspendedDepth = 3;
         private long suspendedExpireMinutes = 20;
+        private long activeThreadExpireMinutes = 20;
 
         public Builder domainName(String domainName) { this.domainName = domainName; return this; }
         public Builder logTag(String logTag) { this.logTag = logTag; return this; }
@@ -143,6 +145,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         public Builder handledIntents(List<IntentInfo> handledIntents) { this.handledIntents = handledIntents; return this; }
         public Builder maxSuspendedDepth(int maxSuspendedDepth) { this.maxSuspendedDepth = maxSuspendedDepth; return this; }
         public Builder suspendedExpireMinutes(long suspendedExpireMinutes) { this.suspendedExpireMinutes = suspendedExpireMinutes; return this; }
+        /** activeThread过期时间(分钟)，默认20分钟，与suspendedExpireMinutes保持一致 */
+        public Builder activeThreadExpireMinutes(long activeThreadExpireMinutes) { this.activeThreadExpireMinutes = activeThreadExpireMinutes; return this; }
 
         public MultiSubAgentDomainService build() {
             Objects.requireNonNull(domainName, "domainName is required");
@@ -237,7 +241,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         return !sessionMap.isEmpty();
     }
 
-    /** 定时清理过期的挂起记录, 每分钟执行一次 */
+    /** 定时清理过期的挂起记录和activeThread, 每分钟执行一次 */
     @Scheduled(fixedRate = 60_000)
     public void cleanupExpiredSuspended() {
         Instant now = Instant.now();
@@ -253,6 +257,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 suspendedAgents.remove(sessionId);
             }
         });
+        // 同时清理过期的activeThread
+        cleanupExpiredActiveThreads();
     }
 
     // ==================== 消歧管理 ====================
