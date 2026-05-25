@@ -27,13 +27,24 @@ public class IntentRegistry {
         private final String description;
         private final String paramSchema;
         private final boolean writeOp;
+        /** 意图类型: OPERATION / QUERY / CONSULTATION */
+        private final String intentType;
+        /** 本意图的处理范围描述，供IntentRouter判断belongs_to_domain */
+        private final String scope;
         private CompiledGraph graph;
 
         public IntentConfig(String name, String description, String paramSchema, boolean writeOp) {
+            this(name, description, paramSchema, writeOp, null, null);
+        }
+
+        public IntentConfig(String name, String description, String paramSchema, boolean writeOp,
+                            String intentType, String scope) {
             this.name = name;
             this.description = description;
             this.paramSchema = paramSchema;
             this.writeOp = writeOp;
+            this.intentType = intentType;
+            this.scope = scope;
         }
     }
 
@@ -52,10 +63,14 @@ public class IntentRegistry {
     @PostConstruct
     public void init() {
         // 注册已知意图(不含graph,graph在Bean初始化后注入)
-        register("TRANSFER", "转账给他人", "收款人名称, 转账金额, 用途(可选)", true);
-        register("BILL_QUERY", "查询账单明细", "时间范围, 收支类型(支出/收入/收支)", false);
-        register("WEALTH_CONSULT", "理财咨询/推荐", "风险偏好(激进/稳健/保守)", false);
-        register("WEALTH_INTERPRET", "理财产品解读", "理财产品名称", false);
+        register("TRANSFER", "转账给他人", "收款人名称, 转账金额, 用途(可选)", true,
+                "OPERATION", "资金转账操作，将钱转给他人或理财产品等");
+        register("BILL_QUERY", "查询账单明细", "时间范围, 收支类型(支出/收入/收支)", false,
+                "QUERY", "账单/消费/收支明细查询");
+        register("WEALTH_CONSULT", "理财咨询/推荐", "风险偏好(激进/稳健/保守)", false,
+                "CONSULTATION", "理财咨询与推荐，基于风险偏好推荐理财产品");
+        register("WEALTH_INTERPRET", "理财产品解读", "理财产品名称", false,
+                "CONSULTATION", "理财产品/标的解读，分析具体理财产品的详情");
 
         // 注册意图组(共享前缀关键词,需要消歧)
         registerGroup("WEALTH", "理财", List.of("WEALTH_CONSULT", "WEALTH_INTERPRET"),
@@ -67,6 +82,11 @@ public class IntentRegistry {
 
     public void register(String name, String description, String paramSchema, boolean writeOp) {
         registry.put(name, new IntentConfig(name, description, paramSchema, writeOp));
+    }
+
+    public void register(String name, String description, String paramSchema, boolean writeOp,
+                         String intentType, String scope) {
+        registry.put(name, new IntentConfig(name, description, paramSchema, writeOp, intentType, scope));
     }
 
     public void bindGraph(String intentName, CompiledGraph graph) {
@@ -136,6 +156,29 @@ public class IntentRegistry {
     }
 
     // --- 意图模糊匹配 ---
+
+    /**
+     * 生成本领域意图的范围描述(含intentType+scope)，供IntentRouter做belongs_to_domain判断
+     *
+     * 格式: - TRANSFER [OPERATION]: 资金转账操作，将钱转给他人或理财产品等
+     */
+    public String getDomainIntentScopeDescription(List<String> domainIntentNames) {
+        StringBuilder sb = new StringBuilder();
+        for (String intentName : domainIntentNames) {
+            IntentConfig config = registry.get(intentName);
+            if (config != null) {
+                sb.append("- ").append(config.getName());
+                if (config.getIntentType() != null) {
+                    sb.append(" [").append(config.getIntentType()).append("]");
+                }
+                if (config.getScope() != null) {
+                    sb.append(": ").append(config.getScope());
+                }
+                sb.append("\n");
+            }
+        }
+        return sb.toString().trim();
+    }
 
     /**
      * 模糊匹配意图 - 当LLM返回的intent不在注册表中时尝试匹配

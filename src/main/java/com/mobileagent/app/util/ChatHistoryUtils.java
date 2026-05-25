@@ -15,7 +15,7 @@ import java.util.List;
  * - DomainRouter (L0) - 领域路由
  * - ContextRouter (L1) - 上下文路由
  * - IntentRouter (L1) - 意图识别+改写
- * - ContextRewriter (L1) - 上下文改写
+ * - IntentRouter (L1) - 上下文改写+意图识别
  *
  * 截断策略:
  * - 从ChatMemory读取全部历史消息

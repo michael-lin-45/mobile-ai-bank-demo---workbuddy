@@ -33,6 +33,9 @@ public class RoutingResolution {
     /** 路由类型 SWITCH_NEW/RESUME (RESOLVED时非null) */
     private String routeType;
 
+    /** IntentRouter判断不属于本域 (REROUTE依据) */
+    private boolean outOfDomain;
+
     /** 追问内容 (DISAMBIGUATION时非null) */
     private String question;
 
@@ -48,7 +51,9 @@ public class RoutingResolution {
         /** 无法识别，拒绝 */
         REJECTED,
         /** 用户取消当前操作(如消歧中取消) */
-        CANCELLED
+        CANCELLED,
+        /** 意图不属于本域，需要L0重新路由 */
+        REROUTE
     }
 
     // ==================== 工厂方法 ====================
@@ -82,6 +87,26 @@ public class RoutingResolution {
                 .build();
     }
 
+    /** 意图不属于本域，需要重新路由 */
+    public static RoutingResolution reroute(String intentName, String targetDomain) {
+        return RoutingResolution.builder()
+                .status(RoutingStatus.REROUTE)
+                .intentName(intentName)
+                .routeType(targetDomain != null ? "REROUTE_" + targetDomain : "REROUTE")
+                .build();
+    }
+
+    /** 意图明确但不属于本域 */
+    public static RoutingResolution outOfDomain(String intentName, String rewrittenInput) {
+        return RoutingResolution.builder()
+                .status(RoutingStatus.RESOLVED)
+                .intentName(intentName)
+                .rewrittenInput(rewrittenInput)
+                .outOfDomain(true)
+                .routeType("SWITCH_NEW")
+                .build();
+    }
+
     // ==================== 便捷判断 ====================
 
     public boolean isResolved() {
@@ -98,5 +123,13 @@ public class RoutingResolution {
 
     public boolean isCancelled() {
         return status == RoutingStatus.CANCELLED;
+    }
+
+    public boolean isReroute() {
+        return status == RoutingStatus.REROUTE;
+    }
+
+    public boolean isOutOfDomain() {
+        return outOfDomain;
     }
 }

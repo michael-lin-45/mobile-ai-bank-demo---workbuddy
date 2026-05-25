@@ -39,6 +39,12 @@ public class WorkflowOutput {
     /** 从Graph state中提取的已收集参数 (由L1 Service保存到自己的activeThread) */
     private Map<String, Object> accumulatedParams;
 
+    /** REROUTE时建议的目标意图(如"TRANSFER")，可为null */
+    private String rerouteIntent;
+
+    /** REROUTE时建议的目标域(如"TRANSFER")，可为null */
+    private String rerouteHint;
+
     public static WorkflowOutput completed(String intent, String content) {
         return WorkflowOutput.builder()
                 .status(WorkflowStatus.COMPLETED)
@@ -72,12 +78,22 @@ public class WorkflowOutput {
                 .build();
     }
 
+    /** L1无法处理，需要L0重新路由 */
+    public static WorkflowOutput reroute(String rerouteIntent, String rerouteHint) {
+        return WorkflowOutput.builder()
+                .status(WorkflowStatus.REROUTE)
+                .rerouteIntent(rerouteIntent)
+                .rerouteHint(rerouteHint)
+                .build();
+    }
+
     /** 根据状态提取回复内容 */
     public String getReplyContent() {
         return switch (status) {
             case COMPLETED -> content;
             case INTERRUPTED, DISAMBIGUATION -> question;
             case ERROR -> errorMessage;
+            case REROUTE -> null; // REROUTE不对用户可见，由BankController内部处理
         };
     }
 

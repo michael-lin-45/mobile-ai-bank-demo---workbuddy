@@ -6,6 +6,7 @@
 {session_state}
 
 当前活跃意图: {current_agent}
+{last_question_context}
 
 ===对话历史(用户之前的对话，用于理解上下文)===
 {chat_history}

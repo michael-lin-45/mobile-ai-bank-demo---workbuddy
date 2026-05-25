@@ -299,9 +299,13 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             String pendingAgents = getPendingAgentsDescription(sessionId);
 
             // ========== Phase 1: ContextRouter (FOLLOW_UP/SWITCH_NEW/RESUME) ==========
+            // 如果activeThread存在且有lastQuestion，注入lastQuestion帮助ContextRouter精准判断
+            ActiveThreadInfo activeThreadForRouting = getOwnActiveThread(sessionId);
+            String lastQuestion = (activeThreadForRouting != null) ? activeThreadForRouting.getLastQuestion() : null;
+
             RoutingResult phase1 = contextRouter.route(sessionId, userInput,
                     currentAgent, pendingAgents,
-                    routingTemplatePath, domainName, chatMemory);
+                    routingTemplatePath, domainName, chatMemory, lastQuestion);
             log.info("[{}] Phase1: routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
 
             // ========== FOLLOW_UP + activeThread → 直接resume (消歧中除外) ==========
@@ -331,13 +335,46 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             // 传入globalChatHistory用于跨域指代消解(如"刚才说的那个理财")
             DisambiguationState disambigState = getDisambiguationState(sessionId);
             String disambigGroupId = disambigState != null ? disambigState.getGroupId() : null;
+            String domainIntentScopeList = intentRegistry.getDomainIntentScopeDescription(
+                    handledIntents.stream().map(IntentInfo::getIntentName).toList());
             RoutingResolution resolution = intentResolver.resolve(sessionId, userInput, phase1, chatMemory,
                     isInDisambiguation(sessionId), disambigGroupId,
                     hasOwnSuspendedAgents(sessionId), getAllOwnSuspended(sessionId),
-                    intentionTemplatePath, globalChatHistory);
-            log.info("[{}] Routing resolution: status={}, intent={}, globalChatHistory=[{}]",
-                    logTag, resolution.getStatus(), resolution.getIntentName(),
+                    intentionTemplatePath, globalChatHistory, domainIntentScopeList);
+            log.info("[{}] Routing resolution: status={}, intent={}, outOfDomain={}, globalChatHistory=[{}]",
+                    logTag, resolution.getStatus(), resolution.getIntentName(), resolution.isOutOfDomain(),
                     globalChatHistory != null && !globalChatHistory.isBlank() ? globalChatHistory.substring(0, Math.min(200, globalChatHistory.length())) + "..." : "(空)");
+
+            // ========== REROUTE判断: 识别的意图不属于本域 ==========
+            if (resolution.isResolved()) {
+                String effectiveIntent = resolution.getIntentName();
+
+                // 跨域意图: 意图不在本域handledIntents中
+                if (!isOwnIntent(effectiveIntent)) {
+                    log.info("[{}] Cross-domain intent detected: intent={} not in handledIntents, → REROUTE",
+                            logTag, effectiveIntent);
+                    return WorkflowOutput.reroute(effectiveIntent, null);
+                }
+
+                // outOfDomain: IntentRouter判断不属于本域scope
+                if (resolution.isOutOfDomain()) {
+                    log.info("[{}] Out-of-domain intent detected: intent={}, → REROUTE",
+                            logTag, effectiveIntent);
+                    return WorkflowOutput.reroute(effectiveIntent, null);
+                }
+            }
+
+            // ========== Auto-upgrade保护: SWITCH_NEW但意图与activeThread一致 → 降级FOLLOW_UP ==========
+            if (resolution.isResolved() && activeThreadForRouting != null
+                    && !"RESUME".equals(resolution.getRouteType())) {
+                String identifiedIntent = resolution.getIntentName();
+                if (identifiedIntent != null && identifiedIntent.equals(activeThreadForRouting.getIntent())) {
+                    log.info("[{}] Auto-upgrade SWITCH_NEW→FOLLOW_UP: identifiedIntent={} matches activeThread.intent={}",
+                            logTag, identifiedIntent, activeThreadForRouting.getIntent());
+                    addUserMessage(sessionId, userInput);
+                    return resumeActiveThread(sessionId, userInput, activeThreadForRouting);
+                }
+            }
 
             addUserMessage(sessionId, userInput);
 
@@ -362,6 +399,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                     clearDisambiguationState(sessionId);
                     yield WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
                 }
+                case REROUTE -> WorkflowOutput.reroute(resolution.getIntentName(), resolution.getRouteType());
             };
 
             recordSystemReply(sessionId, output);
@@ -419,7 +457,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         setOwnActiveThread(sessionId, newThreadId, intent);
 
         WorkflowOutput result = graphExecutionService.resumeGraph(intent, newThreadId, userInput, sessionId, suspendedParams);
-        saveAccumulatedParams(sessionId, result);
+        saveL2Result(sessionId, result);
 
         if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {
             clearOwnActiveThread(sessionId);
@@ -480,5 +518,12 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     @Override
     public List<IntentInfo> getHandledIntents() {
         return handledIntents;
+    }
+
+    /** 判断意图是否属于本域处理范围 */
+    private boolean isOwnIntent(String intentName) {
+        if (intentName == null || "UNKNOWN".equalsIgnoreCase(intentName)) return false;
+        return handledIntents.stream()
+                .anyMatch(info -> info.getIntentName().equals(intentName));
     }
 }

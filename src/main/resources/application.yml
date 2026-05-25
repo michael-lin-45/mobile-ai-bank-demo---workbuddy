@@ -53,18 +53,26 @@ intents:
     description: "转账给他人"
     param-schema: "收款人名称, 转账金额, 用途(可选)"
     is-write-op: true
+    intent-type: OPERATION
+    scope: "资金转账操作，将钱转给他人或理财产品等"
   - name: BILL_QUERY
     description: "查询账单明细"
     param-schema: "时间范围, 支出/收入类型(可选)"
     is-write-op: false
+    intent-type: QUERY
+    scope: "账单/消费/收支明细查询"
   - name: WEALTH_CONSULT
     description: "理财咨询/推荐"
     param-schema: "风险偏好(激进/稳健/保守), 关注领域(科技/能源/汽车/银行/工业/饮食/娱乐/全部, 可选, 默认全部)"
     is-write-op: false
+    intent-type: CONSULTATION
+    scope: "理财咨询与推荐，基于风险偏好推荐理财产品"
   - name: WEALTH_INTERPRET
     description: "理财产品解读"
     param-schema: "理财产品名称"
     is-write-op: false
+    intent-type: CONSULTATION
+    scope: "理财产品/标的解读，分析具体理财产品的详情"
 
 session:
   pending-agents:

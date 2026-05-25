@@ -49,6 +49,10 @@ public class RoutingResult {
     /** 判断理由 */
     private String reasoning;
 
+    /** Phase2: IntentRouter判断用户意图是否属于当前域的处理范围(REROUTE依据)，默认true(保守) */
+    @Builder.Default
+    private boolean belongsToDomain = true;
+
     public boolean isFollowUp() {
         return "FOLLOW_UP".equals(routeType);
     }

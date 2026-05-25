@@ -53,8 +53,21 @@ public class IntentRouter {
      * @param disambigContext 消歧上下文(如"无"或具体消歧信息)
      * @param templatePath 提示词模板路径(如"prompts/l1-intention.st")
      * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
+    /**
+     * Phase2: 意图识别 + 上下文改写
+     *
+     * @param sessionId 会话ID
+     * @param userInput 用户原始输入
+     * @param phase1Result Phase1的路由结果
+     * @param currentAgent 当前活跃意图名称(如"WEALTH_CONSULT"或"无")
+     * @param pendingAgents 挂起的意图列表描述(如"WEALTH_CONSULT, WEALTH_INTERPRET"或"无")
+     * @param sessionState 会话状态描述(由L1 Service生成)
+     * @param disambigContext 消歧上下文(如"无"或具体消歧信息)
+     * @param templatePath 提示词模板路径(如"prompts/l1-intention.st")
+     * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
      * @param globalChatHistory 全局跨域对话历史(由L0传入,用于跨域指代消解,可为null)
-     * @return 包含意图名称、改写后输入、路由类型的完整路由结果
+     * @param domainIntentScopeList 本领域意图的范围描述(含intentType+scope)，供belongs_to_domain判断
+     * @return 包含意图名称、改写后输入、路由类型、归属判断的完整路由结果
      */
     public RoutingResult rewriteAndIdentify(String sessionId, String userInput,
                                              RoutingResult phase1Result,
@@ -62,13 +75,14 @@ public class IntentRouter {
                                              String sessionState, String disambigContext,
                                              String templatePath,
                                              ChatMemory chatMemory,
-                                             String globalChatHistory) {
+                                             String globalChatHistory,
+                                             String domainIntentScopeList) {
         try {
             String chatHistoryStr = formatChatHistory(chatMemory, sessionId);
             String systemPrompt = buildIntentionSystemPrompt(userInput, phase1Result,
                     currentAgent, pendingAgents, sessionState, disambigContext, chatHistoryStr,
                     templatePath != null ? templatePath : DEFAULT_TEMPLATE_PATH,
-                    globalChatHistory);
+                    globalChatHistory, domainIntentScopeList);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
@@ -112,15 +126,19 @@ public class IntentRouter {
                                                String sessionState, String disambigContext,
                                                String chatHistory,
                                                String templatePath,
-                                               String globalChatHistory) {
+                                               String globalChatHistory,
+                                               String domainIntentScopeList) {
         String template = loadTemplate(templatePath);
-        String intentList = intentRegistry.getIntentListDescription();
+        String allIntentList = intentRegistry.getIntentListDescription();
+        String scopeList = domainIntentScopeList != null ? domainIntentScopeList : allIntentList;
 
         // 根据Phase1判断确定改写模式
         String mode = phase1Result.isResume() ? "RESUME" : "SWITCH";
 
         return template
-                .replace("{intent_list}", intentList)
+                .replace("{intent_list}", scopeList)
+                .replace("{intent_scope_list}", scopeList)
+                .replace("{all_intent_list}", allIntentList)
                 .replace("{message}", userInput)
                 .replace("{mode}", mode)
                 .replace("{intent_name}", currentAgent)
@@ -130,6 +148,7 @@ public class IntentRouter {
                 .replace("{pending_agents}", pendingAgents)
                 .replace("{disambig_context}", disambigContext)
                 .replace("{chat_history}", chatHistory)
+                .replace("{domain_name}", "")  // 默认空，由模板决定
                 .replace("{global_chat_history}",
                         globalChatHistory != null && !globalChatHistory.equals("(无历史对话)")
                                 ? globalChatHistory : "(无)");
@@ -179,6 +198,7 @@ public class IntentRouter {
                     .ambiguous(ambiguous)
                     .candidateIntents(candidateIntents)
                     .groupId(groupId)
+                    .belongsToDomain(!node.has("belongs_to_domain") || node.get("belongs_to_domain").asBoolean(true))
                     .build();
         } catch (Exception e) {
             log.warn("[IntentRouter] Failed to parse rewrite response: {}", content, e);
@@ -224,8 +244,11 @@ public class IntentRouter {
         return """
             你是一个手机银行意图识别与改写器。意图识别是主要目的,上下文改写是为子智能体提取参数服务的手段。
             
-            已注册意图列表:
-            {intent_list}
+            本领域处理以下意图:
+            {intent_scope_list}
+            
+            已注册意图列表(全局,供跨域归属判断参考):
+            {all_intent_list}
             
             改写模式: {mode}
             
@@ -253,13 +276,16 @@ public class IntentRouter {
             1. 意图识别(主要): 从已注册意图列表中选择最匹配的意图,无法归入则输出UNKNOWN
             2. 上下文改写(辅助): 将依赖上下文的模糊表达改写为自包含的完整描述,方便子智能体直接提取参数
                - 如果用户输入引用了其他领域的内容(如"刚才说的那个理财")，从全局历史中查找并消解指代
-            3. 歧义检测: 如果用户输入只能匹配到意图组,标记is_ambiguous=true
-            4. 路由判断: 意图在挂起列表中→RESUME,否则→SWITCH_NEW
+            3. 归属判断: 判断用户意图是否属于本领域处理范围，参考意图的intent_type和scope
+               - 无法确定时 → belongs_to_domain=true (保守策略)
+            4. 歧义检测: 如果用户输入只能匹配到意图组,标记is_ambiguous=true
+            5. 路由判断: 意图在挂起列表中→RESUME,否则→SWITCH_NEW
             
             严格输出JSON:
             {
               "intent_name": "意图名称",
               "rewritten_input": "改写后的自包含描述",
+              "belongs_to_domain": true,
               "route_type": "SWITCH_NEW | RESUME",
               "resume_target": "RESUME时填意图名,否则null",
               "confidence": 0.0-1.0,

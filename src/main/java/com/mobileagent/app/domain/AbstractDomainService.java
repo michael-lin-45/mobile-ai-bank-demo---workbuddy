@@ -1,5 +1,6 @@
 package com.mobileagent.app.domain;
 
+import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.execution.GraphExecutionService;
@@ -22,7 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * L1领域服务抽象基类 - 提取Single/Multi共性的状态管理和工具方法
  *
  * 共性逻辑:
- * - activeThread管理 (per session, per domain): get/set/clear/saveAccumulatedParams
+ * - activeThread管理 (per session, per domain): get/set/clear/saveL2Result
  * - ChatMemory管理: addUserMessage, recordSystemReply
  * - resumeGraph模式: 新threadId + 注入accumulatedParams + 保存结果
  * - executeNewThread模式: 取graph → 新thread → 执行 → 保存 → 完成清空
@@ -31,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * 不共性的逻辑(由子类实现):
  * - handle(): 控制流完全不同,各自实现
- * - 依赖注入: Single用ContextRewriter, Multi用IntentResolver
+ * - 依赖注入: Single和Multi都用IntentRouter(通过IntentResolver或直接)
  * - 状态: Multi额外有suspendedAgents + disambiguationStates
  *
  * Cancel设计:
@@ -43,7 +44,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * - 未来如果L0 reactAgent需要主动取消某个L1的执行,再添加cancel接口
  */
 @Slf4j
-public abstract class AbstractDomainService {
+public abstract class AbstractDomainService implements DomainHandler {
 
     protected final String domainName;
     protected final String logTag;
@@ -70,6 +71,8 @@ public abstract class AbstractDomainService {
         private final Instant expiresAt;
         /** 累积的参数 (如transfer.receiver, wealthConsult.riskLevel等) */
         private Map<String, Object> accumulatedParams = new HashMap<>();
+        /** L2子智能体最后的提问(INTERRUPTED时设置,COMPLETED时清空) */
+        private String lastQuestion;
 
         public ActiveThreadInfo(String threadId, String intent, Instant createdAt, Instant expiresAt) {
             this.threadId = threadId;
@@ -171,19 +174,29 @@ public abstract class AbstractDomainService {
         ChatHistoryUtils.recordReply(chatMemory, sessionId, output, logTag);
     }
 
-    // ==================== accumulatedParams保存 ====================
+    // ==================== accumulatedParams + lastQuestion保存 ====================
 
     /**
-     * 从WorkflowOutput中保存accumulatedParams到自有activeThread
+     * 从WorkflowOutput中保存accumulatedParams和lastQuestion到自有activeThread
      *
-     * 这是状态自管的关键: GES返回accumulatedParams，L1 Service负责保存
+     * 这是状态自管的关键: GES返回结果，L1 Service负责保存
      */
-    protected void saveAccumulatedParams(String sessionId, WorkflowOutput output) {
-        if (output == null || output.getAccumulatedParams() == null) return;
+    protected void saveL2Result(String sessionId, WorkflowOutput output) {
+        if (output == null) return;
         ActiveThreadInfo active = getOwnActiveThread(sessionId);
-        if (active != null && !output.getAccumulatedParams().isEmpty()) {
-            active.setAccumulatedParams(output.getAccumulatedParams());
-            log.info("[{}] Saved accumulated params: {}", logTag, output.getAccumulatedParams());
+        if (active != null) {
+            // 保存accumulatedParams
+            if (output.getAccumulatedParams() != null && !output.getAccumulatedParams().isEmpty()) {
+                active.setAccumulatedParams(output.getAccumulatedParams());
+                log.info("[{}] Saved accumulated params: {}", logTag, output.getAccumulatedParams());
+            }
+            // 保存/清空lastQuestion
+            if (output.getStatus() == WorkflowStatus.INTERRUPTED && output.getQuestion() != null) {
+                active.setLastQuestion(output.getQuestion());
+                log.debug("[{}] Saved lastQuestion: {}", logTag, output.getQuestion());
+            } else if (output.getStatus() == WorkflowStatus.COMPLETED) {
+                active.setLastQuestion(null);
+            }
         }
     }
 
@@ -211,7 +224,7 @@ public abstract class AbstractDomainService {
      * 2. 生成新threadId
      * 3. setActiveThread(保持原intent)
      * 4. resumeGraph(注入accumulatedParams)
-     * 5. saveAccumulatedParams
+     * 5. saveL2Result
      * 6. recordSystemReply
      */
     protected WorkflowOutput resumeActiveThread(String sessionId, String userInput, ActiveThreadInfo active) {
@@ -225,7 +238,7 @@ public abstract class AbstractDomainService {
         WorkflowOutput resumeResult = graphExecutionService.resumeGraph(
                 active.getIntent(), newThreadId, userInput, sessionId,
                 active.getAccumulatedParams());
-        saveAccumulatedParams(sessionId, resumeResult);
+        saveL2Result(sessionId, resumeResult);
         recordSystemReply(sessionId, resumeResult);
 
         // 完成后清空activeThread，避免下次FOLLOW_UP复用旧参数
@@ -244,7 +257,7 @@ public abstract class AbstractDomainService {
      * 2. 新threadId
      * 3. setActiveThread
      * 4. executeGraph
-     * 5. saveAccumulatedParams
+     * 5. saveL2Result
      * 6. COMPLETED → clearActiveThread
      *
      * 注意: suspend当前线程的逻辑由子类在调用前处理(Single不suspend, Multi先suspend再调用)
@@ -264,7 +277,7 @@ public abstract class AbstractDomainService {
         setOwnActiveThread(sessionId, newThreadId, intent);
 
         WorkflowOutput result = graphExecutionService.executeGraph(graph, intent, newThreadId, rewrittenInput, sessionId, null);
-        saveAccumulatedParams(sessionId, result);
+        saveL2Result(sessionId, result);
 
         if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {
             clearOwnActiveThread(sessionId);
@@ -274,6 +287,28 @@ public abstract class AbstractDomainService {
     }
 
     // ==================== 抽象方法 ====================
+
+    /**
+     * Auto-upgrade: ContextRouter 判 SWITCH_NEW 但 IntentRouter 识别的意图
+     * 与 activeThread 的意图一致 → 降级回 FOLLOW_UP
+     *
+     * 保护场景: ContextRouter 误判导致 accumulatedParams 丢失
+     *
+     * @return 如果升级成功返回 resumeActiveThread 结果，否则返回 null（由调用方继续正常流程）
+     */
+    protected WorkflowOutput tryAutoUpgradeFollowUp(ActiveThreadInfo activeThread,
+                                                     RoutingResult phase2,
+                                                     String sessionId, String userInput) {
+        if (activeThread != null && phase2 != null) {
+            String identifiedIntent = phase2.getIntentName();
+            if (identifiedIntent != null && identifiedIntent.equals(activeThread.getIntent())) {
+                log.info("[{}] Auto-upgrade SWITCH_NEW→FOLLOW_UP: identifiedIntent={} matches activeThread.intent={}",
+                        logTag, identifiedIntent, activeThread.getIntent());
+                return resumeActiveThread(sessionId, userInput, activeThread);
+            }
+        }
+        return null; // 不匹配，由调用方继续正常流程
+    }
 
     /**
      * 处理消息 - 控制流由子类各自实现

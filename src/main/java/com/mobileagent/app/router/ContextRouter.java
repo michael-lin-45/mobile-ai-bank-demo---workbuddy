@@ -53,16 +53,18 @@ public class ContextRouter {
      * @param templatePath 提示词模板路径
      * @param domainName 领域名称(用于简化模板中的领域标识,可为null)
      * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
+     * @param lastQuestion 子智能体最后的提问，null表示无。非空时注入prompt帮助LLM判断用户是否在回答问题
      * @return 路由结果(至少包含routeType)
      */
     public RoutingResult route(String sessionId, String userInput,
                                String currentAgent, String pendingAgents,
-                               String templatePath, String domainName, ChatMemory chatMemory) {
+                               String templatePath, String domainName, ChatMemory chatMemory,
+                               String lastQuestion) {
         try {
             String chatHistory = formatChatHistory(chatMemory, sessionId);
             String sessionState = buildSessionStateDescription(currentAgent, pendingAgents);
             String systemPrompt = buildRoutingSystemPrompt(userInput, currentAgent, pendingAgents,
-                    sessionState, templatePath, domainName, chatHistory);
+                    sessionState, templatePath, domainName, chatHistory, lastQuestion);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
@@ -116,9 +118,33 @@ public class ContextRouter {
                                              String currentAgent, String pendingAgents,
                                              String sessionState,
                                              String templatePath, String domainName,
-                                             String chatHistory) {
+                                             String chatHistory, String lastQuestion) {
         String template = loadTemplate(templatePath);
         String intentList = intentRegistry.getIntentListDescription();
+
+        // lastQuestion区段: 非空时替换条件区段内容，空时移除条件区段
+        String lastQuestionContext;
+        if (lastQuestion != null && !lastQuestion.isBlank()) {
+            lastQuestionContext = """
+                
+                ===子智能体正在等待回答的问题===
+                %s
+                ===问题结束===
+                
+                ★ 关键判断 ★
+                如果【子智能体的问题】非空，首要判断: 用户当前消息是否是在回答这个问题？
+                  - 是(语义上直接回答/补充参数) → FOLLOW_UP
+                    例: 问题"风险偏好？"，用户"稳健" → FOLLOW_UP
+                    例: 问题"转给谁？"，用户"张三" → FOLLOW_UP
+                    例: 问题"金额？"，用户"500" → FOLLOW_UP
+                  - 否(用户提出了新问题/新需求/与问题无关) → SWITCH_NEW
+                    例: 问题"风险偏好？"，用户"什么是风险等级" → SWITCH_NEW（不是在回答，是在反问）
+                    例: 问题"转给谁？"，用户"查账单" → SWITCH_NEW（完全无关）
+                    例: 问题"金额？"，用户"算了不转了" → FOLLOW_UP（取消=回应当前agent）
+                """.formatted(lastQuestion);
+        } else {
+            lastQuestionContext = "";
+        }
 
         String prompt = template
                 .replace("{intent_list}", intentList)
@@ -127,7 +153,8 @@ public class ContextRouter {
                 .replace("{last_agent}", currentAgent)
                 .replace("{pending_agents}", pendingAgents)
                 .replace("{session_state}", sessionState)
-                .replace("{chat_history}", chatHistory);
+                .replace("{chat_history}", chatHistory)
+                .replace("{last_question_context}", lastQuestionContext);
 
         // 简化模板需要domain_name替换
         if (domainName != null) {
@@ -192,7 +219,7 @@ public class ContextRouter {
             
             当前活跃意图: {current_agent}
             挂起的意图: {pending_agents}
-            
+            {last_question_context}
             ===对话历史(用户之前的对话，用于理解上下文)===
             {chat_history}
             ===对话历史结束===

@@ -1,13 +1,15 @@
 package com.mobileagent.app.config;
 
 import com.mobileagent.app.domain.AbstractDomainService;
+import com.mobileagent.app.domain.ChatService;
 import com.mobileagent.app.domain.MultiSubAgentDomainService;
 import com.mobileagent.app.domain.SingleSubAgentDomainService;
 import com.mobileagent.app.execution.GraphExecutionService;
-import com.mobileagent.app.rewriter.ContextRewriter;
 import com.mobileagent.app.router.ContextRouter;
+import com.mobileagent.app.router.DomainServiceRegistry;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
+import com.mobileagent.app.router.IntentRouter;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
@@ -21,7 +23,7 @@ import java.util.List;
  * 替代旧的@Service注解式TransferService/BillService/WealthService。
  * 所有调用逻辑由基类提供，这里只做配置（意图、领域名、模板路径等）。
  *
- * BankController通过@Qualifier注入对应的AbstractDomainService实例。
+ * 每个Bean构建后注册到DomainServiceRegistry，供BankController统一分发。
  */
 @Configuration
 public class DomainServiceConfig {
@@ -31,21 +33,24 @@ public class DomainServiceConfig {
     @Bean("transferDomainService")
     public SingleSubAgentDomainService transferDomainService(
             ContextRouter contextRouter,
-            ContextRewriter contextRewriter,
+            IntentRouter intentRouter,
             GraphExecutionService graphExecutionService,
             IntentRegistry intentRegistry,
+            DomainServiceRegistry domainServiceRegistry,
             @Qualifier("transferChatMemory") ChatMemory transferChatMemory) {
-        return SingleSubAgentDomainService.builder()
+        SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
                 .domainName("转账")
                 .logTag("TransferService")
                 .intent("TRANSFER")
                 .intentDescription("转账操作")
                 .chatMemory(transferChatMemory)
                 .contextRouter(contextRouter)
-                .contextRewriter(contextRewriter)
+                .intentRouter(intentRouter)
                 .graphExecutionService(graphExecutionService)
                 .intentRegistry(intentRegistry)
                 .build();
+        domainServiceRegistry.register("TRANSFER", service);
+        return service;
     }
 
     // ==================== 账单 (1-1: BILL_QUERY) ====================
@@ -53,21 +58,24 @@ public class DomainServiceConfig {
     @Bean("billDomainService")
     public SingleSubAgentDomainService billDomainService(
             ContextRouter contextRouter,
-            ContextRewriter contextRewriter,
+            IntentRouter intentRouter,
             GraphExecutionService graphExecutionService,
             IntentRegistry intentRegistry,
+            DomainServiceRegistry domainServiceRegistry,
             @Qualifier("billChatMemory") ChatMemory billChatMemory) {
-        return SingleSubAgentDomainService.builder()
+        SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
                 .domainName("账单")
                 .logTag("BillService")
                 .intent("BILL_QUERY")
                 .intentDescription("账单查询")
                 .chatMemory(billChatMemory)
                 .contextRouter(contextRouter)
-                .contextRewriter(contextRewriter)
+                .intentRouter(intentRouter)
                 .graphExecutionService(graphExecutionService)
                 .intentRegistry(intentRegistry)
                 .build();
+        domainServiceRegistry.register("BILL", service);
+        return service;
     }
 
     // ==================== 理财 (1-N: WEALTH_CONSULT + WEALTH_INTERPRET) ====================
@@ -78,8 +86,9 @@ public class DomainServiceConfig {
             IntentResolver intentResolver,
             GraphExecutionService graphExecutionService,
             IntentRegistry intentRegistry,
+            DomainServiceRegistry domainServiceRegistry,
             @Qualifier("wealthChatMemory") ChatMemory wealthChatMemory) {
-        return MultiSubAgentDomainService.builder()
+        MultiSubAgentDomainService service = MultiSubAgentDomainService.builder()
                 .domainName("理财")
                 .logTag("WealthService")
                 .chatMemory(wealthChatMemory)
@@ -97,5 +106,21 @@ public class DomainServiceConfig {
                 .maxSuspendedDepth(3)
                 .suspendedExpireMinutes(20)
                 .build();
+        domainServiceRegistry.register("WEALTH", service);
+        return service;
     }
+
+    // ==================== CHAT ====================
+
+    /**
+     * ChatService由Spring自动扫描@Service创建，这里注册到DomainServiceRegistry
+     */
+    @Bean
+    public ChatServiceRegistration chatServiceRegistration(ChatService chatService, DomainServiceRegistry domainServiceRegistry) {
+        domainServiceRegistry.register("CHAT", chatService);
+        return new ChatServiceRegistration();
+    }
+
+    /** 标记Bean，仅用于触发ChatService注册 */
+    private static class ChatServiceRegistration {}
 }

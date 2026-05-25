@@ -87,21 +87,25 @@ public class DomainRouter {
 
     /**
      * L0领域路由 - 确定性优先，模型兜底
+     *
+     * @param excludedDomains 已排除的领域集合(REROUTE时使用)，正常路由传Collections.emptySet()
      */
-    public DomainResult route(String sessionId, String userInput) {
+    public DomainResult route(String sessionId, String userInput, Set<String> excludedDomains) {
         // 1. 确定性路由: 关键词匹配
         DomainResult deterministic = routeDeterministic(userInput);
-        if (deterministic != null) {
+        if (deterministic != null && !excludedDomains.contains(deterministic.domain())) {
             updateLastDomain(sessionId, deterministic.domain());
             log.info("[DomainRouter] Deterministic: domain={} for input='{}'", deterministic.domain(), userInput);
             return deterministic;
         }
+        // 确定性命中但被排除 → 跳过，走LLM重新判断
 
-        // 2. 模型路由: chatHistory + lastActiveDomain
+        // 2. 模型路由: chatHistory + lastActiveDomain + excludedDomains
         try {
             String chatHistory = formatChatHistory(sessionId);
             String lastDomainContext = formatLastDomainContext(sessionId);
-            String systemPrompt = buildDomainPrompt(userInput, chatHistory, lastDomainContext);
+            String excludedDomainsContext = formatExcludedDomainsContext(excludedDomains);
+            String systemPrompt = buildDomainPrompt(userInput, chatHistory, lastDomainContext, excludedDomainsContext);
 
             long startMs = System.currentTimeMillis();
 
@@ -244,6 +248,12 @@ public class DomainRouter {
         return "最近活跃领域: " + domain;
     }
 
+    /** 格式化排除领域为prompt文本 */
+    private String formatExcludedDomainsContext(Set<String> excludedDomains) {
+        if (excludedDomains == null || excludedDomains.isEmpty()) return "(无)";
+        return "以下领域已被排除，不要路由到: " + String.join(", ", excludedDomains);
+    }
+
     /** 定时清理过期的lastActiveDomain，每分钟执行一次 */
     @Scheduled(fixedRate = 60_000)
     public void cleanupExpiredLastDomains() {
@@ -268,12 +278,14 @@ public class DomainRouter {
         return ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs);
     }
 
-    private String buildDomainPrompt(String userInput, String chatHistory, String lastDomainContext) {
+    private String buildDomainPrompt(String userInput, String chatHistory, String lastDomainContext,
+                                      String excludedDomainsContext) {
         String template = loadTemplate("prompts/l0-domain.st");
         return template
                 .replace("{message}", userInput)
                 .replace("{chat_history}", chatHistory)
-                .replace("{last_domain_context}", lastDomainContext);
+                .replace("{last_domain_context}", lastDomainContext)
+                .replace("{excluded_domains_context}", excludedDomainsContext);
     }
 
     // ==================== 响应解析 ====================
@@ -326,6 +338,9 @@ public class DomainRouter {
             当前会话状态:
             {last_domain_context}
 
+            排除领域:
+            {excluded_domains_context}
+
             ===对话历史===
             {chat_history}
             ===对话历史结束===
@@ -357,6 +372,7 @@ public class DomainRouter {
                历史问"风险偏好？"，当前"稳健" → WEALTH
             3. 对话历史也无法判断 → 才参考最近活跃领域
             4. 只有取消词 → 路由到最近活跃领域
+            5. 排除领域规则: 如果排除列表非空，不要路由到被排除的领域；如果所有业务领域都被排除，路由到CHAT
 
             实战案例:
             "先看看我这个月的开支情况" → BILL(名词=开支→账单) | "那收入呢" → BILL(短回答,历史在查账) | "好，转3000吧" → TRANSFER(短回答,历史问转多少)

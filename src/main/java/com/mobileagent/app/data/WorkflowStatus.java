@@ -20,7 +20,10 @@ public enum WorkflowStatus {
     DISAMBIGUATION("DISAMBIGUATION"),
 
     /** 错误 */
-    ERROR("ERROR");
+    ERROR("ERROR"),
+
+    /** L1无法处理，需要L0重新路由到其他域 */
+    REROUTE("REROUTE");
 
     private final String value;
 
@@ -42,6 +45,7 @@ public enum WorkflowStatus {
                 return status;
             }
         }
-        throw new IllegalArgumentException("Unknown WorkflowStatus: " + value);
+        // 兼容: 未知值降级为ERROR
+        return ERROR;
     }
 }
