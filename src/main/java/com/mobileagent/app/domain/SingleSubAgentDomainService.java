@@ -135,17 +135,13 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
                     routingTemplatePath, domainName, chatMemory);
             log.info("[{}] Phase1 (no activeThread): routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
 
-            // ========== FOLLOW_UP但无activeThread → 上下文改写后降级为SWITCH_NEW ==========
-            if (phase1.isFollowUp()) {
-                log.info("[{}] FOLLOW_UP but no activeThread → rewrite and fallback to SWITCH_NEW", logTag);
-                String rewrittenInput = contextRewriter.rewrite(sessionId, userInput, chatMemory, domainName, rewriterTemplatePath);
-                addUserMessage(sessionId, userInput);
-                return handleSwitchNew(sessionId, rewrittenInput);
-            }
-
-            // ========== SWITCH_NEW (非FOLLOW_UP) ==========
+            // ========== 无activeThread → 上下文改写后SWITCH_NEW ==========
+            // 无论是FOLLOW_UP还是SWITCH_NEW，只要没有activeThread，
+            // 用户输入可能依赖历史上下文(如"再转一笔3000"依赖之前的"给我妈")，
+            // 需要ContextRewriter改写为自包含描述
+            String rewrittenInput = contextRewriter.rewrite(sessionId, userInput, chatMemory, domainName, rewriterTemplatePath);
             addUserMessage(sessionId, userInput);
-            return handleSwitchNew(sessionId, userInput);
+            return handleSwitchNew(sessionId, rewrittenInput);
 
         } catch (Exception e) {
             log.error("[{}] Error handling message", logTag, e);

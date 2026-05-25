@@ -177,18 +177,22 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
     @Override
     protected String buildExtractPrompt(String userInput) {
         return """
-            你是一个银行理财产品解读参数提取器。从用户输入中提取理财产品名称。
+            你是一个银行理财产品解读参数提取器。从用户输入中提取用户想了解的产品或标的信息。
 
             用户输入: %s
 
             提取规则:
-            - productName: 理财产品名称,如"稳利宝"、"汇添富"、"天天利"、"安心宝"等
-            - 只提取用户明确提到的产品名称,不猜测
+            - productName: 用户想了解的产品/标的名称
+              - 银行理财产品: 如"稳利宝"、"汇添富"、"天天利"、"安心宝"、"朝朝盈"等
+              - 基金/股票名称: 如"科技成长基金"、"通富微电"、"贵州茅台"等
+              - 行业/概念名称: 如"新能源"、"半导体"、"白酒"等
+            - 只提取用户明确提到的名称,不猜测
             - 如果用户说"这个产品"、"那个"等指代,输出null
+            - 用户可能用口语化表达提到产品,如"通富微电最近不错"中的"通富微电","有个叫朝朝盈的"中的"朝朝盈"
 
             严格输出JSON:
             {
-              "productName": "理财产品名称或null"
+              "productName": "产品/标的名称或null"
             }
             """.formatted(userInput);
     }
