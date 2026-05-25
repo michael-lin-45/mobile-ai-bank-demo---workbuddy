@@ -107,8 +107,6 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
         Map<String, Object> result = new HashMap<>();
         try {
             Map<String, Object> extracted = callExtractModel(userInput);
-            // 守卫: 验证LLM返回的expenseType是否与用户输入有关联
-            validateExtractedExpenseType(extracted, userInput);
             mergeExtractedWithoutOverwrite(result, extracted, state);
             log.info("[BillQueryGraph.extractParams] extracted: {}", extracted);
         } catch (Exception e) {
@@ -214,10 +212,6 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
 
     // ==================== BillQuery特有方法 ====================
 
-    private static final java.util.Set<String> EXPENSE_TYPE_KEYWORDS = java.util.Set.of(
-            "支出", "开销", "花费", "收入", "收支", "both", "收入支出"
-    );
-
     @Override
     protected String buildExtractPrompt(String userInput) {
         return """
@@ -228,12 +222,13 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
             提取规则:
             - timePeriod: 时间范围,保留用户的原始表述,如"上个月"、"最近一周"、"昨天"、"2024年1月"
             - expenseType: 收支类型,只有三种取值:
-              · "支出" - 用户想查支出/开销/花费
+              · "支出" - 用户想查支出/开销/花费/开支/消费
               · "收入" - 用户想查收入
               · "收支" - 用户想同时查支出和收入(如"收支"、"都查"、"全部")
             - expenseType提取原则: 关注用户表达的查询意图,而非仅仅匹配关键词
               · "上个月支出有点多,想看看原因" → expenseType="支出" (用户明确关注支出)
               · "最近花了多少钱" → expenseType="支出" (花了=支出)
+              · "我这个月开支情况" → expenseType="支出" (开支=支出)
               · "上个月收入怎么样" → expenseType="收入" (关注收入)
               · "查账单" → expenseType=null (未指定类型)
               · "全部""都查""收支明细" → expenseType="收支"
@@ -264,21 +259,5 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
             log.warn("[BillQueryGraph] Failed to parse extract result: {}", content, e);
         }
         return result;
-    }
-
-    /** 验证expenseType: LLM可能自作主张填值,必须用户输入包含类型关键词才接受 */
-    private void validateExtractedExpenseType(Map<String, Object> extracted, String userInput) {
-        Object typeObj = extracted.get("bill.expenseType");
-        if (typeObj == null || typeObj.toString().isEmpty()) return;
-
-        // 用户输入确实包含类型关键词 → 保留
-        boolean userMentionedType = EXPENSE_TYPE_KEYWORDS.stream()
-                .anyMatch(kw -> userInput.contains(kw));
-        if (userMentionedType) return;
-
-        // 用户没提类型,LLM自作主张 → 移除
-        log.warn("[BillQueryGraph] LLM returned expenseType='{}' but user input '{}' contains no type keyword, ignoring",
-                typeObj, userInput);
-        extracted.remove("bill.expenseType");
     }
 }

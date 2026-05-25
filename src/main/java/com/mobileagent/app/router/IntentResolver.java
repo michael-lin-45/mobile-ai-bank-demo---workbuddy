@@ -342,6 +342,8 @@ public class IntentResolver {
     private boolean isCancelExpression(String input) {
         if (input == null) return false;
         String trimmed = input.trim();
-        return trimmed.matches("^(取消|算了|不要了|不了|放弃)[\\s，。！？、；]*$");
+        // 匹配: 取消词出现在句首，后面可以跟任意内容
+        // "算了" / "算了，不看了" / "取消" / "不要了，算了" → 都算取消
+        return trimmed.matches("^(取消|算了|不要了|不了|放弃|不看了|不想了|不弄了).*$");
     }
 }
