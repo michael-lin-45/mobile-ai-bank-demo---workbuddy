@@ -40,7 +40,7 @@ public class DomainRouter {
             "账单", "明细", "消费", "支出", "收入", "收支", "开销", "流水");
 
     private static final Set<String> TRANSFER_KEYWORDS = Set.of(
-            "转账", "转钱", "汇款", "打款", "付款", "转给", "打给", "赚钱给", "打钱给");
+            "转账", "转钱", "汇款", "打款", "付款", "转给", "打给", "赚钱给", "打钱给", "转");
 
     private static final Set<String> WEALTH_KEYWORDS = Set.of(
             "理财", "投资", "收益", "基金", "推荐", "咨询", "解读");
@@ -112,7 +112,7 @@ public class DomainRouter {
                     .content();
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[DomainRouter] LLM call completed in {}ms | input='{}'", elapsedMs, userInput);
-            log.debug("[DomainRouter] LLM raw response: {}", content);
+            log.info("[DomainRouter] LLM raw response: {}", content);
 
             DomainResult result = parseDomainResponse(content);
             log.info("[DomainRouter] Model resolved: domain={} (feature={}) for input='{}'", result.domain(), result.unsupportedFeature(), userInput);
@@ -185,9 +185,22 @@ public class DomainRouter {
     private String matchDomainKeywords(String input) {
         // UNSUPPORTED优先检查(避免"贷款"等被其他规则截胡)
         if (containsAny(input, UNSUPPORTED_KEYWORDS)) return "UNSUPPORTED";
-        if (containsAny(input, TRANSFER_KEYWORDS)) return "TRANSFER";
-        if (containsAny(input, BILL_KEYWORDS)) return "BILL";
-        if (containsAny(input, WEALTH_KEYWORDS)) return "WEALTH";
+
+        boolean hitTransfer = containsAny(input, TRANSFER_KEYWORDS);
+        boolean hitBill = containsAny(input, BILL_KEYWORDS);
+        boolean hitWealth = containsAny(input, WEALTH_KEYWORDS);
+        int hitCount = (hitTransfer ? 1 : 0) + (hitBill ? 1 : 0) + (hitWealth ? 1 : 0);
+
+        // 多领域关键词同时命中时，降级到LLM判断(话术类型+核心动词/名词)
+        if (hitCount > 1) {
+            log.info("[DomainRouter] Multi-domain keywords hit (TRANSFER={}, BILL={}, WEALTH={}), delegating to LLM for input='{}'",
+                    hitTransfer, hitBill, hitWealth, input);
+            return null;
+        }
+
+        if (hitTransfer) return "TRANSFER";
+        if (hitBill) return "BILL";
+        if (hitWealth) return "WEALTH";
         return null;
     }
 
@@ -306,7 +319,7 @@ public class DomainRouter {
 
     private String getDefaultDomainPrompt() {
         return """
-            你是手机银行领域路由器。判断用户当前消息属于哪个业务领域。
+            你是手机银行领域路由器，判断用户【当前消息】此刻的意图所属领域。
 
             五个领域: WEALTH(理财), TRANSFER(转账), BILL(账单), UNSUPPORTED(银行功能但暂不支持), CHAT(闲聊)
 
@@ -321,21 +334,34 @@ public class DomainRouter {
             {message}
             ===当前消息结束===
 
+            ★★★ 最高优先级原则 ★★★
+            判断领域时，只看【当前消息】本身。对话历史和会话状态只用于: 当前消息意图不明确(如短回答"张三""500""稳健")时辅助判断。
+            当前消息意图明确时，历史信息完全忽略，绝不让历史影响判断。
+
+            ★★★ 话术类型分析 ★★★
+            【操作型话术】锚点=核心动词: "转1000到理财"→TRANSFER(动词=转), "买理财"→WEALTH(动词=买理财), "查那个理财的账单"→BILL(动词=查+名词=账单)
+            【问题型话术】锚点=核心名词+问法动词: "解读刚才转账的理财"→WEALTH(问法=解读), "理财花了多少"→BILL(核心=花了多少)
+
             判断规则:
-            1. 当前消息意图清晰 → 按当前消息路由:
+            1. 当前消息意图清晰 → 按话术类型分析路由，历史不影响:
                含"账单/明细/消费/支出/收入/收支/开销/流水" → BILL
-               含"转账/转钱/汇款/打款/付款/转给/打给" → TRANSFER
+               含"转账/转/转钱/汇款/打款/付款/转给/打给" → TRANSFER
                含"理财/投资/收益/基金/推荐/咨询/解读" → WEALTH
                含"贷款/信用卡/活动/积分/开户/挂失/存款/保险" → UNSUPPORTED
-            2. 当前消息意图不明确(短回答，无领域关键词) → 结合对话历史判断:
+               多域冲突用话术类型分析:
+                 "转1000到理财产品" → 操作型,动词=转 → TRANSFER
+                 "解读刚才转账的理财" → 问题型,问法=解读 → WEALTH
+                 "查那个理财的账单" → 操作型,名词=账单 → BILL
+            2. 当前消息意图不明确(短回答) → 才参考对话历史:
                历史问"转给谁？"，当前"张三" → TRANSFER
                历史问"风险偏好？"，当前"稳健" → WEALTH
-            3. 对话历史也无法判断 → 结合会话状态中的最近活跃领域:
-               最近领域=WEALTH，当前"能源的" → WEALTH
-               最近领域=TRANSFER，当前"500" → TRANSFER
-            4. 只有取消词(算了/取消/不X了)，无新意图 → 路由到最近活跃领域
+            3. 对话历史也无法判断 → 才参考最近活跃领域
+            4. 只有取消词 → 路由到最近活跃领域
 
-            !!! 绝对禁止: 当前消息包含某领域关键词时，因为历史在其他流程就路由到历史领域 !!!
+            实战案例:
+            "先看看我这个月的开支情况" → BILL(名词=开支→账单) | "那收入呢" → BILL(短回答,历史在查账) | "好，转3000吧" → TRANSFER(短回答,历史问转多少)
+            "听说有个朝朝盈的理财，先帮我解读一下" → WEALTH(问法=解读) | "科技吧，最近比较火" → WEALTH(短回答,历史问领域偏好)
+            "OK，给我妈转4000家用" → TRANSFER(动词=转) | "算了，不看了" → 最近活跃领域
 
             严格输出JSON:
             {

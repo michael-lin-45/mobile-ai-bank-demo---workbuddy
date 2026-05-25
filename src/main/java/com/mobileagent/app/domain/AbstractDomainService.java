@@ -275,8 +275,14 @@ public abstract class AbstractDomainService {
 
     // ==================== 抽象方法 ====================
 
-    /** 处理消息 - 控制流由子类各自实现 */
-    public abstract WorkflowOutput handle(String sessionId, String userInput);
+    /**
+     * 处理消息 - 控制流由子类各自实现
+     *
+     * @param sessionId 会话ID
+     * @param userInput 用户输入
+     * @param globalChatHistory 全局跨域对话历史(由L0/BankController格式化后传入，不缓存，仅作改写参考)
+     */
+    public abstract WorkflowOutput handle(String sessionId, String userInput, String globalChatHistory);
 
     /** 清除会话所有状态 */
     public abstract void clearSession(String sessionId);

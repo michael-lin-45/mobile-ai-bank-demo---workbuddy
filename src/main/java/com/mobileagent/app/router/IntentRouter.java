@@ -53,6 +53,7 @@ public class IntentRouter {
      * @param disambigContext 消歧上下文(如"无"或具体消歧信息)
      * @param templatePath 提示词模板路径(如"prompts/l1-intention.st")
      * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
+     * @param globalChatHistory 全局跨域对话历史(由L0传入,用于跨域指代消解,可为null)
      * @return 包含意图名称、改写后输入、路由类型的完整路由结果
      */
     public RoutingResult rewriteAndIdentify(String sessionId, String userInput,
@@ -60,12 +61,14 @@ public class IntentRouter {
                                              String currentAgent, String pendingAgents,
                                              String sessionState, String disambigContext,
                                              String templatePath,
-                                             ChatMemory chatMemory) {
+                                             ChatMemory chatMemory,
+                                             String globalChatHistory) {
         try {
             String chatHistoryStr = formatChatHistory(chatMemory, sessionId);
             String systemPrompt = buildIntentionSystemPrompt(userInput, phase1Result,
                     currentAgent, pendingAgents, sessionState, disambigContext, chatHistoryStr,
-                    templatePath != null ? templatePath : DEFAULT_TEMPLATE_PATH);
+                    templatePath != null ? templatePath : DEFAULT_TEMPLATE_PATH,
+                    globalChatHistory);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
@@ -108,7 +111,8 @@ public class IntentRouter {
                                                String currentAgent, String pendingAgents,
                                                String sessionState, String disambigContext,
                                                String chatHistory,
-                                               String templatePath) {
+                                               String templatePath,
+                                               String globalChatHistory) {
         String template = loadTemplate(templatePath);
         String intentList = intentRegistry.getIntentListDescription();
 
@@ -125,7 +129,10 @@ public class IntentRouter {
                 .replace("{session_state}", sessionState)
                 .replace("{pending_agents}", pendingAgents)
                 .replace("{disambig_context}", disambigContext)
-                .replace("{chat_history}", chatHistory);
+                .replace("{chat_history}", chatHistory)
+                .replace("{global_chat_history}",
+                        globalChatHistory != null && !globalChatHistory.equals("(无历史对话)")
+                                ? globalChatHistory : "(无)");
     }
 
     private RoutingResult parseRewriteResponse(String content, RoutingResult phase1Result) {
@@ -234,6 +241,10 @@ public class IntentRouter {
             {chat_history}
             ===对话历史结束===
             
+            ===全局对话历史(可能包含其他领域的交互，用于消解跨域指代)===
+            {global_chat_history}
+            ===全局历史结束===
+            
             ===用户当前消息(用户此刻说的话，用于判断当前意图)===
             {message}
             ===当前消息结束===
@@ -241,6 +252,7 @@ public class IntentRouter {
             任务:
             1. 意图识别(主要): 从已注册意图列表中选择最匹配的意图,无法归入则输出UNKNOWN
             2. 上下文改写(辅助): 将依赖上下文的模糊表达改写为自包含的完整描述,方便子智能体直接提取参数
+               - 如果用户输入引用了其他领域的内容(如"刚才说的那个理财")，从全局历史中查找并消解指代
             3. 歧义检测: 如果用户输入只能匹配到意图组,标记is_ambiguous=true
             4. 路由判断: 意图在挂起列表中→RESUME,否则→SWITCH_NEW
             

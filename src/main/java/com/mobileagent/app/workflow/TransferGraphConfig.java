@@ -234,14 +234,15 @@ public class TransferGraphConfig extends AbstractGraphConfig {
             用户输入: %s
             
             提取规则:
-            - receiver: 收款人姓名,如"张三"、"李四"
+            - receiver: 收款方(资金去向)，可以是个人(如"张三")、理财产品(如"朝朝盈")、基金(如"沪深300ETF")、机构等任何资金接收方
             - amount: 转账金额(数字),如500、1000.50
-            - purpose: 用途(可选),如"房租"、"还款"
+            - purpose: 转账用途/备注(可选),如"房租"、"还款"
+            - 注意区分: receiver是"转给谁"(资金去向), purpose是"为什么转"(用途备注)
             - 只提取用户明确提到的参数,不猜测
             
             严格输出JSON:
             {
-              "receiver": "收款人姓名或null",
+              "receiver": "收款方或null",
               "amount": 金额数字或null,
               "purpose": "用途或null"
             }

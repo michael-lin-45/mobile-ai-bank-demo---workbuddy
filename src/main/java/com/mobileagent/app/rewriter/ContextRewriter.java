@@ -49,13 +49,14 @@ public class ContextRewriter {
      * @param chatMemory 领域ChatMemory(用于读取历史)
      * @param domainName 领域名称(如"转账""账单")
      * @param templatePath 提示词模板路径(如"prompts/l1-context-rewrite.st")
+     * @param globalChatHistory 全局跨域对话历史(由L0传入,用于跨域指代消解,可为null)
      * @return 改写后的输入，如果改写失败则返回原始输入
      */
     public String rewrite(String sessionId, String userInput, ChatMemory chatMemory, String domainName,
-                          String templatePath) {
+                          String templatePath, String globalChatHistory) {
         try {
             String chatHistory = formatChatHistory(chatMemory, sessionId);
-            String systemPrompt = buildRewritePrompt(userInput, chatHistory, domainName, templatePath);
+            String systemPrompt = buildRewritePrompt(userInput, chatHistory, domainName, templatePath, globalChatHistory);
 
             long startMs = System.currentTimeMillis();
             String content = chatClient.prompt()
@@ -65,7 +66,7 @@ public class ContextRewriter {
                     .content();
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[ContextRewriter] LLM call completed in {}ms | domain={}, userInput={}", elapsedMs, domainName, userInput);
-            log.debug("[ContextRewriter] LLM raw response: {}", content);
+            log.info("[ContextRewriter] LLM raw response: {}", content);
 
             String rewritten = parseRewriteResponse(content, userInput);
             log.info("[ContextRewriter] Result: original='{}' → rewritten='{}'", userInput, rewritten);
@@ -82,12 +83,15 @@ public class ContextRewriter {
     }
 
     private String buildRewritePrompt(String userInput, String chatHistory, String domainName,
-                                       String templatePath) {
+                                       String templatePath, String globalChatHistory) {
         String template = loadTemplate(templatePath != null ? templatePath : DEFAULT_TEMPLATE_PATH);
         return template
                 .replace("{domain_name}", domainName)
                 .replace("{chat_history}", chatHistory)
-                .replace("{message}", userInput);
+                .replace("{message}", userInput)
+                .replace("{global_chat_history}",
+                        globalChatHistory != null && !globalChatHistory.equals("(无历史对话)")
+                                ? globalChatHistory : "(无)");
     }
 
     private String parseRewriteResponse(String content, String originalInput) {
@@ -119,9 +123,18 @@ public class ContextRewriter {
             {chat_history}
             ===对话历史结束===
             
+            ===全局对话历史(可能包含其他领域的交互，用于消解跨域指代)===
+            {global_chat_history}
+            ===全局历史结束===
+            
             ===用户当前消息===
             {message}
             ===当前消息结束===
+            
+            改写规则:
+            - 优先用本领域历史理解上下文
+            - 如果用户输入引用了其他领域的内容(如"刚才说的那个理财")，从全局历史中查找并消解指代
+            - 改写为自包含的完整描述
             
             严格输出JSON:
             {

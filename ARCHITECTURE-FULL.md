@@ -1,6 +1,6 @@
 # 手机银行AI Agent 全架构文档
 
-> 最后更新: 2026-05-24 | 基于代码commit `eec0ada`
+> 最后更新: 2026-05-25 | 基于跨域上下文传递改造
 
 ---
 
@@ -20,7 +20,11 @@
 12. [SAA Graph Resume机制缺陷与Workaround](#12-saa-graph-resume机制缺陷与workaround)
 13. [Prompt模板体系](#13-prompt模板体系)
 14. [Spring Bean配置](#14-spring-bean配置)
-15. [已知限制与改进方向](#15-已知限制与改进方向)
+15. [跨域上下文传递机制](#15-跨域上下文传递机制)
+16. [L0话术类型分析框架](#16-l0话术类型分析框架)
+17. [改写边界规则](#17-改写边界规则)
+18. [Transfer L2 收款方定义扩展](#18-transfer-l2-收款方定义扩展)
+19. [已知限制与改进方向](#19-已知限制与改进方向)
 
 ---
 
@@ -39,9 +43,9 @@ DomainRouter      AbstractDomainService    AbstractGraphConfig
 
 | 层级 | 职责 | 输入 | 输出 |
 |------|------|------|------|
-| **L0** | 判断领域(WEALTH/TRANSFER/BILL/UNSUPPORTED/CHAT) | 用户原始输入 | 领域名 |
-| **L1** | 领域内意图路由(FOLLOW_UP/SWITCH_NEW/RESUME) + 状态管理 | 用户输入 + 领域 | WorkflowOutput |
-| **L2** | 参数提取 + 多轮提问 + 业务执行 | 改写后输入 + accumulatedParams | WorkflowOutput |
+| **L0** | 判断领域(WEALTH/TRANSFER/BILL/UNSUPPORTED/CHAT) + 格式化全局跨域历史 | 用户原始输入 | 领域名 + globalChatHistory |
+| **L1** | 领域内意图路由(FOLLOW_UP/SWITCH_NEW/RESUME) + 跨域指代消解 + 状态管理 | 用户输入 + 领域 + globalChatHistory | WorkflowOutput |
+| **L2** | 参数提取 + 多轮提问 + 业务执行 | 改写后输入 + accumulatedParams(不接收globalChatHistory) | WorkflowOutput |
 
 ### 1.2 系统全图
 
@@ -87,13 +91,16 @@ graph TB
     end
 
     BC --> DR
-    BC --> SSAD & MSAD
+    BC -->|"handle(sessionId, userInput, globalChatHistory)"| SSAD & MSAD
     SSAD --> CR & CW & GES
     MSAD --> CR & IR & IRes & GES
     IRes --> IR
     GES --> IReg
     SSAD & MSAD --> IReg
     CR & IR --> TU
+    
+    BC -.->|"globalChatHistory"| SSAD
+    BC -.->|"globalChatHistory"| MSAD
 ```
 
 ### 1.3 API端点
@@ -123,7 +130,7 @@ classDiagram
         #long activeThreadExpireMinutes
         -Map~String,ActiveThreadInfo~ activeThreads
         
-        +handle(sessionId, userInput)* WorkflowOutput
+        +handle(sessionId, userInput, globalChatHistory)* WorkflowOutput
         +clearSession(sessionId)*
         +getSessionStateDescription(sessionId)* String
         +getHandledIntents()* List~IntentInfo~
@@ -149,8 +156,7 @@ classDiagram
         -String rewriterTemplatePath
         -ContextRewriter contextRewriter
         
-        +handle(sessionId, userInput) WorkflowOutput
-        -handleSwitchNew(sessionId, rewrittenInput) WorkflowOutput
+        +handle(sessionId, userInput, globalChatHistory) WorkflowOutput
         +scheduledCleanup()
     }
 
@@ -165,7 +171,7 @@ classDiagram
         -Map suspendedAgents
         -Map disambiguationStates
         
-        +handle(sessionId, userInput) WorkflowOutput
+        +handle(sessionId, userInput, globalChatHistory) WorkflowOutput
         +getPendingAgentsDescription(sessionId) String
         +cleanupExpiredSuspended()
         -executeRoute(sessionId, resolution) WorkflowOutput
@@ -248,6 +254,7 @@ classDiagram
         +route(sessionId, userInput) DomainResult
         +clearLastDomain(sessionId)
         +cleanupExpiredLastDomains()
+        Note: TRANSFER_KEYWORDS含"转"字; 多域关键词命中→降级LLM
     }
 
     class ContextRouter {
@@ -259,7 +266,7 @@ classDiagram
     class IntentRouter {
         -ChatClient chatClient
         -IntentRegistry intentRegistry
-        +rewriteAndIdentify(sessionId, userInput, phase1Result, currentAgent, pendingAgents, sessionState, disambigContext, templatePath, chatMemory) RoutingResult
+        +rewriteAndIdentify(sessionId, userInput, phase1Result, currentAgent, pendingAgents, sessionState, disambigContext, templatePath, chatMemory, globalChatHistory) RoutingResult
     }
 
     class IntentResolver {
@@ -267,13 +274,13 @@ classDiagram
         -IntentRegistry intentRegistry
         -double disambiguationThreshold
         -double highConfidenceBypass
-        +resolve(sessionId, userInput, phase1Result, chatMemory, inDisambiguation, disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentionTemplatePath) RoutingResolution
+        +resolve(sessionId, userInput, phase1Result, chatMemory, inDisambiguation, disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentionTemplatePath, globalChatHistory) RoutingResolution
         -isCancelExpression(input) boolean
     }
 
     class ContextRewriter {
         -ChatClient chatClient
-        +rewrite(sessionId, userInput, chatMemory, domainName, templatePath) String
+        +rewrite(sessionId, userInput, chatMemory, domainName, templatePath, globalChatHistory) String
     }
 
     class IntentRegistry {
@@ -435,7 +442,7 @@ sequenceDiagram
     Note over DR: 关键词"转账"命中<br/>确定性路由 → TRANSFER
     DR-->>BC: DomainResult(TRANSFER)
     
-    BC->>SSAD: handle(sessionId, "我想转账")
+    BC->>SSAD: handle(sessionId, "我想转账", globalChatHistory)
     Note over SSAD: ① getOwnActiveThread → null<br/>（无活跃线程）
     Note over SSAD: ② 走ContextRouter
     SSAD->>CR: route(..., "l1-routing-simple.st", "转账")
@@ -457,7 +464,7 @@ sequenceDiagram
 **关键代码 — SingleSubAgentDomainService.handle()**:
 
 ```java
-public WorkflowOutput handle(String sessionId, String userInput) {
+public WorkflowOutput handle(String sessionId, String userInput, String globalChatHistory) {
     // 核心逻辑: activeThread在 → 直接FOLLOW_UP，不走ContextRouter
     ActiveThreadInfo ownActive = getOwnActiveThread(sessionId);
     if (ownActive != null) {
@@ -467,7 +474,7 @@ public WorkflowOutput handle(String sessionId, String userInput) {
     RoutingResult phase1 = contextRouter.route(..., routingTemplatePath, ...);
     if (phase1.isFollowUp()) {
         // FOLLOW_UP但无activeThread → 改写后降级SWITCH_NEW
-        String rewrittenInput = contextRewriter.rewrite(...);
+        String rewrittenInput = contextRewriter.rewrite(..., globalChatHistory);
         return handleSwitchNew(sessionId, rewrittenInput);
     }
     return handleSwitchNew(sessionId, userInput);
@@ -493,7 +500,7 @@ sequenceDiagram
     participant TG as TransferGraph(L2)
 
     U->>BC: POST /chat "张三"
-    BC->>SSAD: handle(sessionId, "张三")
+    BC->>SSAD: handle(sessionId, "张三", globalChatHistory)
     
     Note over SSAD: ① getOwnActiveThread → 存在!<br/>intent=TRANSFER<br/>params={transfer.amount: 500}
     Note over SSAD: ② 跳过ContextRouter<br/>直接FOLLOW_UP
@@ -543,7 +550,7 @@ sequenceDiagram
     participant MSAD as MultiSubAgent<br/>(WealthService)
     participant CR as ContextRouter<br/>(full模板)
 
-    U->>MSAD: handle(sessionId, "稳健")
+    U->>MSAD: handle(sessionId, "稳健", globalChatHistory)
     Note over MSAD: getOwnActiveThread → 存在<br/>intent=WEALTH_CONSULT
     Note over MSAD: isInDisambiguation → false
     MSAD->>CR: route(sessionId, "稳健", currentAgent, pendingAgents, ...)
@@ -574,7 +581,7 @@ sequenceDiagram
     BC->>DR: route(sessionId, "查账单")
     DR-->>BC: DomainResult(BILL)
     Note over BC: 路由到billDomainService<br/>（不是transferDomainService）
-    BC->>SSAD: billDomainService.handle(sessionId, "查账单")
+    BC->>SSAD: billDomainService.handle(sessionId, "查账单", globalChatHistory)
     Note over SSAD: getOwnActiveThread(bill) → null<br/>走ContextRouter → SWITCH_NEW
     SSAD-->>U: BILL_QUERY/INTERRUPTED
 ```
@@ -593,7 +600,7 @@ sequenceDiagram
     participant IRes as IntentResolver
     participant IR as IntentRouter
 
-    U->>MSAD: handle(sessionId, "帮我解读朝朝盈")
+    U->>MSAD: handle(sessionId, "帮我解读朝朝盈", globalChatHistory)
     
     Note over MSAD: ① getOwnActiveThread → 存在<br/>intent=WEALTH_CONSULT
     MSAD->>CR: route(sessionId, "帮我解读朝朝盈", ...)
@@ -654,7 +661,7 @@ sequenceDiagram
     participant IRes as IntentResolver
     participant GES as GraphExecutionService
 
-    U->>MSAD: handle(sessionId, "继续推荐理财")
+    U->>MSAD: handle(sessionId, "继续推荐理财", globalChatHistory)
     
     MSAD->>CR: route(sessionId, "继续推荐理财", currentAgent=WEALTH_INTERPRET, pendingAgents=WEALTH_CONSULT)
     Note over CR: LLM: 与挂起的推荐相关 → RESUME
@@ -708,7 +715,7 @@ sequenceDiagram
     participant IRes as IntentResolver
     participant IR as IntentRouter
 
-    U->>MSAD: handle(sessionId, "帮我理财")
+    U->>MSAD: handle(sessionId, "帮我理财", globalChatHistory)
     MSAD->>CR: route(...)
     CR-->>MSAD: RoutingResult(SWITCH_NEW)
     MSAD->>IRes: resolve(..., inDisambiguation=false)
@@ -724,7 +731,7 @@ sequenceDiagram
     Note over MSAD: suspend当前activeThread<br/>setDisambiguationState(groupId=WEALTH)
     MSAD-->>U: {status:"DISAMBIGUATION", question:"请问您需要理财咨询还是理财产品解读？"}
     
-    U->>MSAD: handle(sessionId, "咨询")
+    U->>MSAD: handle(sessionId, "咨询", globalChatHistory)
     Note over MSAD: isInDisambiguation → true
     MSAD->>IRes: resolve(..., inDisambiguation=true, disambiguationGroupId=WEALTH)
     Note over IRes: handleDisambiguationAnswer<br/>→ 重新Phase2识别
@@ -770,7 +777,7 @@ sequenceDiagram
     participant GES as GraphExecutionService
     participant TG as TransferGraph(L2)
 
-    U->>SSAD: handle(sessionId, "算了不转了")
+    U->>SSAD: handle(sessionId, "算了不转了", globalChatHistory)
     Note over SSAD: getOwnActiveThread → 存在<br/>直接FOLLOW_UP
     SSAD->>GES: resumeGraph(TRANSFER, newThreadId, "算了不转了", accumulatedParams)
     GES->>TG: stream(input)
@@ -866,7 +873,7 @@ graph TB
     end
     
     subgraph Global["全局"]
-        GCM[ChatMemory(全局)<br/>无TTL,clear时清除]
+        GCM[ChatMemory(全局)<br/>无TTL,clear时清除<br/>BC格式化为globalChatHistory传给L1]
     end
 ```
 
@@ -1237,19 +1244,19 @@ Checkpoint = 只用于graph内部的interruptBefore暂停(单次执行内), 不�
 
 ## 13. Prompt模板体系
 
-### 12.1 模板列表
+### 13.1 模板列表
 
 | 模板 | 使用者 | 用途 | 占位符 |
 |------|--------|------|--------|
 | `l0-domain.st` | DomainRouter | L0领域路由 | {message}, {chat_history}, {last_domain_context} |
 | `l1-routing-simple.st` | ContextRouter(Single) | Phase1: FOLLOW_UP/SWITCH_NEW | {intent_list}, {message}, {current_agent}, {pending_agents}, {session_state}, {chat_history}, {domain_name} |
 | `l1-routing.st` | ContextRouter(Multi) | Phase1: FOLLOW_UP/SWITCH_NEW/RESUME | 同上(无domain_name) |
-| `l1-intention.st` | IntentRouter | Phase2: 意图识别+改写 | {intent_list}, {message}, {mode}, {intent_name}, {pending_agents}, {session_state}, {disambig_context}, {chat_history} |
-| `l1-context-rewrite.st` | ContextRewriter | Single域FOLLOW_UP改写 | {domain_name}, {chat_history}, {message} |
+| `l1-intention.st` | IntentRouter | Phase2: 意图识别+改写 | {intent_list}, {message}, {mode}, {intent_name}, {pending_agents}, {session_state}, {disambig_context}, {chat_history}, **{global_chat_history}** |
+| `l1-context-rewrite.st` | ContextRewriter | Single域FOLLOW_UP改写 | {domain_name}, {chat_history}, {message}, **{global_chat_history}** |
 | `planning-agent.st` | (预留) | 规划Agent | — |
 | L2提取prompt | 各GraphConfig | 参数提取 | 子类自定义 |
 
-### 12.2 模板缓存机制
+### 13.2 模板缓存机制
 
 ```java
 // TemplateUtils: 构造时warmUp，运行时零IO
@@ -1262,7 +1269,7 @@ TemplateUtils.warmUp(intentionPath, () -> "");
 
 ## 14. Spring Bean配置
 
-### 13.1 Bean依赖关系
+### 14.1 Bean依赖关系
 
 ```mermaid
 graph LR
@@ -1306,16 +1313,18 @@ graph LR
     BC --> DR
 ```
 
-### 13.2 ChatMemory隔离
+### 14.2 ChatMemory隔离
 
 | Bean名 | 使用者 | 用途 |
 |--------|--------|------|
-| (默认) | BankController + DomainRouter | 全局对话历史 |
+| (默认) | BankController + DomainRouter | 全局对话历史，BankController格式化为globalChatHistory传给L1 |
 | transferChatMemory | TransferService | 转账域对话历史 |
 | billChatMemory | BillService | 账单域对话历史 |
 | wealthChatMemory | WealthService | 理财域对话历史 |
 
-### 13.3 ChatClient隔离
+**跨域上下文传递**: 全局ChatMemory在BankController中通过`ChatHistoryUtils.formatAndTruncate()`格式化为`globalChatHistory`字符串(默认10对=20条消息)，随`handle()`调用传入L1。L1的ContextRewriter和IntentRouter使用`globalChatHistory`做跨域指代消解，但不缓存到领域ChatMemory。L2不接收globalChatHistory。
+
+### 14.3 ChatClient隔离
 
 | Bean名 | 使用者 | 用途 |
 |--------|--------|------|
@@ -1323,7 +1332,7 @@ graph LR
 | contextChatClient | ContextRouter | Phase1路由类型判断 |
 | intentChatClient | IntentRouter + ContextRewriter | Phase2意图识别 + 改写 |
 
-### 13.4 DomainServiceConfig示例
+### 14.4 DomainServiceConfig示例
 
 ```java
 @Configuration
@@ -1363,9 +1372,176 @@ public class DomainServiceConfig {
 
 ---
 
-## 15. 已知限制与改进方向
+## 15. 跨域上下文传递机制
 
-### 14.1 改进路线图
+### 15.1 问题背景
+
+当用户在不同领域间切换时，后一个领域可能需要前一个领域的信息。例如:
+
+```
+用户: "帮我解读一下朝朝盈理财产品"  → WEALTH
+助手: (解读结果)
+用户: "帮我转1000元到刚才解读的理财产品"  → TRANSFER
+```
+
+转账域不知道"刚才解读的理财产品"是什么，需要从全局对话历史中消解指代。
+
+### 15.2 设计原则
+
+| 原则 | 说明 |
+|------|------|
+| **L1可见全局，L2不可见** | globalChatHistory只传到ContextRewriter/IntentRouter做指代消解，不传给L2子Graph |
+| **不缓存** | globalChatHistory是只读快照，不写入领域ChatMemory，用完即丢 |
+| **改写即消解** | L1通过改写将跨域指代展开为实体名，L2只看到消解后的自包含输入 |
+| **可配置截断** | 全局历史对数通过`routing.history.global-context-max-pairs`配置(默认10对) |
+
+### 15.3 数据流
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant BC as BankController(L0)
+    participant DR as DomainRouter
+    participant L1 as L1 DomainService
+    participant CR_CW as ContextRewriter<br/>IntentRouter
+    participant L2 as L2 子Graph
+
+    U->>BC: POST /chat "转1000到刚才的理财"
+    BC->>DR: route(sessionId, "转1000到刚才的理财")
+    DR-->>BC: DomainResult(TRANSFER)
+    
+    Note over BC: ① 从全局ChatMemory格式化<br/>globalChatHistory(10对)
+    BC->>L1: handle(sessionId, "转1000到刚才的理财", globalChatHistory)
+    
+    Note over L1: ② 无activeThread → ContextRouter
+    L1->>CR_CW: rewrite(..., globalChatHistory)
+    Note over CR_CW: Prompt含{global_chat_history}区段<br/>LLM从全局历史找到"朝朝盈"<br/>改写: "转1000元到朝朝盈理财产品"
+    CR_CW-->>L1: rewrittenInput="转1000元到朝朝盈理财产品"
+    
+    Note over L1: ③ executeNewThread
+    L1->>L2: executeGraph(transferGraph, ..., "转1000元到朝朝盈理财产品")
+    Note over L2: L2只看到消解后的输入<br/>不知道globalChatHistory的存在
+    L2-->>L1: WorkflowOutput
+    L1-->>BC: WorkflowOutput
+    BC-->>U: 结果
+```
+
+### 15.4 配置项
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `routing.history.global-context-max-pairs` | 10 | L0传给L1的全局跨域历史对数 |
+| `routing.history.judgment-max-pairs` | 6 | L1领域内意图判断/改写使用的历史对数 |
+| `routing.history.max-pairs` | 10 | ChatMemory存储上限对数 |
+
+### 15.5 跨域场景验证结果
+
+| 场景 | 输入 | 路由 | 改写结果 | 验证 |
+|------|------|------|---------|------|
+| TRANSFER→WEALTH | "帮我转账5000元给朝朝盈" → "帮我解读一下刚才转账的理财" | WEALTH_INTERPRET | productName=朝朝盈 | ✅ |
+| WEALTH→TRANSFER | "帮我解读一下朝朝盈理财产品" → "帮我转1000元到刚才解读的理财产品" | TRANSFER | receiver=朝朝盈理财产品, amount=1000 | ✅ |
+| WEALTH→BILL | "帮我解读一下朝朝盈理财产品" → "刚才那个理财花了多少钱，查查账单" | BILL_QUERY | — | ✅ |
+
+---
+
+## 16. L0话术类型分析框架
+
+### 16.1 设计背景
+
+当用户话术中同时包含多个领域关键词时(如"转1000到理财产品"同时命中TRANSFER和WEALTH)，确定性路由无法判断。解决方案: 引入**话术类型分析框架**，让LLM基于话术的核心动词/名词判断领域，而非简单的关键词计数。
+
+### 16.2 框架定义
+
+| 话术类型 | 识别特征 | 锚点 | 示例 |
+|---------|---------|------|------|
+| **操作型话术** | 用户要执行一个操作/动作 | 核心动词(用户要做什么) | "转1000到理财"→动词=转→TRANSFER |
+| **问题型话术** | 用户在咨询/询问/了解信息 | 核心名词+问法动词(用户在问什么) | "解读刚才转账的理财"→问法=解读→WEALTH |
+
+### 16.3 最高优先级原则
+
+```
+★★★ 最高优先级原则 ★★★
+判断领域时，只看【当前消息】本身。
+对话历史和会话状态只用于: 当前消息意图不明确(如短回答"张三""500""稳健")时辅助判断。
+当前消息意图明确时，历史信息完全忽略，绝不让历史影响判断。
+```
+
+**设计理由**: LLM倾向锚定到对话历史所属领域(anchoring bias)，而非当前消息的真实意图。最高优先级原则强制LLM优先分析当前消息，避免历史干扰。
+
+### 16.4 多领域关键词冲突处理
+
+当确定性路由检测到多领域关键词同时命中时，**降级到LLM判断**而非硬编码优先级:
+
+```java
+// DomainRouter.matchDomainKeywords()
+int hitCount = (hitTransfer ? 1 : 0) + (hitBill ? 1 : 0) + (hitWealth ? 1 : 0);
+if (hitCount > 1) {
+    log.info("[DomainRouter] Multi-domain keywords hit, delegating to LLM");
+    return null; // 降级到LLM，由prompt中的话术类型分析框架判断
+}
+```
+
+**不硬编码的原因**: 后续会新增更多领域，硬编码优先级矩阵不可扩展。话术类型分析框架通过prompt引导LLM，新增领域只需更新prompt，无需改代码。
+
+### 16.5 Transfer关键词补充
+
+`TRANSFER_KEYWORDS`在原有关键词基础上增加了"转"，解决"帮我转1000元到刚才解读的理财产品"被误路由到WEALTH的问题:
+
+```java
+private static final Set<String> TRANSFER_KEYWORDS = Set.of(
+    "转账", "转钱", "汇款", "打款", "付款", "转给", "打给", "赚钱给", "打钱给", "转"
+);
+```
+
+---
+
+## 17. 改写边界规则 (Rewriter Boundary Rules)
+
+### 17.1 问题背景
+
+IntentRouter/ContextRewriter的改写有时会"越界": 为用户未指定的参数填默认值(如用户没选领域，改写器擅自追加"全部领域")，导致L2 extractParams跳过追问，直接使用默认值执行。
+
+### 17.2 边界规则
+
+```
+★★★ 改写边界(必须遵守) ★★★
+- 只补全用户明确说过的内容(指代消解+参数继承)，不添加用户没说的信息
+- 禁止为用户未指定的参数填默认值(如用户没选领域，不能写"全部领域"或"未限定领域按全部推荐")
+- 未指定的参数由子智能体追问，改写器不应替用户做决定
+- 反例: 用户说"回到刚才的推荐"，历史确认了风险偏好但未选领域
+  → 改写:"继续推荐激进型的理财" (不追加"全部领域")
+```
+
+### 17.3 应用范围
+
+| Prompt模板 | 边界规则位置 |
+|-----------|------------|
+| `l1-intention.st` | 任务→上下文改写→★★★改写边界★★★ |
+| `l1-context-rewrite.st` | 改写规则列表末尾 |
+
+---
+
+## 18. Transfer L2 收款方定义扩展
+
+### 18.1 问题背景
+
+原始`buildExtractPrompt()`中receiver定义为"收款人姓名"，导致L2 extractParams将"朝朝盈理财产品"提取为`purpose`(用途)而非`receiver`(收款方)，因为"朝朝盈"不像人名。
+
+### 18.2 修改内容
+
+```
+- receiver: 收款人名称
++ receiver: 收款方(资金去向)，可以是个人(如"张三")、理财产品(如"朝朝盈")、基金(如"沪深300ETF")、机构等任何资金接收方
++ 注意区分: receiver是"转给谁"(资金去向), purpose是"为什么转"(用途备注)
+```
+
+**设计理由**: 这是prompt层面的泛化，不是为"朝朝盈"场景hardcode。转账的收款方本质上就是资金去向，可以是任何实体。L2 extractParams据此正确分类实体。
+
+---
+
+## 19. 已知限制与改进方向
+
+### 19.1 改进路线图
 
 | 优先级 | 项目 | 状态 | 说明 |
 |--------|------|------|------|
@@ -1375,7 +1551,7 @@ public class DomainServiceConfig {
 | P3 | 领域自注册机制 | 待定 | DomainServiceRegistry，L0自动发现L1服务，减少硬编码 |
 | P4 | accumulatedParams限制 | 待定 | 白名单+大小限制，防止注入攻击 |
 
-### 14.2 LLM非确定性问题
+### 19.2 LLM非确定性问题
 
 WEALTH_CONSULT的INTERRUPTED↔COMPLETED翻转是主要噪声源（回归测试约8/59失败率）。根因：Graph内部extractParams LLM有时会幻觉出用户未提供的参数，导致paramRouter误判ALL_GOOD。解决方向：
 
@@ -1383,9 +1559,21 @@ WEALTH_CONSULT的INTERRUPTED↔COMPLETED翻转是主要噪声源（回归测试�
 - paramRouter增加确定性校验（不依赖LLM的提取结果做缺失判断）
 - 或将paramRouter改为纯规则路由
 
-### 14.3 其他已知问题
+### 19.3 回归测试已知失败(8/231, 96.5%通过率)
+
+以下8个失败均为**改造前已存在的问题**，跨域上下文传递改造未引入新的失败:
+
+| 失败场景 | 根因 | 修复方向 |
+|---------|------|---------|
+| TRANSFER RESUME params丢失 | SAA stream()创建全新OverAllState,accumulatedParams注入后extractParams LLM未正确merge | 强化extractParams prompt或改paramRouter为确定性路由 |
+| BILL L2幻觉 | BillQueryGraph的extractParams LLM幻觉出用户未提供的参数 | 强化extractParams prompt约束 |
+| WEALTH状态翻转 | WEALTH_CONSULT INTERRUPTED↔COMPLETED非确定性翻转 | paramRouter增加确定性校验 |
+
+详细记录见 `REGRESSION-FAIL-LOG.md`
+
+### 19.4 其他已知问题
 
 - **TestRunner.java**: 仍使用硬编码字符串status值，未迁移到WorkflowStatus枚举
 - **内存状态**: 所有状态(ActiveThread/SuspendedAgent/Disambiguation/lastActiveDomain)均为ConcurrentHashMap内存存储，重启丢失。Redis迁移已在规划中
-- **ChatMemory截断**: `judgmentMaxPairs=5`，长对话可能导致LLM缺少关键上下文
+- **ChatMemory截断**: `judgmentMaxPairs=6`，长对话可能导致LLM缺少关键上下文。全局跨域历史单独配置`globalContextMaxPairs=10`
 - **Single域FOLLOW_UP改写**: 当activeThread已清但ChatMemory有上下文时，ContextRewriter改写质量依赖LLM

@@ -18,7 +18,7 @@ import java.util.*;
 public class TestRunner {
 
     private static final String BASE_URL = "http://localhost:8080/api/bank";
-    private static final String OUTPUT_FILE = "D:\\mobile-agent\\test-results.csv";
+    private static final String OUTPUT_FILE = "D:\\mobile-agent\\test-results-v2.csv";
     private static final ObjectMapper mapper = new ObjectMapper();
 
     private static PrintWriter csvWriter;

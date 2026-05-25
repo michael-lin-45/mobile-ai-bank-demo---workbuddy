@@ -113,7 +113,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     // ==================== 主入口 ====================
 
     @Override
-    public WorkflowOutput handle(String sessionId, String userInput) {
+    public WorkflowOutput handle(String sessionId, String userInput, String globalChatHistory) {
         log.info("[{}] Handling: sessionId={}, input={}", logTag, sessionId, userInput);
 
         try {
@@ -139,7 +139,11 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             // 无论是FOLLOW_UP还是SWITCH_NEW，只要没有activeThread，
             // 用户输入可能依赖历史上下文(如"再转一笔3000"依赖之前的"给我妈")，
             // 需要ContextRewriter改写为自包含描述
-            String rewrittenInput = contextRewriter.rewrite(sessionId, userInput, chatMemory, domainName, rewriterTemplatePath);
+            // 传入globalChatHistory用于跨域指代消解(如"刚才说的那个理财")
+            String rewrittenInput = contextRewriter.rewrite(sessionId, userInput, chatMemory, domainName, rewriterTemplatePath, globalChatHistory);
+            log.info("[{}] ContextRewriter: input=[{}] → rewritten=[{}], globalChatHistory=[{}]",
+                    logTag, userInput, rewrittenInput,
+                    globalChatHistory != null && !globalChatHistory.isBlank() ? globalChatHistory.substring(0, Math.min(200, globalChatHistory.length())) + "..." : "(空)");
             addUserMessage(sessionId, userInput);
             return handleSwitchNew(sessionId, rewrittenInput);
 

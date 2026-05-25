@@ -56,13 +56,16 @@ public class IntentResolver {
 
     /**
      * 路由决策 - 统一入口
+     *
+     * @param globalChatHistory 全局跨域对话历史(由L0传入,用于跨域指代消解,可为null)
      */
     public RoutingResolution resolve(String sessionId, String userInput, RoutingResult phase1Result,
                                       ChatMemory chatMemory,
                                       boolean inDisambiguation, String disambiguationGroupId,
                                       boolean hasSuspendedAgents,
                                       Map<String, ?> suspendedAgents,
-                                      String intentionTemplatePath) {
+                                      String intentionTemplatePath,
+                                      String globalChatHistory) {
         if (inDisambiguation) {
             // 消歧中取消: 返回CANCELLED，由WealthService清理消歧状态
             if (isCancelExpression(userInput)) {
@@ -70,10 +73,11 @@ public class IntentResolver {
                 return RoutingResolution.cancelled();
             }
             return handleDisambiguationAnswer(sessionId, userInput, phase1Result, chatMemory,
-                    disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentionTemplatePath);
+                    disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentionTemplatePath,
+                    globalChatHistory);
         }
         return resolveNewIntention(sessionId, userInput, phase1Result, chatMemory,
-                hasSuspendedAgents, suspendedAgents, intentionTemplatePath);
+                hasSuspendedAgents, suspendedAgents, intentionTemplatePath, globalChatHistory);
     }
 
     // ==================== 新意图识别 ====================
@@ -82,10 +86,11 @@ public class IntentResolver {
      * 识别新意图 - Phase2 + 置信度增强消歧 + 模糊匹配
      */
      private RoutingResolution resolveNewIntention(String sessionId, String userInput, RoutingResult phase1Result,
-                                                  ChatMemory chatMemory,
-                                                  boolean hasSuspendedAgents,
-                                                  Map<String, ?> suspendedAgents,
-                                                  String intentionTemplatePath) {
+                                                   ChatMemory chatMemory,
+                                                   boolean hasSuspendedAgents,
+                                                   Map<String, ?> suspendedAgents,
+                                                   String intentionTemplatePath,
+                                                   String globalChatHistory) {
         // 构建状态字符串(用于IntentRouter的prompt)
         String currentAgent = phase1Result.getRouteType() != null ? phase1Result.getRouteType() : "无";
         String pendingAgents = hasSuspendedAgents
@@ -97,7 +102,7 @@ public class IntentResolver {
         // Phase2: 上下文改写 + 意图识别
         RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, phase1Result,
                 currentAgent, pendingAgents, sessionState, disambigContext,
-                intentionTemplatePath, chatMemory);
+                intentionTemplatePath, chatMemory, globalChatHistory);
         log.info("[IntentResolver] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence(), phase2.getCandidateIntents());
 
@@ -191,7 +196,8 @@ public class IntentResolver {
                                                              String disambiguationGroupId,
                                                              boolean hasSuspendedAgents,
                                                              Map<String, ?> suspendedAgents,
-                                                             String intentionTemplatePath) {
+                                                             String intentionTemplatePath,
+                                                             String globalChatHistory) {
         if (disambiguationGroupId == null) {
             return RoutingResolution.rejected();
         }
@@ -228,7 +234,7 @@ public class IntentResolver {
                 .routeType("SWITCH_NEW").confidence(0.8).reasoning("消歧回答重新识别").build();
         RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, rePhase1,
                 currentAgent, pendingAgents, sessionState, disambigContext,
-                intentionTemplatePath, chatMemory);
+                intentionTemplatePath, chatMemory, globalChatHistory);
         log.info("[IntentResolver] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence());
 

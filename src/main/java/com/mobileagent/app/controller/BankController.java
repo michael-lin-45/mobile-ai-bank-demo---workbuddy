@@ -18,8 +18,8 @@ import java.util.Map;
  *
  * 架构 (L0→L1→L2):
  * 1. L0: DomainRouter判断领域(WEALTH/TRANSFER/BILL/UNSUPPORTED/CHAT)
- * 2. 分发到L1 Service
- * 3. L1: 各领域Service内部路由(FOLLOW_UP/RESUME等) + 自管状态
+ * 2. 分发到L1 Service，附带全局跨域对话历史(用于跨域指代消解)
+ * 3. L1: 各领域Service内部路由(FOLLOW_UP/RESUME等) + 自管状态 + 用全局历史增强改写
  * 4. L2: 子智能体Graph执行
  *
  * 状态管理:
@@ -28,8 +28,9 @@ import java.util.Map;
  * - getState: 聚合各L1 Service的状态描述
  *
  * 对话历史管理:
- * - 全局ChatMemory: 记录所有对话,供L0 DomainRouter手动读取
+ * - 全局ChatMemory: 记录所有对话,供L0 DomainRouter手动读取,同时格式化后传给L1做跨域指代消解
  * - 领域ChatMemory: 各L1 Service独立维护,供ContextRouter/IntentRouter手动读取
+ * - 全局跨域历史: L0传给L1的字符串快照,不缓存,仅作改写参考
  */
 @Slf4j
 @RestController
@@ -42,19 +43,22 @@ public class BankController {
     private final AbstractDomainService billDomainService;
     private final ChatService chatService;
     private final ChatMemory chatMemory;
+    private final int globalContextMaxPairs;
 
     public BankController(DomainRouter domainRouter,
                           @Qualifier("wealthDomainService") AbstractDomainService wealthDomainService,
                           @Qualifier("transferDomainService") AbstractDomainService transferDomainService,
                           @Qualifier("billDomainService") AbstractDomainService billDomainService,
                           ChatService chatService,
-                          ChatMemory chatMemory) {
+                          ChatMemory chatMemory,
+                          @org.springframework.beans.factory.annotation.Value("${routing.history.global-context-max-pairs:10}") int globalContextMaxPairs) {
         this.domainRouter = domainRouter;
         this.wealthDomainService = wealthDomainService;
         this.transferDomainService = transferDomainService;
         this.billDomainService = billDomainService;
         this.chatService = chatService;
         this.chatMemory = chatMemory;
+        this.globalContextMaxPairs = globalContextMaxPairs;
     }
 
     @PostMapping("/chat")
@@ -73,6 +77,12 @@ public class BankController {
             log.info("[BankController] L0 domain: {}, unsupportedFeature: {}",
                     domainResult.domain(), domainResult.unsupportedFeature());
 
+            // 格式化全局跨域历史(供L1做跨域指代消解)
+            String globalChatHistory = ChatHistoryUtils.formatAndTruncate(
+                    chatMemory, sessionId, globalContextMaxPairs);
+            log.info("[BankController] globalChatHistory for L1 ({} pairs max): [{}]",
+                    globalContextMaxPairs, globalChatHistory);
+
             // 分发到L1 Service
             WorkflowOutput output;
             if (domainResult.isUnsupported()) {
@@ -81,9 +91,9 @@ public class BankController {
                 output = WorkflowOutput.completed(null, feature + "功能暂不支持");
             } else {
                 output = switch (domainResult.domain()) {
-                    case "WEALTH" -> wealthDomainService.handle(sessionId, userInput);
-                    case "TRANSFER" -> transferDomainService.handle(sessionId, userInput);
-                    case "BILL" -> billDomainService.handle(sessionId, userInput);
+                    case "WEALTH" -> wealthDomainService.handle(sessionId, userInput, globalChatHistory);
+                    case "TRANSFER" -> transferDomainService.handle(sessionId, userInput, globalChatHistory);
+                    case "BILL" -> billDomainService.handle(sessionId, userInput, globalChatHistory);
                     default -> chatService.handle(sessionId, userInput);
                 };
             }

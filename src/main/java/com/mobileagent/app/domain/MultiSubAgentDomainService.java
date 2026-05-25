@@ -291,7 +291,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     // ==================== 主入口 ====================
 
     @Override
-    public WorkflowOutput handle(String sessionId, String userInput) {
+    public WorkflowOutput handle(String sessionId, String userInput, String globalChatHistory) {
         log.info("[{}] Handling: sessionId={}, input={}", logTag, sessionId, userInput);
 
         try {
@@ -328,14 +328,16 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             }
 
             // ========== 路由决策 (Phase2 + 消歧) ==========
+            // 传入globalChatHistory用于跨域指代消解(如"刚才说的那个理财")
             DisambiguationState disambigState = getDisambiguationState(sessionId);
             String disambigGroupId = disambigState != null ? disambigState.getGroupId() : null;
             RoutingResolution resolution = intentResolver.resolve(sessionId, userInput, phase1, chatMemory,
                     isInDisambiguation(sessionId), disambigGroupId,
                     hasOwnSuspendedAgents(sessionId), getAllOwnSuspended(sessionId),
-                    intentionTemplatePath);
-            log.info("[{}] Routing resolution: status={}, intent={}",
-                    logTag, resolution.getStatus(), resolution.getIntentName());
+                    intentionTemplatePath, globalChatHistory);
+            log.info("[{}] Routing resolution: status={}, intent={}, globalChatHistory=[{}]",
+                    logTag, resolution.getStatus(), resolution.getIntentName(),
+                    globalChatHistory != null && !globalChatHistory.isBlank() ? globalChatHistory.substring(0, Math.min(200, globalChatHistory.length())) + "..." : "(空)");
 
             addUserMessage(sessionId, userInput);
 
