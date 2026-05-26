@@ -46,12 +46,14 @@
    - 禁止为用户未指定的参数填默认值
    - 未指定的参数由子智能体追问，改写器不应替用户做决定
 
-3. 归属判断:
-   判断用户意图是否属于本领域处理范围:
-   - 参考意图的 intent_type 和 scope
-   - 用户要求本域执行业务操作(咨询/推荐/解读/转账/查询等) → belongs_to_domain=true
-   - 用户询问本域相关的知识/概念/定义/分类等FAQ问题 → belongs_to_domain=false (知识问答不属于业务操作，应REROUTE到CHAT)
-   - 用户意图明确属于其他已注册意图 → belongs_to_domain=false
+3. 归属判断(核心):
+   判断用户意图是否属于本领域子智能体的处理范围，必须结合本领域每个子智能体的描述、intentType和scope逐一比对:
+   - 将用户意图与本领域每个子智能体的[类型]和[范围]进行匹配
+   - 用户意图在本领域某子智能体的scope范围内(要求执行该子智能体能处理的业务操作) → belongs_to_domain=true
+   - 以下情况 → belongs_to_domain=false:
+     a) 用户询问本域相关的知识/概念/定义/分类等FAQ问题，但并非要求本域子智能体执行业务操作(知识问答不在任何子智能体的业务scope内，应REROUTE到CHAT)
+     b) 用户意图明确属于其他已注册意图的scope范围
+     c) 用户意图不属于本领域任何子智能体的scope范围
    - 无法确定时 → belongs_to_domain=true (保守策略，宁可不REROUTE也不误杀)
 
 4. 歧义检测: 如果用户输入只能匹配到意图组级别，标记is_ambiguous=true

@@ -792,4 +792,71 @@ class IntegrationFlowTest {
         System.out.println("[#30-2] 解读转账的理财(跨域上下文) ✓ → " + s2
                 + ", intent=" + r2.get("intent").asText());
     }
+
+    // ==================== 31. L0短回答路由: 转账→账单→转账恢复→短回答 ====================
+
+    /**
+     * Bug复现: 8轮对话后输入"90"应路由到TRANSFER(回答"转多少金额"),不应路由到BILL
+     *
+     * 1. 我要转账                  → TRANSFER
+     * 2. 给我妈转点家用             → TRANSFER (回答"转给谁")
+     * 3. 先看看我这个月的开支情况     → BILL
+     * 4. 那收入呢                  → BILL (FOLLOW_UP)
+     * 5. 好，转3000吧              → TRANSFER (意图恢复)
+     * 6. 再转1000吧               → TRANSFER (FOLLOW_UP)
+     * 7. 再给小强打点钱吧           → TRANSFER
+     * 8. 90                       → TRANSFER (回答"转多少金额")
+     */
+    @Test
+    @Order(31)
+    void test31_shortAnswerRoutingTransfer() {
+        // 1. 我要转账 → TRANSFER
+        JsonNode r1 = chat("我要转账");
+        assertThat(r1.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#31-1] 我要转账 → " + r1.get("status").asText()
+                + ", intent=" + r1.get("intent").asText());
+
+        // 2. 给我妈转点家用 → TRANSFER (回答转给谁)
+        JsonNode r2 = chat("给我妈转点家用");
+        assertThat(r2.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#31-2] 给我妈转点家用 → " + r2.get("status").asText()
+                + ", intent=" + r2.get("intent").asText());
+
+        // 3. 先看看我这个月的开支情况 → BILL
+        JsonNode r3 = chat("先看看我这个月的开支情况");
+        assertThat(r3.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#31-3] 开支情况 → " + r3.get("status").asText()
+                + ", intent=" + r3.get("intent").asText());
+
+        // 4. 那收入呢 → BILL
+        JsonNode r4 = chat("那收入呢");
+        assertThat(r4.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#31-4] 那收入呢 → " + r4.get("status").asText()
+                + ", intent=" + r4.get("intent").asText());
+
+        // 5. 好，转3000吧 → TRANSFER (意图恢复)
+        JsonNode r5 = chat("好，转3000吧");
+        assertThat(r5.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#31-5] 转3000吧 → " + r5.get("status").asText()
+                + ", intent=" + r5.get("intent").asText());
+
+        // 6. 再转1000吧 → TRANSFER
+        JsonNode r6 = chat("再转1000吧");
+        assertThat(r6.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#31-6] 再转1000吧 → " + r6.get("status").asText()
+                + ", intent=" + r6.get("intent").asText());
+
+        // 7. 再给小强打点钱吧 → TRANSFER
+        JsonNode r7 = chat("再给小强打点钱吧");
+        assertThat(r7.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#31-7] 给小强打点钱 → " + r7.get("status").asText()
+                + ", intent=" + r7.get("intent").asText());
+
+        // 8. 90 → TRANSFER (核心断言: L0应根据历史"转多少金额"路由到TRANSFER)
+        JsonNode r8 = chat("90");
+        assertThat(r8.get("intent").asText()).isEqualTo("TRANSFER");
+        System.out.println("[#31-8] 90 → " + r8.get("status").asText()
+                + ", intent=" + r8.get("intent").asText()
+                + " ★★核心断言: intent必须=TRANSFER★★");
+    }
 }

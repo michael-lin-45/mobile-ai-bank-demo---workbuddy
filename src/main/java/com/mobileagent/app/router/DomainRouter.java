@@ -63,7 +63,7 @@ public class DomainRouter {
 
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
                         ChatMemory chatMemory,
-                        @org.springframework.beans.factory.annotation.Value("${routing.history.judgment-max-pairs:5}") int judgmentMaxPairs,
+                        @org.springframework.beans.factory.annotation.Value("${routing.history.global-context-max-pairs:10}") int judgmentMaxPairs,
                         @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes) {
         this.domainChatClient = domainChatClient;
         this.chatMemory = chatMemory;
