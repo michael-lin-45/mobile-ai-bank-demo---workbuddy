@@ -1,5 +1,6 @@
 package com.mobileagent.app.router;
 
+import com.mobileagent.app.config.RoutingProperties;
 import com.mobileagent.app.util.ChatHistoryUtils;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
@@ -23,30 +24,20 @@ import java.util.concurrent.ConcurrentHashMap;
  *    2a. 先结合对话历史判断
  *    2b. 历史也判断不出 → lastActiveDomain兜底
  *
- * lastActiveDomain:
- * - L0自有状态，不依赖L1的AgentStateManager
- * - 当L0路由到非CHAT/UNSUPPORTED领域时记录
- * - 可配置过期时间(默认5分钟)
- *
- * 输出: WEALTH / TRANSFER / BILL / UNSUPPORTED / CHAT
+ * 领域关键词从 application.yml 的 routing.domains 读取，
+ * 新增领域只需改yml，无需改Java代码。
  */
 @Slf4j
 @Component
 public class DomainRouter {
 
-    // ==================== 领域关键词 ====================
+    // ==================== 领域关键词(从配置加载) ====================
 
-    private static final Set<String> BILL_KEYWORDS = Set.of(
-            "账单", "明细", "消费", "支出", "收入", "收支", "开销", "流水");
+    /** 领域 → 关键词集合，从 routing.domains 初始化 */
+    private final Map<String, Set<String>> domainKeywords;
 
-    private static final Set<String> TRANSFER_KEYWORDS = Set.of(
-            "转账", "转钱", "汇款", "打款", "付款", "转给", "打给", "赚钱给", "打钱给", "转");
-
-    private static final Set<String> WEALTH_KEYWORDS = Set.of(
-            "理财", "投资", "收益", "基金", "推荐", "咨询", "解读");
-
-    private static final Set<String> UNSUPPORTED_KEYWORDS = Set.of(
-            "贷款", "信用卡", "活动", "积分", "开户", "挂失", "存款", "保险");
+    /** UNSUPPORTED领域名(特殊处理: 提取具体功能名) */
+    private static final String UNSUPPORTED_DOMAIN = "UNSUPPORTED";
 
     // ==================== 实例字段 ====================
 
@@ -63,6 +54,7 @@ public class DomainRouter {
 
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
                         ChatMemory chatMemory,
+                        RoutingProperties routingProperties,
                         @org.springframework.beans.factory.annotation.Value("${routing.history.global-context-max-pairs:10}") int judgmentMaxPairs,
                         @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes) {
         this.domainChatClient = domainChatClient;
@@ -70,6 +62,14 @@ public class DomainRouter {
         this.objectMapper = new ObjectMapper();
         this.judgmentMaxPairs = judgmentMaxPairs;
         this.lastDomainExpireMinutes = lastDomainExpireMinutes;
+
+        // 从配置加载领域关键词
+        Map<String, Set<String>> keywords = new LinkedHashMap<>();
+        for (var entry : routingProperties.getDomains().entrySet()) {
+            keywords.put(entry.getKey(), new HashSet<>(entry.getValue().getKeywords()));
+        }
+        this.domainKeywords = Collections.unmodifiableMap(keywords);
+        log.info("[DomainRouter] Loaded domain keywords from config: {}", domainKeywords.keySet());
     }
 
     // ==================== 路由结果 ====================
@@ -184,27 +184,33 @@ public class DomainRouter {
 
     /**
      * 关键词匹配 - 检查输入是否包含领域关键词
+     *
+     * 优先检查UNSUPPORTED(避免"贷款"等被其他规则截胡),
+     * 多领域同时命中时降级到LLM判断。
+     *
      * @return 命中的领域名，null表示无匹配
      */
     private String matchDomainKeywords(String input) {
-        // UNSUPPORTED优先检查(避免"贷款"等被其他规则截胡)
-        if (containsAny(input, UNSUPPORTED_KEYWORDS)) return "UNSUPPORTED";
+        // UNSUPPORTED优先检查
+        Set<String> unsupportedKw = domainKeywords.get(UNSUPPORTED_DOMAIN);
+        if (unsupportedKw != null && containsAny(input, unsupportedKw)) return UNSUPPORTED_DOMAIN;
 
-        boolean hitTransfer = containsAny(input, TRANSFER_KEYWORDS);
-        boolean hitBill = containsAny(input, BILL_KEYWORDS);
-        boolean hitWealth = containsAny(input, WEALTH_KEYWORDS);
-        int hitCount = (hitTransfer ? 1 : 0) + (hitBill ? 1 : 0) + (hitWealth ? 1 : 0);
+        // 统计各业务领域命中情况(排除UNSUPPORTED)
+        List<String> hitDomains = new ArrayList<>();
+        for (var entry : domainKeywords.entrySet()) {
+            if (UNSUPPORTED_DOMAIN.equals(entry.getKey())) continue;
+            if (containsAny(input, entry.getValue())) {
+                hitDomains.add(entry.getKey());
+            }
+        }
 
-        // 多领域关键词同时命中时，降级到LLM判断(话术类型+核心动词/名词)
-        if (hitCount > 1) {
-            log.info("[DomainRouter] Multi-domain keywords hit (TRANSFER={}, BILL={}, WEALTH={}), delegating to LLM for input='{}'",
-                    hitTransfer, hitBill, hitWealth, input);
+        // 多领域关键词同时命中时，降级到LLM判断
+        if (hitDomains.size() > 1) {
+            log.info("[DomainRouter] Multi-domain keywords hit {}, delegating to LLM for input='{}'", hitDomains, input);
             return null;
         }
 
-        if (hitTransfer) return "TRANSFER";
-        if (hitBill) return "BILL";
-        if (hitWealth) return "WEALTH";
+        if (hitDomains.size() == 1) return hitDomains.get(0);
         return null;
     }
 
@@ -218,8 +224,11 @@ public class DomainRouter {
 
     /** 从UNSUPPORTED关键词中提取具体功能名 */
     private String extractUnsupportedFeature(String input) {
-        for (String keyword : UNSUPPORTED_KEYWORDS) {
-            if (input.contains(keyword)) return keyword;
+        Set<String> unsupportedKw = domainKeywords.get(UNSUPPORTED_DOMAIN);
+        if (unsupportedKw != null) {
+            for (String keyword : unsupportedKw) {
+                if (input.contains(keyword)) return keyword;
+            }
         }
         return "该";
     }
@@ -314,13 +323,11 @@ public class DomainRouter {
 
     private String normalizeDomain(String domain) {
         if (domain == null) return "CHAT";
-        return switch (domain.toUpperCase()) {
-            case "WEALTH" -> "WEALTH";
-            case "TRANSFER" -> "TRANSFER";
-            case "BILL" -> "BILL";
-            case "UNSUPPORTED" -> "UNSUPPORTED";
-            default -> "CHAT";
-        };
+        String upper = domain.toUpperCase();
+        // 已配置的领域直接通过
+        if (domainKeywords.containsKey(upper)) return upper;
+        // CHAT是兜底领域
+        return "CHAT";
     }
 
     // ==================== 模板加载 ====================

@@ -48,31 +48,50 @@ routing:
   verification:
     max-retries: 1
 
-intents:
-  - name: TRANSFER
-    description: "转账给他人"
-    param-schema: "收款人名称, 转账金额, 用途(可选)"
-    is-write-op: true
-    intent-type: OPERATION
-    scope: "资金转账操作，将钱转给他人或理财产品等"
-  - name: BILL_QUERY
-    description: "查询账单明细"
-    param-schema: "时间范围, 支出/收入类型(可选)"
-    is-write-op: false
-    intent-type: QUERY
-    scope: "账单/消费/收支明细查询"
-  - name: WEALTH_CONSULT
-    description: "理财咨询/推荐"
-    param-schema: "风险偏好(激进/稳健/保守), 关注领域(科技/能源/汽车/银行/工业/饮食/娱乐/全部, 可选, 默认全部)"
-    is-write-op: false
-    intent-type: CONSULTATION
-    scope: "理财咨询与推荐，基于风险偏好推荐理财产品"
-  - name: WEALTH_INTERPRET
-    description: "理财产品解读"
-    param-schema: "理财产品名称"
-    is-write-op: false
-    intent-type: CONSULTATION
-    scope: "理财产品/标的解读，分析具体理财产品的详情"
+  # 意图注册表 - 新增意图只需在此添加,无需改Java代码
+  intents:
+    - name: TRANSFER
+      description: "转账给他人"
+      param-schema: "收款人名称, 转账金额, 用途(可选)"
+      is-write-op: true
+      intent-type: OPERATION
+      scope: "资金转账操作，将钱转给他人或理财产品等"
+    - name: BILL_QUERY
+      description: "查询账单明细"
+      param-schema: "时间范围, 支出/收入类型(可选)"
+      is-write-op: false
+      intent-type: QUERY
+      scope: "账单/消费/收支明细查询"
+    - name: WEALTH_CONSULT
+      description: "理财咨询/推荐"
+      param-schema: "风险偏好(激进/稳健/保守), 关注领域(科技/能源/汽车/银行/工业/饮食/娱乐/全部, 可选, 默认全部)"
+      is-write-op: false
+      intent-type: CONSULTATION
+      scope: "理财咨询与推荐，基于风险偏好推荐理财产品"
+    - name: WEALTH_INTERPRET
+      description: "理财产品解读"
+      param-schema: "理财产品名称"
+      is-write-op: false
+      intent-type: CONSULTATION
+      scope: "理财产品/标的解读，分析具体理财产品的详情"
+
+  # 意图消歧组 - 多个意图共享关键词时需要消歧追问
+  intent-groups:
+    - group-id: WEALTH
+      display-name: "理财"
+      intent-names: [WEALTH_CONSULT, WEALTH_INTERPRET]
+      disambiguation-question: "请问您需要理财咨询还是理财产品解读？"
+
+  # 领域关键词 - DomainRouter确定性路由使用,新增领域只需在此添加关键词
+  domains:
+    TRANSFER:
+      keywords: ["转账", "转钱", "汇款", "打款", "付款", "转给", "打给", "赚钱给", "打钱给", "转"]
+    BILL:
+      keywords: ["账单", "明细", "消费", "支出", "收入", "收支", "开销", "流水"]
+    WEALTH:
+      keywords: ["理财", "投资", "收益", "基金", "推荐", "咨询", "解读"]
+    UNSUPPORTED:
+      keywords: ["贷款", "信用卡", "活动", "积分", "开户", "挂失", "存款", "保险"]
 
 session:
   pending-agents:

@@ -175,23 +175,15 @@ public class GraphExecutionService {
         }
     }
 
-    /** 从graph state中提取已收集的参数 */
+    /** 从graph state中提取已收集的业务参数(排除系统key) */
     public Map<String, Object> extractAccumulatedParams(String intent, OverAllState state) {
         Map<String, Object> params = new HashMap<>();
-        String prefix = switch (intent) {
-            case "TRANSFER" -> "transfer.";
-            case "BILL_QUERY" -> "bill.";
-            case "WEALTH_CONSULT" -> "wealthConsult.";
-            case "WEALTH_INTERPRET" -> "wealthInterpret.";
-            default -> "";
-        };
-
         for (String key : state.data().keySet()) {
-            if (key.startsWith(prefix)) {
-                Object value = state.value(key).orElse(null);
-                if (value != null && !value.toString().isEmpty()) {
-                    params.put(key, value);
-                }
+            // 系统key: _开头 或 messages，跳过
+            if (key.startsWith("_") || "messages".equals(key)) continue;
+            Object value = state.value(key).orElse(null);
+            if (value != null && !value.toString().isEmpty()) {
+                params.put(key, value);
             }
         }
         return params;

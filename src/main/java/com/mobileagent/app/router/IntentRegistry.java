@@ -1,6 +1,7 @@
 package com.mobileagent.app.router;
 
 import com.alibaba.cloud.ai.graph.CompiledGraph;
+import com.mobileagent.app.config.RoutingProperties;
 import jakarta.annotation.PostConstruct;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -13,13 +14,21 @@ import java.util.*;
  *
  * 支持意图组(IntentGroup): 共享前缀关键词的意图集合,用于消歧。
  * 当Phase2无法区分组内意图时,进入消歧模式追问用户。
+ *
+ * 意图和意图组从 application.yml 的 routing.intents / routing.intent-groups 读取，
+ * 新增意图只需改yml，无需改Java代码。
  */
 @Slf4j
 @Component
 public class IntentRegistry {
 
+    private final RoutingProperties routingProperties;
     private final Map<String, IntentConfig> registry = new LinkedHashMap<>();
     private final Map<String, IntentGroup> groups = new LinkedHashMap<>();
+
+    public IntentRegistry(RoutingProperties routingProperties) {
+        this.routingProperties = routingProperties;
+    }
 
     @Data
     public static class IntentConfig {
@@ -32,10 +41,6 @@ public class IntentRegistry {
         /** 本意图的处理范围描述，供IntentRouter判断belongs_to_domain */
         private final String scope;
         private CompiledGraph graph;
-
-        public IntentConfig(String name, String description, String paramSchema, boolean writeOp) {
-            this(name, description, paramSchema, writeOp, null, null);
-        }
 
         public IntentConfig(String name, String description, String paramSchema, boolean writeOp,
                             String intentType, String scope) {
@@ -62,30 +67,24 @@ public class IntentRegistry {
 
     @PostConstruct
     public void init() {
-        // 注册已知意图(不含graph,graph在Bean初始化后注入)
-        register("TRANSFER", "转账给他人", "收款人名称, 转账金额, 用途(可选)", true,
-                "OPERATION", "资金转账操作，将钱转给他人或理财产品等");
-        register("BILL_QUERY", "查询账单明细", "时间范围, 收支类型(支出/收入/收支)", false,
-                "QUERY", "账单/消费/收支明细查询");
-        register("WEALTH_CONSULT", "理财咨询/推荐", "风险偏好(激进/稳健/保守)", false,
-                "CONSULTATION", "理财咨询与推荐，基于风险偏好推荐理财产品");
-        register("WEALTH_INTERPRET", "理财产品解读", "理财产品名称", false,
-                "CONSULTATION", "理财产品/标的解读，分析具体理财产品的详情");
+        // 从 application.yml 读取意图配置并注册(不含graph,graph在Bean初始化后由AppInitConfig注入)
+        for (RoutingProperties.IntentConfigProps props : routingProperties.getIntents()) {
+            register(props.getName(), props.getDescription(), props.getParamSchema(),
+                    props.isWriteOp(), props.getIntentType(), props.getScope());
+        }
 
-        // 注册意图组(共享前缀关键词,需要消歧)
-        registerGroup("WEALTH", "理财", List.of("WEALTH_CONSULT", "WEALTH_INTERPRET"),
-                "请问您需要理财咨询还是理财产品解读？");
+        // 从 application.yml 读取意图组配置并注册
+        for (RoutingProperties.IntentGroupProps groupProps : routingProperties.getIntentGroups()) {
+            registerGroup(groupProps.getGroupId(), groupProps.getDisplayName(),
+                    groupProps.getIntentNames(), groupProps.getDisambiguationQuestion());
+        }
 
         log.info("IntentRegistry initialized with {} intents: {}", registry.size(), registry.keySet());
         log.info("IntentGroups: {}", groups.keySet());
     }
 
-    public void register(String name, String description, String paramSchema, boolean writeOp) {
-        registry.put(name, new IntentConfig(name, description, paramSchema, writeOp));
-    }
-
     public void register(String name, String description, String paramSchema, boolean writeOp,
-                         String intentType, String scope) {
+                          String intentType, String scope) {
         registry.put(name, new IntentConfig(name, description, paramSchema, writeOp, intentType, scope));
     }
 
