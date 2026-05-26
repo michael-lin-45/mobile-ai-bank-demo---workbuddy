@@ -92,7 +92,7 @@ public class IntentRouter {
             log.error("[IntentRouter] LLM call failed", e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
-                    .refinedRouteType("SWITCH_NEW")
+                    .refinedRouteType("SWITCH")
                     .intentName("UNKNOWN")
                     .rewrittenInput(userInput)
                     .confidence(0.3)
@@ -192,7 +192,7 @@ public class IntentRouter {
             log.warn("[IntentRouter] Failed to parse rewrite response: {}", content, e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
-                    .refinedRouteType("SWITCH_NEW")
+                    .refinedRouteType("SWITCH")
                     .intentName("UNKNOWN")
                     .rewrittenInput(phase1Result.getReasoning())
                     .confidence(0.3)
@@ -204,7 +204,7 @@ public class IntentRouter {
     /**
      * 判断细化路由类型:
      * - 如果识别的意图在suspendedAgents中 → RESUME (由调用方传入isInSuspended判断)
-     * - 否则 → SWITCH_NEW
+     * - 否则 → SWITCH
      */
     private String determineRouteType(String intentName, RoutingResult phase1Result,
                                        com.fasterxml.jackson.databind.JsonNode node) {
@@ -221,7 +221,7 @@ public class IntentRouter {
             }
         }
 
-        return "SWITCH_NEW";
+        return "SWITCH";
     }
 
     private String loadTemplate(String path) {
@@ -267,14 +267,14 @@ public class IntentRouter {
             3. 归属判断: 判断用户意图是否属于本领域处理范围，参考意图的intent_type和scope
                - 无法确定时 → belongs_to_domain=true (保守策略)
             4. 歧义检测: 如果用户输入只能匹配到意图组,标记is_ambiguous=true
-            5. 路由判断: 意图在挂起列表中→RESUME,否则→SWITCH_NEW
+            5. 路由判断: 意图在挂起列表中→RESUME,否则→SWITCH
             
             严格输出JSON:
             {
               "intent_name": "意图名称",
               "rewritten_input": "改写后的自包含描述",
               "belongs_to_domain": true,
-              "route_type": "SWITCH_NEW | RESUME",
+              "route_type": "SWITCH | RESUME",
               "resume_target": "RESUME时填意图名,否则null",
               "confidence": 0.0-1.0,
               "is_ambiguous": false,

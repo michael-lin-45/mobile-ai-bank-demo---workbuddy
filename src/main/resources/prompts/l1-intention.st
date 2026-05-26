@@ -58,7 +58,7 @@
 
 4. 歧义检测: 如果用户输入只能匹配到意图组级别，标记is_ambiguous=true
 
-5. 路由判断: 意图在挂起列表中→RESUME，否则→SWITCH_NEW
+5. 路由判断: 意图在挂起列表中→RESUME，否则→SWITCH
 
 消歧回答处理(当消歧上下文非"无"时):
 - 用户正在回答消歧追问，简短回答是对候选意图的选择
@@ -71,7 +71,7 @@
   "intent_name": "意图名/组名/UNKNOWN",
   "rewritten_input": "改写后的自包含描述",
   "belongs_to_domain": true,
-  "route_type": "SWITCH_NEW | RESUME",
+  "route_type": "SWITCH | RESUME",
   "resume_target": "RESUME时填意图名,否则null",
   "confidence": 0.0-1.0,
   "is_ambiguous": false,

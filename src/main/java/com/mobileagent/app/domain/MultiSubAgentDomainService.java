@@ -25,15 +25,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * 特点: 多个子意图之间可切换，需要suspendedAgents、消歧、Phase2意图识别
  *
  * 控制流 (5层决策):
- * 1. Phase1: ContextRouter (full模板) → FOLLOW_UP / SWITCH_NEW / RESUME
- * 2. FOLLOW_UP + activeThread (非消歧中) → resumeGraph(注入accumulatedParams)
- * 3. FOLLOW_UP + 无activeThread + 有suspendedAgents → 降级走Phase2
+ * 1. Phase1: ContextRouter (full模板) → FOLLOW / SWITCH / RESUME
+ * 2. FOLLOW + activeThread (非消歧中) → resumeGraph(注入accumulatedParams)
+ * 3. FOLLOW + 无activeThread + 有suspendedAgents → 降级走Phase2
  * 4. Phase2: IntentResolver → RoutingResolution (RESOLVED/DISAMBIGUATION/REJECTED/CANCELLED)
  * 5. RESOLVED → executeRoute (auto-upgrade + handleSwitchNew/handleResume)
  *
  * Cancel:
  * - 不暴露cancel公共方法
- * - 子智能体执行中的取消: FOLLOW_UP → resumeGraph → 子Graph的cancelAwareExtractParams检测
+ * - 子智能体执行中的取消: FOLLOW → resumeGraph → 子Graph的cancelAwareExtractParams检测
  * - 消歧中的取消: IntentResolver.isCancelExpression() → CANCELLED状态 → handle()中clearDisambiguationState
  */
 @Slf4j
@@ -298,7 +298,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             String currentAgent = buildCurrentAgent(sessionId);
             String pendingAgents = getPendingAgentsDescription(sessionId);
 
-            // ========== Phase 1: ContextRouter (FOLLOW_UP/SWITCH_NEW/RESUME) ==========
+            // ========== Phase 1: ContextRouter (FOLLOW/SWITCH/RESUME) ==========
             // 如果activeThread存在且有lastQuestion，注入lastQuestion帮助ContextRouter精准判断
             ActiveThreadInfo activeThreadForRouting = getOwnActiveThread(sessionId);
             String lastQuestion = (activeThreadForRouting != null) ? activeThreadForRouting.getLastQuestion() : null;
@@ -308,7 +308,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                     routingTemplatePath, domainName, chatMemory, lastQuestion);
             log.info("[{}] Phase1: routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
 
-            // ========== FOLLOW_UP + activeThread → 直接resume (消歧中除外) ==========
+            // ========== FOLLOW + activeThread → 直接resume (消歧中除外) ==========
             if (phase1.isFollowUp() && !isInDisambiguation(sessionId)) {
                 ActiveThreadInfo activeThread = getOwnActiveThread(sessionId);
                 if (activeThread != null) {
@@ -316,18 +316,18 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 }
 
                 if (!hasOwnSuspendedAgents(sessionId)) {
-                    log.info("[{}] FOLLOW_UP but no context → fallback to SWITCH_NEW", logTag);
+                    log.info("[{}] FOLLOW but no context → fallback to SWITCH", logTag);
                     phase1 = RoutingResult.builder()
-                            .routeType("SWITCH_NEW").confidence(0.5)
-                            .reasoning("FOLLOW_UP但无活跃线程,降级为新意图").build();
+                            .routeType("SWITCH").confidence(0.5)
+                            .reasoning("FOLLOW但无活跃线程,降级为新意图").build();
                 }
             }
 
-            // ========== RESUME但无suspendedAgents → 降级为SWITCH_NEW ==========
+            // ========== RESUME但无suspendedAgents → 降级为SWITCH ==========
             if ("RESUME".equals(phase1.getRouteType()) && !hasOwnSuspendedAgents(sessionId)) {
-                log.info("[{}] RESUME but no suspended agents → fallback to SWITCH_NEW", logTag);
+                log.info("[{}] RESUME but no suspended agents → fallback to SWITCH", logTag);
                 phase1 = RoutingResult.builder()
-                        .routeType("SWITCH_NEW").confidence(0.5)
+                        .routeType("SWITCH").confidence(0.5)
                         .reasoning("RESUME但无挂起线程,降级为新意图").build();
             }
 
@@ -364,12 +364,12 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 }
             }
 
-            // ========== Auto-upgrade保护: SWITCH_NEW但意图与activeThread一致 → 降级FOLLOW_UP ==========
+            // ========== Auto-upgrade保护: SWITCH但意图与activeThread一致 → 降级FOLLOW ==========
             if (resolution.isResolved() && activeThreadForRouting != null
                     && !"RESUME".equals(resolution.getRouteType())) {
                 String identifiedIntent = resolution.getIntentName();
                 if (identifiedIntent != null && identifiedIntent.equals(activeThreadForRouting.getIntent())) {
-                    log.info("[{}] Auto-upgrade SWITCH_NEW→FOLLOW_UP: identifiedIntent={} matches activeThread.intent={}",
+                    log.info("[{}] Auto-upgrade SWITCH→FOLLOW: identifiedIntent={} matches activeThread.intent={}",
                             logTag, identifiedIntent, activeThreadForRouting.getIntent());
                     addUserMessage(sessionId, userInput);
                     return resumeActiveThread(sessionId, userInput, activeThreadForRouting);
@@ -413,7 +413,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     // ==================== 路由执行 ====================
 
     private WorkflowOutput executeRoute(String sessionId, RoutingResolution resolution) {
-        // 防御: 如果意图已suspended但路由判了SWITCH_NEW，自动升级为RESUME
+        // 防御: 如果意图已suspended但路由判了SWITCH，自动升级为RESUME
         if (!"RESUME".equals(resolution.getRouteType())
                 && getOwnSuspendedThread(sessionId, resolution.getIntentName()) != null) {
             log.info("[{}] Auto-upgrade {}→RESUME for suspended intent={}",
@@ -438,7 +438,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private WorkflowOutput handleResume(String sessionId, String intent, String userInput) {
         SuspendedInfo suspendedInfo = getOwnSuspendedThread(sessionId, intent);
         if (suspendedInfo == null) {
-            log.warn("[{}] RESUME but no suspended thread for intent={}, fallback to SWITCH_NEW", logTag, intent);
+            log.warn("[{}] RESUME but no suspended thread for intent={}, fallback to SWITCH", logTag, intent);
             return handleSwitchNew(sessionId, intent, userInput);
         }
 

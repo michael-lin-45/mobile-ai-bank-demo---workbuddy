@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * 场景分类:
  * A. 一句直达 (1-3)
- * B. 意图接续 FOLLOW_UP (4-6)
+ * B. 意图接续 FOLLOW (4-6)
  * C. 中断恢复 INTERRUPTED→resume (7-9)
  * D. 取消 CANCEL (10-12)
  * E. 闲聊 CHAT (13-14)
@@ -122,7 +122,7 @@ class IntegrationFlowTest {
         System.out.println("[#3] 一句直达理财 ✓ → status=" + status + ", intent=" + result.get("intent").asText());
     }
 
-    // ==================== B. 意图接续 FOLLOW_UP ====================
+    // ==================== B. 意图接续 FOLLOW ====================
 
     /** #4 接续: "查账单" → INTERRUPTED(缺时间) → "上个月的" → COMPLETED */
     @Test
@@ -134,7 +134,7 @@ class IntegrationFlowTest {
         System.out.println("[#4a] 查账单 → INTERRUPTED: " + r1.get("question").asText());
 
         JsonNode r2 = chat("上个月的");
-        // FOLLOW_UP → resumeGraph → COMPLETED
+        // FOLLOW → resumeGraph → COMPLETED
         assertThat(r2.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
         System.out.println("[#4b] 接续'上个月的' ✓ → " + r2.get("status").asText());
     }
@@ -157,7 +157,7 @@ class IntegrationFlowTest {
         System.out.println("[#5c] 200元 ✓ → " + r3.get("status").asText());
     }
 
-    /** #6 接续: 无activeThread时FOLLOW_UP → IntentRouter → SWITCH_NEW */
+    /** #6 接续: 无activeThread时FOLLOW → IntentRouter → SWITCH */
     @Test
     @Order(6)
     void test06_followUpNoActiveThread() {
@@ -167,10 +167,10 @@ class IntegrationFlowTest {
         System.out.println("[#6a] 查收入 → " + s1);
 
         // 如果已经COMPLETED，activeThread为空
-        // 再说"那支出呢" → FOLLOW_UP但无activeThread → IntentRouter改写 → SWITCH_NEW
+        // 再说"那支出呢" → FOLLOW但无activeThread → IntentRouter改写 → SWITCH
         JsonNode r2 = chat("那支出呢");
         assertThat(r2.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
-        System.out.println("[#6b] 那支出呢 (FOLLOW_UP no active) ✓ → " + r2.get("status").asText());
+        System.out.println("[#6b] 那支出呢 (FOLLOW no active) ✓ → " + r2.get("status").asText());
     }
 
     // ==================== C. 中断恢复 INTERRUPTED→resume ====================
@@ -343,8 +343,8 @@ class IntegrationFlowTest {
     // ==================== G. 跨领域切换 ====================
 
     /** #18 跨领域切换: 转账 → 账单 (中断后切换，原意图挂起)
-     *  BUG: L1 ContextRouter判断FOLLOW_UP, 但activeThread是TRANSFER(非本领域),
-     *  BillService仍resume了TRANSFER而非suspend+SWITCH_NEW。需要修复L1的FOLLOW_UP+异领域activeThread判断。
+     *  BUG: L1 ContextRouter判断FOLLOW, 但activeThread是TRANSFER(非本领域),
+     *  BillService仍resume了TRANSFER而非suspend+SWITCH。需要修复L1的FOLLOW+异领域activeThread判断。
      */
     @Test
     @Order(18)
@@ -354,7 +354,7 @@ class IntegrationFlowTest {
         System.out.println("[#18a] 转账给张三 → INTERRUPTED");
 
         // 跨领域切换到账单
-        // 注意: 当前BUG — L1 FOLLOW_UP+异领域activeThread会resume原领域而非switch new
+        // 注意: 当前BUG — L1 FOLLOW+异领域activeThread会resume原领域而非switch new
         JsonNode r2 = chat("查看本月账单明细");
         String r2Intent = r2.get("intent").asText();
         String r2Status = r2.get("status").asText();
@@ -405,7 +405,7 @@ class IntegrationFlowTest {
     // ==================== H. REROUTE 场景 ====================
 
     /** #21 REROUTE: 转账域追问时，用户反问"什么是风险等级" → REROUTE → CHAT域回答
-     *  流程: 转账INTERRUPTED(有lastQuestion) → ContextRouter判SWITCH_NEW →
+     *  流程: 转账INTERRUPTED(有lastQuestion) → ContextRouter判SWITCH →
      *  IntentRouter判belongsToDomain=false → REROUTE → L0重新路由到CHAT
      */
     @Test
@@ -442,10 +442,10 @@ class IntegrationFlowTest {
                 + ", intent=" + r1.get("intent").asText());
     }
 
-    /** #23 Auto-upgrade保护: 理财域追问"风险偏好"时用户答"稳健" — ContextRouter可能误判SWITCH_NEW，
-     *  但IntentRouter识别WEALTH_CONSULT == activeThread.intent → 自动降级回FOLLOW_UP
-     *  流程: WEALTH_CONSULT INTERRUPTED → ContextRouter误判SWITCH_NEW(不该判) →
-     *  IntentRouter识别WEALTH_CONSULT → auto-upgrade → FOLLOW_UP → resumeActiveThread
+    /** #23 Auto-upgrade保护: 理财域追问"风险偏好"时用户答"稳健" — ContextRouter可能误判SWITCH，
+     *  但IntentRouter识别WEALTH_CONSULT == activeThread.intent → 自动降级回FOLLOW
+     *  流程: WEALTH_CONSULT INTERRUPTED → ContextRouter误判SWITCH(不该判) →
+     *  IntentRouter识别WEALTH_CONSULT → auto-upgrade → FOLLOW → resumeActiveThread
      */
     @Test
     @Order(23)
@@ -462,7 +462,7 @@ class IntegrationFlowTest {
             System.out.println("[#23a2] 消歧'推荐' → " + rd.get("status").asText());
         }
 
-        // 回答风险偏好 — 即使ContextRouter误判SWITCH_NEW，auto-upgrade也应保护
+        // 回答风险偏好 — 即使ContextRouter误判SWITCH，auto-upgrade也应保护
         JsonNode r2 = chat("稳健型");
         String s2 = r2.get("status").asText();
         assertThat(s2).isIn("COMPLETED", "INTERRUPTED");
@@ -473,13 +473,13 @@ class IntegrationFlowTest {
 
     /** #24 综合用例: 转账→账单→转账恢复→多轮转账
      *  1. 我要转账                  → TRANSFER INTERRUPTED
-     *  2. 给我妈转点家用             → FOLLOW_UP 回答收款人
+     *  2. 给我妈转点家用             → FOLLOW 回答收款人
      *  3. 先看看我这个月的开支情况     → BILL 跨域切换，TRANSFER挂起
      *  4. 那收入呢                  → BILL 多轮
      *  5. 好，转3000吧              → TRANSFER 意图恢复
      *  6. 再转1000吧               → TRANSFER 多轮
      *  7. 再给小强打点钱吧           → TRANSFER 新转账
-     *  8. 5000                    → FOLLOW_UP 回答金额
+     *  8. 5000                    → FOLLOW 回答金额
      */
     @Test
     @Order(24)
@@ -540,10 +540,10 @@ class IntegrationFlowTest {
 
     /** #25 综合用例: 理财推荐→理财解读→推荐恢复→解读→恢复→多轮
      *  1. 有什么好的理财产品推荐           → WEALTH
-     *  2. 我是保守型的                    → FOLLOW_UP
+     *  2. 我是保守型的                    → FOLLOW
      *  3. 听说有个朝朝盈的理财，先帮我解读一下 → WEALTH 同域切换(解读)
      *  4. 回到刚才的理财推荐              → WEALTH 意图恢复(推荐)
-     *  5. 科技吧，最近比较火              → FOLLOW_UP
+     *  5. 科技吧，最近比较火              → FOLLOW
      *  6. 科技蓝筹稳健债这个帮我详细解读一下 → WEALTH 同域切换(解读)
      *  7. 能源方面有什么好的推荐          → WEALTH 意图恢复(推荐)
      *  8. 那汽车领域呢                  → 多轮
@@ -611,9 +611,9 @@ class IntegrationFlowTest {
 
     /** #26 综合用例: 转账→理财→解读→推荐
      *  1. 帮我转个帐                    → TRANSFER
-     *  2. 给小美转500，祝她生日快乐       → FOLLOW_UP 完成转账
+     *  2. 给小美转500，祝她生日快乐       → FOLLOW 完成转账
      *  3. 今天有什么理财推荐一下          → WEALTH 跨域切换
-     *  4. 保守型吧                      → FOLLOW_UP
+     *  4. 保守型吧                      → FOLLOW
      *  5. 我想了解一下永泰能源这个产品     → WEALTH 解读
      *  6. 那帮我重点推荐一下能源领域的理财吧 → WEALTH 推荐
      */
@@ -644,7 +644,7 @@ class IntegrationFlowTest {
             System.out.println("[#26-3b] 消歧'推荐' → " + rd.get("status").asText());
         }
 
-        // 4. FOLLOW_UP
+        // 4. FOLLOW
         JsonNode r4 = chat("保守型吧");
         String s4 = r4.get("status").asText();
         assertThat(s4).isIn("COMPLETED", "INTERRUPTED");
@@ -725,7 +725,7 @@ class IntegrationFlowTest {
      *  - L0可能因"理财产品"路由到WEALTH，但核心动词=转 → 实际是TRANSFER
      *  - "这个理财产品"指代朝朝盈，跨域上下文需要传递到TRANSFER域
      *  1. 有什么好的理财产品推荐           → WEALTH
-     *  2. 我是保守型的                    → FOLLOW_UP
+     *  2. 我是保守型的                    → FOLLOW
      *  3. 听说有个朝朝盈的理财，先帮我解读一下 → WEALTH 同域切换
      *  4. 好，就帮我转1000元买这个理财产品   → TRANSFER 跨域(REROUTE+上下文传递)
      */
@@ -801,9 +801,9 @@ class IntegrationFlowTest {
      * 1. 我要转账                  → TRANSFER
      * 2. 给我妈转点家用             → TRANSFER (回答"转给谁")
      * 3. 先看看我这个月的开支情况     → BILL
-     * 4. 那收入呢                  → BILL (FOLLOW_UP)
+     * 4. 那收入呢                  → BILL (FOLLOW)
      * 5. 好，转3000吧              → TRANSFER (意图恢复)
-     * 6. 再转1000吧               → TRANSFER (FOLLOW_UP)
+     * 6. 再转1000吧               → TRANSFER (FOLLOW)
      * 7. 再给小强打点钱吧           → TRANSFER
      * 8. 90                       → TRANSFER (回答"转多少金额")
      */

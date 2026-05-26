@@ -30,7 +30,7 @@ public class RoutingResolution {
     /** 改写后的输入 (RESOLVED时非null) */
     private String rewrittenInput;
 
-    /** 路由类型 SWITCH_NEW/RESUME (RESOLVED时非null) */
+    /** 路由类型 SWITCH/RESUME (RESOLVED时非null) */
     private String routeType;
 
     /** IntentRouter判断不属于本域 (REROUTE依据) */
@@ -92,7 +92,7 @@ public class RoutingResolution {
                 .intentName(intentName)
                 .rewrittenInput(rewrittenInput)
                 .outOfDomain(true)
-                .routeType("SWITCH_NEW")
+                .routeType("SWITCH")
                 .build();
     }
 

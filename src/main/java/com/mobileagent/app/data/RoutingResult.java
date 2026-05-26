@@ -19,7 +19,7 @@ import java.util.List;
 @AllArgsConstructor
 public class RoutingResult {
 
-    /** Phase1: 意图类型 FOLLOW_UP / SWITCH_NEW / RESUME */
+    /** Phase1: 意图类型 FOLLOW / SWITCH / RESUME */
     private String routeType;
 
     /** Phase2: 改写后的用户输入 */
@@ -28,7 +28,7 @@ public class RoutingResult {
     /** Phase2: 识别出的意图名称 (TRANSFER / BILL_QUERY / WEALTH / UNKNOWN) */
     private String intentName;
 
-    /** Phase2: 路由类型(细化) SWITCH_NEW / RESUME */
+    /** Phase2: 路由类型(细化) SWITCH / RESUME */
     private String refinedRouteType;
 
     /** Phase2: RESUME时指定恢复目标意图 */
@@ -54,11 +54,11 @@ public class RoutingResult {
     private boolean belongsToDomain = true;
 
     public boolean isFollowUp() {
-        return "FOLLOW_UP".equals(routeType);
+        return "FOLLOW".equals(routeType);
     }
 
     public boolean isSwitchNew() {
-        return "SWITCH_NEW".equals(routeType) || "SWITCH_NEW".equals(refinedRouteType);
+        return "SWITCH".equals(routeType) || "SWITCH".equals(refinedRouteType);
     }
 
     public boolean isResume() {

@@ -243,7 +243,7 @@ public class IntentResolver {
 
         // 重新Phase2识别
         RoutingResult rePhase1 = RoutingResult.builder()
-                .routeType("SWITCH_NEW").confidence(0.8).reasoning("消歧回答重新识别").build();
+                .routeType("SWITCH").confidence(0.8).reasoning("消歧回答重新识别").build();
         RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, rePhase1,
                 currentAgent, pendingAgents, sessionState, disambigContext,
                 intentionTemplatePath, chatMemory, globalChatHistory, domainIntentScopeList);
@@ -307,7 +307,7 @@ public class IntentResolver {
      * 1. Phase2细化路由类型 (LLM明确判断)
      * 2. Phase1已经是RESUME
      * 3. 识别到的意图在suspendedAgents中 → RESUME (状态兜底,防止LLM漏判)
-     * 4. Phase1是FOLLOW_UP但无活跃线程 → SWITCH_NEW
+     * 4. Phase1是FOLLOW但无活跃线程 → SWITCH
      * 5. 兜底: Phase1的routeType
      */
     private String resolveRouteType(RoutingResult phase1Result, RoutingResult phase2,
@@ -329,11 +329,11 @@ public class IntentResolver {
                 return "RESUME";
             }
         }
-        // Phase1是FOLLOW_UP但无活跃线程 → 降级为SWITCH_NEW
+        // Phase1是FOLLOW但无活跃线程 → 降级为SWITCH
         if (phase1Result.isFollowUp()) {
-            return "SWITCH_NEW";
+            return "SWITCH";
         }
-        return phase1Result.getRouteType() != null ? phase1Result.getRouteType() : "SWITCH_NEW";
+        return phase1Result.getRouteType() != null ? phase1Result.getRouteType() : "SWITCH";
     }
 
     /**

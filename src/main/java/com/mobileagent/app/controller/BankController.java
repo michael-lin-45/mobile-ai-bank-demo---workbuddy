@@ -21,7 +21,7 @@ import java.util.Set;
  * 架构 (L0→L1→L2):
  * 1. L0: DomainRouter判断领域(WEALTH/TRANSFER/BILL/UNSUPPORTED/CHAT)
  * 2. 分发到L1 Service，附带全局跨域对话历史(用于跨域指代消解)
- * 3. L1: 各领域Service内部路由(FOLLOW_UP/RESUME等) + 自管状态 + 用全局历史增强改写
+ * 3. L1: 各领域Service内部路由(FOLLOW/RESUME等) + 自管状态 + 用全局历史增强改写
  * 4. L2: 子智能体Graph执行
  *
  * REROUTE机制:

@@ -12,7 +12,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 /**
- * 上下文路由器 - Phase1: 使用LLM判断意图类型 (FOLLOW_UP / SWITCH_NEW / RESUME)
+ * 上下文路由器 - Phase1: 使用LLM判断意图类型 (FOLLOW / SWITCH / RESUME)
  *
  * 设计:
  * - 全部走LLM判断,不做确定性规则短路(避免误判)
@@ -22,8 +22,8 @@ import org.springframework.stereotype.Service;
  * - 不依赖AgentStateManager，由L1 Service传入状态字符串(currentAgent, pendingAgents, sessionState)
  *
  * 支持两种模板:
- * - 默认(l1-routing.st): 理财L1使用,包含FOLLOW_UP/SWITCH_NEW/RESUME三种
- * - 简化(l1-routing-simple.st): 转账/账单L1使用,只有FOLLOW_UP/SWITCH_NEW两种
+ * - 默认(l1-routing.st): 理财L1使用,包含FOLLOW/SWITCH/RESUME三种
+ * - 简化(l1-routing-simple.st): 转账/账单L1使用,只有FOLLOW/SWITCH两种
  */
 @Slf4j
 @Service
@@ -83,9 +83,9 @@ public class ContextRouter {
             return result;
 
         } catch (Exception e) {
-            log.error("[ContextRouter] LLM call failed, defaulting to SWITCH_NEW", e);
+            log.error("[ContextRouter] LLM call failed, defaulting to SWITCH", e);
             return RoutingResult.builder()
-                    .routeType("SWITCH_NEW")
+                    .routeType("SWITCH")
                     .confidence(0.3)
                     .build();
         }
@@ -133,14 +133,14 @@ public class ContextRouter {
                 
                 ★ 关键判断 ★
                 如果【子智能体的问题】非空，首要判断: 用户当前消息是否是在回答这个问题？
-                  - 是(语义上直接回答/补充参数) → FOLLOW_UP
-                    例: 问题"风险偏好？"，用户"稳健" → FOLLOW_UP
-                    例: 问题"转给谁？"，用户"张三" → FOLLOW_UP
-                    例: 问题"金额？"，用户"500" → FOLLOW_UP
-                  - 否(用户提出了新问题/新需求/与问题无关) → SWITCH_NEW
-                    例: 问题"风险偏好？"，用户"什么是风险等级" → SWITCH_NEW（不是在回答，是在反问）
-                    例: 问题"转给谁？"，用户"查账单" → SWITCH_NEW（完全无关）
-                    例: 问题"金额？"，用户"算了不转了" → FOLLOW_UP（取消=回应当前agent）
+                  - 是(语义上直接回答/补充参数) → FOLLOW
+                    例: 问题"风险偏好？"，用户"稳健" → FOLLOW
+                    例: 问题"转给谁？"，用户"张三" → FOLLOW
+                    例: 问题"金额？"，用户"500" → FOLLOW
+                  - 否(用户提出了新问题/新需求/与问题无关) → SWITCH
+                    例: 问题"风险偏好？"，用户"什么是风险等级" → SWITCH（不是在回答，是在反问）
+                    例: 问题"转给谁？"，用户"查账单" → SWITCH（完全无关）
+                    例: 问题"金额？"，用户"算了不转了" → FOLLOW（取消=回应当前agent）
                 """.formatted(lastQuestion);
         } else {
             lastQuestionContext = "";
@@ -169,7 +169,7 @@ public class ContextRouter {
             String json = JsonParseUtils.extractJson(content);
             var node = objectMapper.readTree(json);
 
-            String routeType = node.has("route_type") ? node.get("route_type").asText() : "SWITCH_NEW";
+            String routeType = node.has("route_type") ? node.get("route_type").asText() : "SWITCH";
             boolean simpleMode = templatePath != null && templatePath.contains("simple");
             routeType = normalizeRouteType(routeType, simpleMode);
 
@@ -180,26 +180,26 @@ public class ContextRouter {
         } catch (Exception e) {
             log.warn("[ContextRouter] Failed to parse routing response: {}", content, e);
             return RoutingResult.builder()
-                    .routeType("SWITCH_NEW")
+                    .routeType("SWITCH")
                     .confidence(0.3)
                     .build();
         }
     }
 
     private String normalizeRouteType(String routeType, boolean simpleMode) {
-        if (routeType == null) return "SWITCH_NEW";
+        if (routeType == null) return "SWITCH";
         if (simpleMode) {
-            // 简化模式: 只支持FOLLOW_UP和SWITCH_NEW
+            // 简化模式: 只支持FOLLOW和SWITCH
             return switch (routeType.toUpperCase()) {
-                case "CONTINUE_FOLLOWUP", "FOLLOW_UP" -> "FOLLOW_UP";
-                default -> "SWITCH_NEW"; // RESUME在简化模式下降级为SWITCH_NEW
+                case "CONTINUE_FOLLOWUP", "FOLLOW" -> "FOLLOW";
+                default -> "SWITCH"; // RESUME在简化模式下降级为SWITCH
             };
         }
         return switch (routeType.toUpperCase()) {
-            case "CONTINUE_FOLLOWUP", "FOLLOW_UP" -> "FOLLOW_UP";
-            case "SWITCH_DIRECT", "SWITCH_COMPLEX", "SWITCH_NEW" -> "SWITCH_NEW";
+            case "CONTINUE_FOLLOWUP", "FOLLOW" -> "FOLLOW";
+            case "SWITCH_DIRECT", "SWITCH_COMPLEX", "SWITCH" -> "SWITCH";
             case "CONTINUE_RESUME", "RESUME_PENDING", "RESUME" -> "RESUME";
-            default -> "SWITCH_NEW";
+            default -> "SWITCH";
         };
     }
 
@@ -229,18 +229,18 @@ public class ContextRouter {
             ===当前消息结束===
             
             判断路由类型:
-            1. FOLLOW_UP: 用户的话顺着最近一轮对话继续,回答系统刚才的问题或补充信息
-            2. SWITCH_NEW: 用户另起了一个完全不同的话题,或同一领域内切换了不同意图
+            1. FOLLOW: 用户的话顺着最近一轮对话继续,回答系统刚才的问题或补充信息
+            2. SWITCH: 用户另起了一个完全不同的话题,或同一领域内切换了不同意图
             3. RESUME: 用户的话和当前话题有转折,但和之前某个被挂起的任务形成了顺延
             
             注意: 
-            - 同领域内切换不同意图 = SWITCH_NEW！例: 当前WEALTH_CONSULT(推荐),用户说"解读朝朝盈" → SWITCH_NEW
-            - 用户表达取消/放弃(如"不查了""算了""取消")应归FOLLOW_UP,这是对当前agent的回应,由agent自行处理。
-            - 如果用户不是在回答系统刚问的问题,而是提出了新需求(即使还在同一领域),必须归SWITCH_NEW
+            - 同领域内切换不同意图 = SWITCH！例: 当前WEALTH_CONSULT(推荐),用户说"解读朝朝盈" → SWITCH
+            - 用户表达取消/放弃(如"不查了""算了""取消")应归FOLLOW,这是对当前agent的回应,由agent自行处理。
+            - 如果用户不是在回答系统刚问的问题,而是提出了新需求(即使还在同一领域),必须归SWITCH
             
             严格输出JSON,不要输出其他内容:
             {
-              "route_type": "FOLLOW_UP | SWITCH_NEW | RESUME",
+              "route_type": "FOLLOW | SWITCH | RESUME",
               "confidence": 0.0-1.0
             }
             """;

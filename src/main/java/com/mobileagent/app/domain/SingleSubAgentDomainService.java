@@ -21,15 +21,15 @@ import java.util.Objects;
  * 特点: 只有一个子意图，无需suspendedAgents、无需消歧
  *
  * 控制流:
- * 1. activeThread在 + lastQuestion在 → ContextRouter(含lastQuestion) → FOLLOW_UP/SWITCH_NEW
- *    - FOLLOW_UP → resumeActiveThread
- *    - SWITCH_NEW → IntentRouter → auto-upgrade检查 → REROUTE检查 → executeNewThread
+ * 1. activeThread在 + lastQuestion在 → ContextRouter(含lastQuestion) → FOLLOW/SWITCH
+ *    - FOLLOW → resumeActiveThread
+ *    - SWITCH → IntentRouter → auto-upgrade检查 → REROUTE检查 → executeNewThread
  * 2. activeThread在 + lastQuestion为空 → 直接resumeActiveThread
  * 3. 无activeThread → ContextRouter → IntentRouter → REROUTE检查 → executeNewThread
  *
  * Cancel:
  * - 不暴露cancel公共方法
- * - 用户说"取消"→ FOLLOW_UP → resumeGraph → 子Graph的cancelAwareExtractParams检测并处理
+ * - 用户说"取消"→ FOLLOW → resumeGraph → 子Graph的cancelAwareExtractParams检测并处理
  */
 @Slf4j
 public class SingleSubAgentDomainService extends AbstractDomainService {
@@ -121,7 +121,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
                 return handleWithLastQuestion(sessionId, userInput, globalChatHistory, ownActive);
             }
 
-            // ========== activeThread在 + lastQuestion为空 → 直接FOLLOW_UP ==========
+            // ========== activeThread在 + lastQuestion为空 → 直接FOLLOW ==========
             if (ownActive != null) {
                 return resumeActiveThread(sessionId, userInput, ownActive);
             }
@@ -155,17 +155,17 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             return resumeActiveThread(sessionId, userInput, ownActive);
         }
 
-        // SWITCH_NEW → Phase2 IntentRouter
+        // SWITCH → Phase2 IntentRouter
         RoutingResult phase2 = runIntentRouter(sessionId, userInput, phase1,
                 currentAgent, pendingAgents, globalChatHistory);
 
-        // REROUTE判断: 意图不属于本域 (必须在auto-upgrade之前，否则知识FAQ会被误升级为FOLLOW_UP)
+        // REROUTE判断: 意图不属于本域 (必须在auto-upgrade之前，否则知识FAQ会被误升级为FOLLOW)
         if (!phase2.isBelongsToDomain()) {
             log.info("[{}] REROUTE: belongsToDomain=false, intent={}", logTag, phase2.getIntentName());
             return WorkflowOutput.reroute(phase2.getIntentName(), null);
         }
 
-        // Auto-upgrade保护: IntentRouter识别的意图与activeThread一致 → 降级回FOLLOW_UP
+        // Auto-upgrade保护: IntentRouter识别的意图与activeThread一致 → 降级回FOLLOW
         WorkflowOutput upgraded = tryAutoUpgradeFollowUp(ownActive, phase2, sessionId, userInput);
         if (upgraded != null) return upgraded;
 
@@ -218,7 +218,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         return phase2;
     }
 
-    // ==================== SWITCH_NEW执行 ====================
+    // ==================== SWITCH执行 ====================
 
     private WorkflowOutput handleSwitchNew(String sessionId, String rewrittenInput) {
         return executeNewThread(sessionId, intent, rewrittenInput);

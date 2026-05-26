@@ -38,7 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Cancel设计:
  * - L1层不暴露cancel公共方法
  * - 子智能体执行中的取消(如"不转了"): 由L2子Graph的cancelAwareExtractParams检测并处理
- *   流程: FOLLOW_UP → resumeGraph → 子Graph自行检测取消意图 → cancelExecutionNode
+ *   流程: FOLLOW → resumeGraph → 子Graph自行检测取消意图 → cancelExecutionNode
  * - Multi消歧中的取消(如"算了"): 由IntentResolver.isCancelExpression()检测 → CANCELLED状态
  *   流程: 已在MultiSubAgentDomainService.handle()的switch分支中处理
  * - 未来如果L0 reactAgent需要主动取消某个L1的执行,再添加cancel接口
@@ -217,7 +217,7 @@ public abstract class AbstractDomainService implements DomainHandler {
     // ==================== 共享流程方法 ====================
 
     /**
-     * FOLLOW_UP + activeThread → resumeGraph模式
+     * FOLLOW + activeThread → resumeGraph模式
      *
      * Single和Multi都有这个分支，逻辑完全一致:
      * 1. addUserMessage
@@ -228,7 +228,7 @@ public abstract class AbstractDomainService implements DomainHandler {
      * 6. recordSystemReply
      */
     protected WorkflowOutput resumeActiveThread(String sessionId, String userInput, ActiveThreadInfo active) {
-        log.info("[{}] FOLLOW_UP with own activeThread: intent={}, params={}",
+        log.info("[{}] FOLLOW with own activeThread: intent={}, params={}",
                 logTag, active.getIntent(), active.getAccumulatedParams());
         addUserMessage(sessionId, userInput);
 
@@ -241,7 +241,7 @@ public abstract class AbstractDomainService implements DomainHandler {
         saveL2Result(sessionId, resumeResult);
         recordSystemReply(sessionId, resumeResult);
 
-        // 完成后清空activeThread，避免下次FOLLOW_UP复用旧参数
+        // 完成后清空activeThread，避免下次FOLLOW复用旧参数
         if (WorkflowStatus.COMPLETED.equals(resumeResult.getStatus())) {
             clearOwnActiveThread(sessionId);
         }
@@ -289,8 +289,8 @@ public abstract class AbstractDomainService implements DomainHandler {
     // ==================== 抽象方法 ====================
 
     /**
-     * Auto-upgrade: ContextRouter 判 SWITCH_NEW 但 IntentRouter 识别的意图
-     * 与 activeThread 的意图一致 → 降级回 FOLLOW_UP
+     * Auto-upgrade: ContextRouter 判 SWITCH 但 IntentRouter 识别的意图
+     * 与 activeThread 的意图一致 → 降级回 FOLLOW
      *
      * 保护场景: ContextRouter 误判导致 accumulatedParams 丢失
      *
@@ -302,7 +302,7 @@ public abstract class AbstractDomainService implements DomainHandler {
         if (activeThread != null && phase2 != null) {
             String identifiedIntent = phase2.getIntentName();
             if (identifiedIntent != null && identifiedIntent.equals(activeThread.getIntent())) {
-                log.info("[{}] Auto-upgrade SWITCH_NEW→FOLLOW_UP: identifiedIntent={} matches activeThread.intent={}",
+                log.info("[{}] Auto-upgrade SWITCH→FOLLOW: identifiedIntent={} matches activeThread.intent={}",
                         logTag, identifiedIntent, activeThread.getIntent());
                 return resumeActiveThread(sessionId, userInput, activeThread);
             }
