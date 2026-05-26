@@ -95,8 +95,8 @@ routing:
 
 session:
   pending-agents:
-    max-depth: 3
-    expire-minutes: 20
+    max-depth: 5
+    expire-minutes: 5
     prompt-max-times: 2
     prompt-timeout-seconds: 30
   last-agent:

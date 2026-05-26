@@ -7,7 +7,7 @@ import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
-import com.mobileagent.app.execution.GraphExecutionService;
+import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -95,7 +95,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     private MultiSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.chatMemory,
-                builder.contextRouter, builder.graphExecutionService, builder.intentRegistry,
+                builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
                 builder.activeThreadExpireMinutes);
         this.intentResolver = builder.intentResolver;
         this.routingTemplatePath = builder.routingTemplatePath != null
@@ -120,7 +120,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         private ChatMemory chatMemory;
         private ContextRouter contextRouter;
         private IntentResolver intentResolver;
-        private GraphExecutionService graphExecutionService;
+        private GraphExecutionEngine graphExecutionEngine;
         private IntentRegistry intentRegistry;
         private String routingTemplatePath;
         private String intentionTemplatePath;
@@ -135,7 +135,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         public Builder chatMemory(ChatMemory chatMemory) { this.chatMemory = chatMemory; return this; }
         public Builder contextRouter(ContextRouter contextRouter) { this.contextRouter = contextRouter; return this; }
         public Builder intentResolver(IntentResolver intentResolver) { this.intentResolver = intentResolver; return this; }
-        public Builder graphExecutionService(GraphExecutionService graphExecutionService) { this.graphExecutionService = graphExecutionService; return this; }
+        public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
         public Builder routingTemplatePath(String routingTemplatePath) { this.routingTemplatePath = routingTemplatePath; return this; }
         /** 意图识别模板路径(如"prompts/l1-intention.st")，默认使用通用模板 */
@@ -154,7 +154,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(chatMemory, "chatMemory is required");
             Objects.requireNonNull(contextRouter, "contextRouter is required");
             Objects.requireNonNull(intentResolver, "intentResolver is required");
-            Objects.requireNonNull(graphExecutionService, "graphExecutionService is required");
+            Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
             Objects.requireNonNull(intentRegistry, "intentRegistry is required");
             // 预热模板: 构造时加载到缓存,运行时零IO
             String routingPath = routingTemplatePath != null
@@ -455,7 +455,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         String newThreadId = generateThreadId();
         setOwnActiveThread(sessionId, newThreadId, intent);
 
-        WorkflowOutput result = graphExecutionService.resumeGraph(intent, newThreadId, userInput, sessionId, suspendedParams);
+        WorkflowOutput result = graphExecutionEngine.resumeGraph(intent, newThreadId, userInput, sessionId, suspendedParams);
         saveL2Result(sessionId, result);
 
         if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {

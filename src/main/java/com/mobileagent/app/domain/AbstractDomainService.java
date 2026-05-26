@@ -3,7 +3,7 @@ package com.mobileagent.app.domain;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.data.WorkflowStatus;
-import com.mobileagent.app.execution.GraphExecutionService;
+import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.util.ChatHistoryUtils;
@@ -50,7 +50,7 @@ public abstract class AbstractDomainService implements DomainHandler {
     protected final String logTag;
     protected final ChatMemory chatMemory;
     protected final ContextRouter contextRouter;
-    protected final GraphExecutionService graphExecutionService;
+    protected final GraphExecutionEngine graphExecutionEngine;
     protected final IntentRegistry intentRegistry;
 
     // ==================== 共享状态 ====================
@@ -112,14 +112,14 @@ public abstract class AbstractDomainService implements DomainHandler {
     protected AbstractDomainService(String domainName, String logTag,
                                     ChatMemory chatMemory,
                                     ContextRouter contextRouter,
-                                    GraphExecutionService graphExecutionService,
+                                    GraphExecutionEngine graphExecutionEngine,
                                     IntentRegistry intentRegistry,
                                     long activeThreadExpireMinutes) {
         this.domainName = domainName;
         this.logTag = logTag;
         this.chatMemory = chatMemory;
         this.contextRouter = contextRouter;
-        this.graphExecutionService = graphExecutionService;
+        this.graphExecutionEngine = graphExecutionEngine;
         this.intentRegistry = intentRegistry;
         this.activeThreadExpireMinutes = activeThreadExpireMinutes;
     }
@@ -235,7 +235,7 @@ public abstract class AbstractDomainService implements DomainHandler {
         String newThreadId = generateThreadId();
         setOwnActiveThread(sessionId, newThreadId, active.getIntent());
 
-        WorkflowOutput resumeResult = graphExecutionService.resumeGraph(
+        WorkflowOutput resumeResult = graphExecutionEngine.resumeGraph(
                 active.getIntent(), newThreadId, userInput, sessionId,
                 active.getAccumulatedParams());
         saveL2Result(sessionId, resumeResult);
@@ -276,7 +276,7 @@ public abstract class AbstractDomainService implements DomainHandler {
         String newThreadId = generateThreadId();
         setOwnActiveThread(sessionId, newThreadId, intent);
 
-        WorkflowOutput result = graphExecutionService.executeGraph(graph, intent, newThreadId, rewrittenInput, sessionId, null);
+        WorkflowOutput result = graphExecutionEngine.executeGraph(graph, intent, newThreadId, rewrittenInput, sessionId, null);
         saveL2Result(sessionId, result);
 
         if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {

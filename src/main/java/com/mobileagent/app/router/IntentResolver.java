@@ -27,7 +27,7 @@ import java.util.Map;
  *
  * 职责边界:
  * - 负责: Phase2意图识别 + 消歧追问(1次) + 模糊匹配
- * - 不负责: 状态管理(由L1 Service负责) / Phase1路由类型判断(ContextRouter) / Graph执行(GraphExecutionService)
+ * - 不负责: 状态管理(由L1 Service负责) / Phase1路由类型判断(ContextRouter) / Graph执行(GraphExecutionEngine)
  */
 @Slf4j
 @Service

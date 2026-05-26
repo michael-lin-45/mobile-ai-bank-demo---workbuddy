@@ -27,11 +27,11 @@ import java.util.UUID;
  */
 @Slf4j
 @Service
-public class GraphExecutionService {
+public class GraphExecutionEngine {
 
     private final IntentRegistry intentRegistry;
 
-    public GraphExecutionService(IntentRegistry intentRegistry) {
+    public GraphExecutionEngine(IntentRegistry intentRegistry) {
         this.intentRegistry = intentRegistry;
     }
 

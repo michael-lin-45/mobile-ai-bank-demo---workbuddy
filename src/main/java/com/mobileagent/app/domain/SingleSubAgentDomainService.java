@@ -5,7 +5,7 @@ import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentRouter;
-import com.mobileagent.app.execution.GraphExecutionService;
+import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -47,7 +47,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
 
     private SingleSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.chatMemory,
-                builder.contextRouter, builder.graphExecutionService, builder.intentRegistry,
+                builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
                 builder.activeThreadExpireMinutes);
         this.intent = builder.intent;
         this.intentDescription = builder.intentDescription;
@@ -72,7 +72,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         private ChatMemory chatMemory;
         private ContextRouter contextRouter;
         private IntentRouter intentRouter;
-        private GraphExecutionService graphExecutionService;
+        private GraphExecutionEngine graphExecutionEngine;
         private IntentRegistry intentRegistry;
         private long activeThreadExpireMinutes = 20;
 
@@ -85,7 +85,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         public Builder chatMemory(ChatMemory chatMemory) { this.chatMemory = chatMemory; return this; }
         public Builder contextRouter(ContextRouter contextRouter) { this.contextRouter = contextRouter; return this; }
         public Builder intentRouter(IntentRouter intentRouter) { this.intentRouter = intentRouter; return this; }
-        public Builder graphExecutionService(GraphExecutionService graphExecutionService) { this.graphExecutionService = graphExecutionService; return this; }
+        public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
         public Builder activeThreadExpireMinutes(long activeThreadExpireMinutes) { this.activeThreadExpireMinutes = activeThreadExpireMinutes; return this; }
 
@@ -96,7 +96,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(chatMemory, "chatMemory is required");
             Objects.requireNonNull(contextRouter, "contextRouter is required");
             Objects.requireNonNull(intentRouter, "intentRouter is required");
-            Objects.requireNonNull(graphExecutionService, "graphExecutionService is required");
+            Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
             Objects.requireNonNull(intentRegistry, "intentRegistry is required");
             // 预热模板: 构造时加载到缓存,运行时零IO
             String resolvedRoutingPath = routingTemplatePath != null ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;

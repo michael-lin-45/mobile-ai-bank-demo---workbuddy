@@ -4,7 +4,7 @@ import com.mobileagent.app.domain.AbstractDomainService;
 import com.mobileagent.app.domain.ChatService;
 import com.mobileagent.app.domain.MultiSubAgentDomainService;
 import com.mobileagent.app.domain.SingleSubAgentDomainService;
-import com.mobileagent.app.execution.GraphExecutionService;
+import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.DomainServiceRegistry;
 import com.mobileagent.app.router.IntentRegistry;
@@ -34,7 +34,7 @@ public class DomainServiceConfig {
     public SingleSubAgentDomainService transferDomainService(
             ContextRouter contextRouter,
             IntentRouter intentRouter,
-            GraphExecutionService graphExecutionService,
+            GraphExecutionEngine graphExecutionEngine,
             IntentRegistry intentRegistry,
             DomainServiceRegistry domainServiceRegistry,
             @Qualifier("transferChatMemory") ChatMemory transferChatMemory) {
@@ -46,7 +46,7 @@ public class DomainServiceConfig {
                 .chatMemory(transferChatMemory)
                 .contextRouter(contextRouter)
                 .intentRouter(intentRouter)
-                .graphExecutionService(graphExecutionService)
+                .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .build();
         domainServiceRegistry.register("TRANSFER", service);
@@ -59,7 +59,7 @@ public class DomainServiceConfig {
     public SingleSubAgentDomainService billDomainService(
             ContextRouter contextRouter,
             IntentRouter intentRouter,
-            GraphExecutionService graphExecutionService,
+            GraphExecutionEngine graphExecutionEngine,
             IntentRegistry intentRegistry,
             DomainServiceRegistry domainServiceRegistry,
             @Qualifier("billChatMemory") ChatMemory billChatMemory) {
@@ -71,7 +71,7 @@ public class DomainServiceConfig {
                 .chatMemory(billChatMemory)
                 .contextRouter(contextRouter)
                 .intentRouter(intentRouter)
-                .graphExecutionService(graphExecutionService)
+                .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .build();
         domainServiceRegistry.register("BILL", service);
@@ -84,7 +84,7 @@ public class DomainServiceConfig {
     public MultiSubAgentDomainService wealthDomainService(
             ContextRouter contextRouter,
             IntentResolver intentResolver,
-            GraphExecutionService graphExecutionService,
+            GraphExecutionEngine graphExecutionEngine,
             IntentRegistry intentRegistry,
             DomainServiceRegistry domainServiceRegistry,
             @Qualifier("wealthChatMemory") ChatMemory wealthChatMemory) {
@@ -94,7 +94,7 @@ public class DomainServiceConfig {
                 .chatMemory(wealthChatMemory)
                 .contextRouter(contextRouter)
                 .intentResolver(intentResolver)
-                .graphExecutionService(graphExecutionService)
+                .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .routingTemplatePath("prompts/l1-routing.st")
                 .intentionTemplatePath("prompts/l1-intention.st")
