@@ -49,8 +49,9 @@
 3. 归属判断:
    判断用户意图是否属于本领域处理范围:
    - 参考意图的 intent_type 和 scope
-   - "什么是风险等级" → 知识类FAQ，不在理财推荐/解读的scope内 → belongs_to_domain=false
-   - "查账单" → BILL_QUERY，不属于转账域 → belongs_to_domain=false
+   - 用户要求本域执行业务操作(咨询/推荐/解读/转账/查询等) → belongs_to_domain=true
+   - 用户询问本域相关的知识/概念/定义/分类等FAQ问题 → belongs_to_domain=false (知识问答不属于业务操作，应REROUTE到CHAT)
+   - 用户意图明确属于其他已注册意图 → belongs_to_domain=false
    - 无法确定时 → belongs_to_domain=true (保守策略，宁可不REROUTE也不误杀)
 
 4. 歧义检测: 如果用户输入只能匹配到意图组级别，标记is_ambiguous=true

@@ -159,15 +159,15 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         RoutingResult phase2 = runIntentRouter(sessionId, userInput, phase1,
                 currentAgent, pendingAgents, globalChatHistory);
 
-        // Auto-upgrade保护: IntentRouter识别的意图与activeThread一致 → 降级回FOLLOW_UP
-        WorkflowOutput upgraded = tryAutoUpgradeFollowUp(ownActive, phase2, sessionId, userInput);
-        if (upgraded != null) return upgraded;
-
-        // REROUTE判断: 意图不属于本域
+        // REROUTE判断: 意图不属于本域 (必须在auto-upgrade之前，否则知识FAQ会被误升级为FOLLOW_UP)
         if (!phase2.isBelongsToDomain()) {
             log.info("[{}] REROUTE: belongsToDomain=false, intent={}", logTag, phase2.getIntentName());
             return WorkflowOutput.reroute(phase2.getIntentName(), null);
         }
+
+        // Auto-upgrade保护: IntentRouter识别的意图与activeThread一致 → 降级回FOLLOW_UP
+        WorkflowOutput upgraded = tryAutoUpgradeFollowUp(ownActive, phase2, sessionId, userInput);
+        if (upgraded != null) return upgraded;
 
         addUserMessage(sessionId, userInput);
         return handleSwitchNew(sessionId, phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput);
