@@ -42,18 +42,6 @@ public class IntentRouter {
     private static final String DEFAULT_TEMPLATE_PATH = "prompts/l1-intention.st";
 
     /**
-     * Phase2: 意图识别 + 上下文改写 (使用指定模板)
-     *
-     * @param sessionId 会话ID
-     * @param userInput 用户原始输入
-     * @param phase1Result Phase1的路由结果
-     * @param currentAgent 当前活跃意图名称(如"WEALTH_CONSULT"或"无")
-     * @param pendingAgents 挂起的意图列表描述(如"WEALTH_CONSULT, WEALTH_INTERPRET"或"无")
-     * @param sessionState 会话状态描述(由L1 Service生成)
-     * @param disambigContext 消歧上下文(如"无"或具体消歧信息)
-     * @param templatePath 提示词模板路径(如"prompts/l1-intention.st")
-     * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
-    /**
      * Phase2: 意图识别 + 上下文改写
      *
      * @param sessionId 会话ID

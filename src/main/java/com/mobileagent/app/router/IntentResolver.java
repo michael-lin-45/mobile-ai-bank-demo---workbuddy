@@ -138,7 +138,6 @@ public class IntentResolver {
         }
 
         // 2. belongsToDomain=false → REROUTE (优先于REJECTED判断)
-        //    即使intent=UNKNOWN，只要IntentRouter判断不属于本域，就应REROUTE而非拒绝
         String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
         if (!phase2.isBelongsToDomain()) {
             log.info("[IntentResolver] Out-of-domain detected by IntentRouter: intent={}, belongsToDomain=false → REROUTE",
@@ -152,7 +151,7 @@ public class IntentResolver {
             return RoutingResolution.rejected();
         }
 
-        // 3. 识别到意图组名(如WEALTH) → 消歧
+        // 4. 识别到意图组名(如WEALTH) → 消歧
         if (intentRegistry.isGroupName(effectiveIntent)) {
             IntentRegistry.IntentGroup group = intentRegistry.getGroup(effectiveIntent);
             if (group != null) {
@@ -160,7 +159,7 @@ public class IntentResolver {
             }
         }
 
-        // 4. 意图不在注册表 → 模糊匹配
+        // 5. 意图不在注册表 → 模糊匹配
         if (!intentRegistry.hasIntent(effectiveIntent)) {
             log.warn("[IntentResolver] Unknown intent: {}, attempting fuzzy match", effectiveIntent);
             effectiveIntent = intentRegistry.fuzzyMatchIntent(effectiveIntent, userInput);

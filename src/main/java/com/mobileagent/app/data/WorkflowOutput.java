@@ -97,8 +97,4 @@ public class WorkflowOutput {
         };
     }
 
-    /** 兼容旧代码: 获取状态的字符串值 */
-    public String getStatusString() {
-        return status != null ? status.getValue() : null;
-    }
 }

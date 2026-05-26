@@ -399,7 +399,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                     clearDisambiguationState(sessionId);
                     yield WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
                 }
-                case REROUTE -> WorkflowOutput.reroute(resolution.getIntentName(), resolution.getRouteType());
             };
 
             recordSystemReply(sessionId, output);
