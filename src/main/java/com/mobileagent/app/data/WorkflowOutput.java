@@ -4,12 +4,15 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * Graph执行结果DTO - Controller返回给前端的统一响应格式
  *
  * 状态类型: 见 {@link WorkflowStatus}
+ *
+ * 核心简化（官方模式二）:
+ * - 删除 threadId: threadId = sessionId，调用方已有，无需传递
+ * - 删除 accumulatedParams: checkpoint 自动保留完整 OverAllState，无需手动传递
  */
 @Data
 @Builder
@@ -27,17 +30,11 @@ public class WorkflowOutput {
     /** 当前意图 */
     private String intent;
 
-    /** 线程ID */
-    private String threadId;
-
     /** 错误信息 (ERROR时) */
     private String errorMessage;
 
     /** 候选意图列表 (DISAMBIGUATION时) */
     private List<String> candidateIntents;
-
-    /** 从Graph state中提取的已收集参数 (由L1 Service保存到自己的activeThread) */
-    private Map<String, Object> accumulatedParams;
 
     /** REROUTE时建议的目标意图(如"TRANSFER")，可为null */
     private String rerouteIntent;
@@ -53,11 +50,10 @@ public class WorkflowOutput {
                 .build();
     }
 
-    public static WorkflowOutput interrupted(String intent, String threadId, String question) {
+    public static WorkflowOutput interrupted(String intent, String question) {
         return WorkflowOutput.builder()
                 .status(WorkflowStatus.INTERRUPTED)
                 .intent(intent)
-                .threadId(threadId)
                 .question(question)
                 .build();
     }
