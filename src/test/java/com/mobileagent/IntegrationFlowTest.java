@@ -859,4 +859,39 @@ class IntegrationFlowTest {
                 + ", intent=" + r8.get("intent").asText()
                 + " ★★核心断言: intent必须=TRANSFER★★");
     }
+
+    // ==================== H. belongs_to_domain判断 ====================
+
+    /**
+     * #32 追问操作结果应REROUTE - "我刚才转账给谁了"不是执行转账操作
+     *
+     * 场景: 用户先转账，完成后再追问操作结果
+     * 1. "帮我转个帐" → INTERRUPTED (问收款人)
+     * 2. "给小美转500，祝她生日快乐" → COMPLETED (转账完成)
+     * 3. "我刚才转账给谁了" → 应REROUTE, 不应走到转账Graph继续追问
+     *    因为TRANSFER的intentType=OPERATION, "追问操作结果"不匹配OPERATION的scope
+     */
+    @Test
+    @Order(32)
+    void test32_followUpOnOperation_shouldReroute() {
+        // 1. 帮我转个帐 → INTERRUPTED
+        JsonNode r1 = chat("帮我转个帐");
+        assertThat(r1.get("status").asText()).isEqualTo("INTERRUPTED");
+        System.out.println("[#32-1] 帮我转个帐 → " + r1.get("status").asText()
+                + ", intent=" + r1.get("intent").asText());
+
+        // 2. 给小美转500，祝她生日快乐 → resume转账 → COMPLETED
+        JsonNode r2 = chat("给小美转500，祝她生日快乐");
+        assertThat(r2.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#32-2] 给小美转500 → " + r2.get("status").asText()
+                + ", intent=" + r2.get("intent").asText());
+
+        // 3. 我刚才转账给谁了 → 应REROUTE, 不应继续在转账Graph中追问
+        //    核心断言: intent不应是TRANSFER(说明已REROUTE到其他域)
+        JsonNode r3 = chat("我刚才转账给谁了");
+        assertThat(r3.get("intent").asText()).isNotEqualTo("TRANSFER");
+        System.out.println("[#32-3] 我刚才转账给谁了 → " + r3.get("status").asText()
+                + ", intent=" + r3.get("intent").asText()
+                + " ★★核心断言: intent不等于TRANSFER(已REROUTE)★★");
+    }
 }

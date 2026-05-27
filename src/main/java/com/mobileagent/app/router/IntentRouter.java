@@ -264,7 +264,12 @@ public class IntentRouter {
             1. 意图识别(主要): 从已注册意图列表中选择最匹配的意图,无法归入则输出UNKNOWN
             2. 上下文改写(辅助): 将依赖上下文的模糊表达改写为自包含的完整描述,方便子智能体直接提取参数
                - 如果用户输入引用了其他领域的内容(如"刚才说的那个理财")，从全局历史中查找并消解指代
-            3. 归属判断: 判断用户意图是否属于本领域处理范围，参考意图的intent_type和scope
+            3. 归属判断: 判断用户意图是否属于本领域处理范围，必须结合意图的[类型][描述][范围]逐一比对
+               - ★ 核心原则: 用户意图必须**匹配子智能体的intentType**才能判定belongs_to_domain=true
+               - [OPERATION]类型: 用户必须要求**执行该操作**才属于scope("我要转账"→true, "我刚才转给谁了"→false)
+               - [QUERY]类型: 用户必须要求**查询数据**才属于scope("查账单"→true, "账单在哪看"→false)
+               - [CONSULTATION]类型: 用户必须要求**咨询/推荐/解读**才属于scope("推荐理财"→true, "理财有风险吗"→false)
+               - 追问/回顾操作结果、询问知识/概念/FAQ → belongs_to_domain=false
                - 无法确定时 → belongs_to_domain=true (保守策略)
             4. 歧义检测: 如果用户输入只能匹配到意图组,标记is_ambiguous=true
             5. 路由判断: 意图在挂起列表中→RESUME,否则→SWITCH
