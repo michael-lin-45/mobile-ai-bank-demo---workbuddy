@@ -53,11 +53,11 @@ public class RoutingResult {
     @Builder.Default
     private boolean belongsToDomain = true;
 
-    public boolean isFollowUp() {
+    public boolean isFollow() {
         return "FOLLOW".equals(routeType);
     }
 
-    public boolean isSwitchNew() {
+    public boolean isSwitch() {
         return "SWITCH".equals(routeType) || "SWITCH".equals(refinedRouteType);
     }
 

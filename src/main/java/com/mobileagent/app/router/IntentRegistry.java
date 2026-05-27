@@ -144,11 +144,6 @@ public class IntentRegistry {
         return groups.get(groupId);
     }
 
-    /** 判断该意图是否属于某个歧义组(即可能需要消歧) */
-    public boolean isAmbiguousIntent(String intentName) {
-        return findGroupByIntent(intentName) != null;
-    }
-
     /** 检查意图名是否是一个组ID(而非具体意图) */
     public boolean isGroupName(String name) {
         return groups.containsKey(name);

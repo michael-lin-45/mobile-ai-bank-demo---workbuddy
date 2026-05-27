@@ -151,7 +151,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         log.info("[{}] Phase1 (activeThread+lastQuestion): routeType={}, confidence={}",
                 logTag, phase1.getRouteType(), phase1.getConfidence());
 
-        if (phase1.isFollowUp()) {
+        if (phase1.isFollow()) {
             return resumeActiveThread(sessionId, userInput, ownActive);
         }
 

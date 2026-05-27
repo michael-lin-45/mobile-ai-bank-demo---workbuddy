@@ -102,18 +102,6 @@ public class RoutingResolution {
         return status == RoutingStatus.RESOLVED;
     }
 
-    public boolean isDisambiguation() {
-        return status == RoutingStatus.DISAMBIGUATION;
-    }
-
-    public boolean isRejected() {
-        return status == RoutingStatus.REJECTED;
-    }
-
-    public boolean isCancelled() {
-        return status == RoutingStatus.CANCELLED;
-    }
-
     public boolean isOutOfDomain() {
         return outOfDomain;
     }

@@ -330,7 +330,7 @@ public class IntentResolver {
             }
         }
         // Phase1是FOLLOW但无活跃线程 → 降级为SWITCH
-        if (phase1Result.isFollowUp()) {
+        if (phase1Result.isFollow()) {
             return "SWITCH";
         }
         return phase1Result.getRouteType() != null ? phase1Result.getRouteType() : "SWITCH";

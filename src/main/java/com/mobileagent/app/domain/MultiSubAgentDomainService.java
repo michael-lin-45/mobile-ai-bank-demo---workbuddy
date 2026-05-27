@@ -309,7 +309,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             log.info("[{}] Phase1: routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
 
             // ========== FOLLOW + activeThread → 直接resume (消歧中除外) ==========
-            if (phase1.isFollowUp() && !isInDisambiguation(sessionId)) {
+            if (phase1.isFollow() && !isInDisambiguation(sessionId)) {
                 ActiveThreadInfo activeThread = getOwnActiveThread(sessionId);
                 if (activeThread != null) {
                     return resumeActiveThread(sessionId, userInput, activeThread);
