@@ -21,11 +21,11 @@ import java.util.Objects;
  * 特点: 只有一个子意图，无需suspendedAgents、无需消歧
  *
  * 控制流:
- * 1. activeThread在 + lastQuestion在 → ContextRouter(含lastQuestion) → FOLLOW/SWITCH
- *    - FOLLOW → resumeActiveThread
- *    - SWITCH → IntentRouter → auto-upgrade检查 → REROUTE检查 → executeNewThread
- * 2. activeThread在 + lastQuestion为空 → 直接resumeActiveThread
- * 3. 无activeThread → ContextRouter → IntentRouter → REROUTE检查 → executeNewThread
+ * 1. activeAgent在 + lastQuestion在 → ContextRouter(含lastQuestion) → FOLLOW/SWITCH
+ *    - FOLLOW → resumeActiveAgent
+ *    - SWITCH → IntentRouter → auto-upgrade检查 → REROUTE检查 → executeNewAgent
+ * 2. activeAgent在 + lastQuestion为空 → 直接resumeActiveAgent
+ * 3. 无activeAgent → ContextRouter → IntentRouter → REROUTE检查 → executeNewAgent
  *
  * Cancel:
  * - 不暴露cancel公共方法
@@ -48,7 +48,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     private SingleSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.chatMemory,
                 builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
-                builder.activeThreadExpireMinutes);
+                builder.activeAgentExpireMinutes);
         this.intent = builder.intent;
         this.intentDescription = builder.intentDescription;
         this.routingTemplatePath = builder.routingTemplatePath != null
@@ -74,7 +74,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         private IntentRouter intentRouter;
         private GraphExecutionEngine graphExecutionEngine;
         private IntentRegistry intentRegistry;
-        private long activeThreadExpireMinutes = 20;
+        private long activeAgentExpireMinutes = 20;
 
         public Builder domainName(String domainName) { this.domainName = domainName; return this; }
         public Builder logTag(String logTag) { this.logTag = logTag; return this; }
@@ -87,7 +87,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         public Builder intentRouter(IntentRouter intentRouter) { this.intentRouter = intentRouter; return this; }
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
-        public Builder activeThreadExpireMinutes(long activeThreadExpireMinutes) { this.activeThreadExpireMinutes = activeThreadExpireMinutes; return this; }
+        public Builder activeAgentExpireMinutes(long activeAgentExpireMinutes) { this.activeAgentExpireMinutes = activeAgentExpireMinutes; return this; }
 
         public SingleSubAgentDomainService build() {
             Objects.requireNonNull(domainName, "domainName is required");
@@ -114,19 +114,19 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         log.info("[{}] Handling: sessionId={}, input={}", logTag, sessionId, userInput);
 
         try {
-            ActiveThreadInfo ownActive = getOwnActiveThread(sessionId);
+            ActiveAgentInfo ownActive = getOwnActiveAgent(sessionId);
 
-            // ========== activeThread在 + lastQuestion在 → 走ContextRouter(含lastQuestion) ==========
+            // ========== activeAgent在 + lastQuestion在 → 走ContextRouter(含lastQuestion) ==========
             if (ownActive != null && ownActive.getLastQuestion() != null) {
                 return handleWithLastQuestion(sessionId, userInput, globalChatHistory, ownActive);
             }
 
-            // ========== activeThread在 + lastQuestion为空 → 直接FOLLOW ==========
+            // ========== activeAgent在 + lastQuestion为空 → 直接FOLLOW ==========
             if (ownActive != null) {
-                return resumeActiveThread(sessionId, userInput, ownActive);
+                return resumeActiveAgent(sessionId, userInput, ownActive);
             }
 
-            // ========== 无activeThread → ContextRouter + IntentRouter ==========
+            // ========== 无activeAgent → ContextRouter + IntentRouter ==========
             return handleNewIntention(sessionId, userInput, globalChatHistory);
 
         } catch (Exception e) {
@@ -136,11 +136,11 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     }
 
     /**
-     * activeThread + lastQuestion 场景
+     * activeAgent + lastQuestion 场景
      * ContextRouter精准判断用户是否在回答子智能体的问题
      */
     private WorkflowOutput handleWithLastQuestion(String sessionId, String userInput,
-                                                   String globalChatHistory, ActiveThreadInfo ownActive) {
+                                                   String globalChatHistory, ActiveAgentInfo ownActive) {
         String currentAgent = ownActive.getIntent();
         String pendingAgents = "无";
 
@@ -148,11 +148,11 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
                 currentAgent, pendingAgents,
                 routingTemplatePath, domainName, chatMemory,
                 ownActive.getLastQuestion());
-        log.info("[{}] Phase1 (activeThread+lastQuestion): routeType={}, confidence={}",
+        log.info("[{}] Phase1 (activeAgent+lastQuestion): routeType={}, confidence={}",
                 logTag, phase1.getRouteType(), phase1.getConfidence());
 
         if (phase1.isFollow()) {
-            return resumeActiveThread(sessionId, userInput, ownActive);
+            return resumeActiveAgent(sessionId, userInput, ownActive);
         }
 
         // SWITCH → Phase2 IntentRouter
@@ -165,7 +165,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             return WorkflowOutput.reroute(phase2.getIntentName(), null);
         }
 
-        // Auto-upgrade保护: IntentRouter识别的意图与activeThread一致 → 降级回FOLLOW
+        // Auto-upgrade保护: IntentRouter识别的意图与activeAgent一致 → 降级回FOLLOW
         WorkflowOutput upgraded = tryAutoUpgradeFollowUp(ownActive, phase2, sessionId, userInput);
         if (upgraded != null) return upgraded;
 
@@ -174,7 +174,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     }
 
     /**
-     * 无activeThread场景 — ContextRouter + IntentRouter + REROUTE检查
+     * 无activeAgent场景 — ContextRouter + IntentRouter + REROUTE检查
      */
     private WorkflowOutput handleNewIntention(String sessionId, String userInput, String globalChatHistory) {
         String currentAgent = "无";
@@ -183,7 +183,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         RoutingResult phase1 = contextRouter.route(sessionId, userInput,
                 currentAgent, pendingAgents,
                 routingTemplatePath, domainName, chatMemory, null);
-        log.info("[{}] Phase1 (no activeThread): routeType={}, confidence={}",
+        log.info("[{}] Phase1 (no activeAgent): routeType={}, confidence={}",
                 logTag, phase1.getRouteType(), phase1.getConfidence());
 
         RoutingResult phase2 = runIntentRouter(sessionId, userInput, phase1,
@@ -221,30 +221,28 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     // ==================== SWITCH执行 ====================
 
     private WorkflowOutput handleSwitchNew(String sessionId, String rewrittenInput) {
-        return executeNewThread(sessionId, intent, rewrittenInput);
+        return executeNewAgent(sessionId, intent, rewrittenInput);
     }
 
     // ==================== 定时清理 ====================
 
     @Scheduled(fixedRate = 60_000)
     public void scheduledCleanup() {
-        cleanupExpiredActiveThreads();
+        cleanupExpiredActiveAgents();
     }
 
     // ==================== 状态管理 ====================
 
     @Override
     public void clearSession(String sessionId) {
-        clearOwnActiveThread(sessionId);
+        clearOwnActiveAgent(sessionId);
     }
 
     @Override
     public String getSessionStateDescription(String sessionId) {
-        ActiveThreadInfo active = getOwnActiveThread(sessionId);
+        ActiveAgentInfo active = getOwnActiveAgent(sessionId);
         if (active != null) {
-            return "当前活跃意图: " + active.getIntent() +
-                    " (线程: " + active.getThreadId().substring(0, 8) + "...)" +
-                    " 参数: " + active.getAccumulatedParams();
+            return "当前活跃意图: " + active.getIntent();
         }
         return "当前无活跃意图";
     }

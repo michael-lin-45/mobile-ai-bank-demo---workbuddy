@@ -26,10 +26,15 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * 控制流 (5层决策):
  * 1. Phase1: ContextRouter (full模板) → FOLLOW / SWITCH / RESUME
- * 2. FOLLOW + activeThread (非消歧中) → resumeGraph(注入accumulatedParams)
- * 3. FOLLOW + 无activeThread + 有suspendedAgents → 降级走Phase2
+ * 2. FOLLOW + activeAgent (非消歧中) → resumeGraph（官方模式二）
+ * 3. FOLLOW + 无activeAgent + 有suspendedAgents → 降级走Phase2
  * 4. Phase2: IntentResolver → RoutingResolution (RESOLVED/DISAMBIGUATION/REJECTED/CANCELLED)
  * 5. RESOLVED → executeRoute (auto-upgrade + handleSwitchNew/handleResume)
+ *
+ * 官方模式二简化:
+ * - SuspendedInfo 只保留 intent + 时间戳（无threadId，无accumulatedParams）
+ * - handleResume 用 GES.resumeGraph(graph, intent, userInput, sessionId) — 不传suspendedParams
+ * - suspendOwnAgent 只需传 sessionId + intent
  *
  * Cancel:
  * - 不暴露cancel公共方法
@@ -50,7 +55,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     // ==================== Multi独有状态 ====================
 
-    /** 本领域自有的挂起意图线程 (per session, intent → SuspendedInfo) */
+    /** 本领域自有的挂起意图 (per session, intent → SuspendedInfo) */
     private final Map<String, Map<String, SuspendedInfo>> suspendedAgents = new ConcurrentHashMap<>();
 
     /** 本领域自有的消歧状态 (per session) */
@@ -63,22 +68,14 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     @Data
     public static class SuspendedInfo {
-        private final String threadId;
         private final String intent;
         private final Instant suspendedAt;
         private final Instant expiresAt;
-        /** 累积的参数 (从activeThread继承) */
-        private Map<String, Object> accumulatedParams = new HashMap<>();
 
-        public SuspendedInfo(String threadId, String intent, Instant suspendedAt, Instant expiresAt) {
-            this.threadId = threadId;
+        public SuspendedInfo(String intent, Instant suspendedAt, Instant expiresAt) {
             this.intent = intent;
             this.suspendedAt = suspendedAt;
             this.expiresAt = expiresAt;
-        }
-
-        public void setAccumulatedParams(Map<String, Object> params) {
-            this.accumulatedParams = params != null ? new HashMap<>(params) : new HashMap<>();
         }
     }
 
@@ -96,7 +93,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private MultiSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.chatMemory,
                 builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
-                builder.activeThreadExpireMinutes);
+                builder.activeAgentExpireMinutes);
         this.intentResolver = builder.intentResolver;
         this.routingTemplatePath = builder.routingTemplatePath != null
                 ? builder.routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
@@ -128,7 +125,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         private List<IntentInfo> handledIntents;
         private int maxSuspendedDepth = 3;
         private long suspendedExpireMinutes = 20;
-        private long activeThreadExpireMinutes = 20;
+        private long activeAgentExpireMinutes = 20;
 
         public Builder domainName(String domainName) { this.domainName = domainName; return this; }
         public Builder logTag(String logTag) { this.logTag = logTag; return this; }
@@ -145,8 +142,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         public Builder handledIntents(List<IntentInfo> handledIntents) { this.handledIntents = handledIntents; return this; }
         public Builder maxSuspendedDepth(int maxSuspendedDepth) { this.maxSuspendedDepth = maxSuspendedDepth; return this; }
         public Builder suspendedExpireMinutes(long suspendedExpireMinutes) { this.suspendedExpireMinutes = suspendedExpireMinutes; return this; }
-        /** activeThread过期时间(分钟)，默认20分钟，与suspendedExpireMinutes保持一致 */
-        public Builder activeThreadExpireMinutes(long activeThreadExpireMinutes) { this.activeThreadExpireMinutes = activeThreadExpireMinutes; return this; }
+        /** activeAgent过期时间(分钟)，默认20分钟，与suspendedExpireMinutes保持一致 */
+        public Builder activeAgentExpireMinutes(long activeAgentExpireMinutes) { this.activeAgentExpireMinutes = activeAgentExpireMinutes; return this; }
 
         public MultiSubAgentDomainService build() {
             Objects.requireNonNull(domainName, "domainName is required");
@@ -169,19 +166,12 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     // ==================== suspendedAgents管理 ====================
 
-    private void suspendOwnAgent(String sessionId, String intent, String threadId) {
+    private void suspendOwnAgent(String sessionId, String intent) {
         Map<String, SuspendedInfo> sessionMap = suspendedAgents.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
 
-        // 同一intent已挂起 → 合并累积参数
+        // 同一intent已挂起 → 无需重复挂起（checkpoint自动保留）
         if (sessionMap.containsKey(intent)) {
-            SuspendedInfo existing = sessionMap.get(intent);
-            ActiveThreadInfo active = getOwnActiveThread(sessionId);
-            if (active != null && active.getIntent().equals(intent)) {
-                Map<String, Object> merged = new HashMap<>(active.getAccumulatedParams());
-                existing.getAccumulatedParams().forEach(merged::putIfAbsent);
-                existing.setAccumulatedParams(merged);
-            }
-            log.debug("[{}] Suspended agent already exists, merged params: session={}, intent={}", logTag, sessionId, intent);
+            log.debug("[{}] Suspended agent already exists: session={}, intent={}", logTag, sessionId, intent);
             return;
         }
 
@@ -197,18 +187,13 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             }
         }
 
-        SuspendedInfo info = new SuspendedInfo(threadId, intent, Instant.now(),
+        SuspendedInfo info = new SuspendedInfo(intent, Instant.now(),
                 Instant.now().plusSeconds(suspendedExpireMinutes * 60));
-        // 继承activeThread的累积参数
-        ActiveThreadInfo active = getOwnActiveThread(sessionId);
-        if (active != null && active.getIntent().equals(intent)) {
-            info.setAccumulatedParams(active.getAccumulatedParams());
-        }
         sessionMap.put(intent, info);
-        log.debug("[{}] Suspended agent: session={}, intent={}, threadId={}", logTag, sessionId, intent, threadId);
+        log.debug("[{}] Suspended agent: session={}, intent={}", logTag, sessionId, intent);
     }
 
-    private SuspendedInfo getOwnSuspendedThread(String sessionId, String intent) {
+    private SuspendedInfo getOwnSuspendedAgent(String sessionId, String intent) {
         Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
         if (sessionMap == null) return null;
         SuspendedInfo info = sessionMap.get(intent);
@@ -241,7 +226,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         return !sessionMap.isEmpty();
     }
 
-    /** 定时清理过期的挂起记录和activeThread, 每分钟执行一次 */
+    /** 定时清理过期的挂起记录和activeAgent, 每分钟执行一次 */
     @Scheduled(fixedRate = 60_000)
     public void cleanupExpiredSuspended() {
         Instant now = Instant.now();
@@ -257,8 +242,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 suspendedAgents.remove(sessionId);
             }
         });
-        // 同时清理过期的activeThread
-        cleanupExpiredActiveThreads();
+        // 同时清理过期的activeAgent
+        cleanupExpiredActiveAgents();
     }
 
     // ==================== 消歧管理 ====================
@@ -299,20 +284,19 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             String pendingAgents = getPendingAgentsDescription(sessionId);
 
             // ========== Phase 1: ContextRouter (FOLLOW/SWITCH/RESUME) ==========
-            // 如果activeThread存在且有lastQuestion，注入lastQuestion帮助ContextRouter精准判断
-            ActiveThreadInfo activeThreadForRouting = getOwnActiveThread(sessionId);
-            String lastQuestion = (activeThreadForRouting != null) ? activeThreadForRouting.getLastQuestion() : null;
+            ActiveAgentInfo activeAgentForRouting = getOwnActiveAgent(sessionId);
+            String lastQuestion = (activeAgentForRouting != null) ? activeAgentForRouting.getLastQuestion() : null;
 
             RoutingResult phase1 = contextRouter.route(sessionId, userInput,
                     currentAgent, pendingAgents,
                     routingTemplatePath, domainName, chatMemory, lastQuestion);
             log.info("[{}] Phase1: routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
 
-            // ========== FOLLOW + activeThread → 直接resume (消歧中除外) ==========
+            // ========== FOLLOW + activeAgent → 直接resume (消歧中除外) ==========
             if (phase1.isFollow() && !isInDisambiguation(sessionId)) {
-                ActiveThreadInfo activeThread = getOwnActiveThread(sessionId);
-                if (activeThread != null) {
-                    return resumeActiveThread(sessionId, userInput, activeThread);
+                ActiveAgentInfo activeAgent = getOwnActiveAgent(sessionId);
+                if (activeAgent != null) {
+                    return resumeActiveAgent(sessionId, userInput, activeAgent);
                 }
 
                 if (!hasOwnSuspendedAgents(sessionId)) {
@@ -332,7 +316,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             }
 
             // ========== 路由决策 (Phase2 + 消歧) ==========
-            // 传入globalChatHistory用于跨域指代消解(如"刚才说的那个理财")
             DisambiguationState disambigState = getDisambiguationState(sessionId);
             String disambigGroupId = disambigState != null ? disambigState.getGroupId() : null;
             String domainIntentScopeList = intentRegistry.getDomainIntentScopeDescription(
@@ -364,15 +347,15 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 }
             }
 
-            // ========== Auto-upgrade保护: SWITCH但意图与activeThread一致 → 降级FOLLOW ==========
-            if (resolution.isResolved() && activeThreadForRouting != null
+            // ========== Auto-upgrade保护: SWITCH但意图与activeAgent一致 → 降级FOLLOW ==========
+            if (resolution.isResolved() && activeAgentForRouting != null
                     && !"RESUME".equals(resolution.getRouteType())) {
                 String identifiedIntent = resolution.getIntentName();
-                if (identifiedIntent != null && identifiedIntent.equals(activeThreadForRouting.getIntent())) {
-                    log.info("[{}] Auto-upgrade SWITCH→FOLLOW: identifiedIntent={} matches activeThread.intent={}",
-                            logTag, identifiedIntent, activeThreadForRouting.getIntent());
+                if (identifiedIntent != null && identifiedIntent.equals(activeAgentForRouting.getIntent())) {
+                    log.info("[{}] Auto-upgrade SWITCH→FOLLOW: identifiedIntent={} matches activeAgent.intent={}",
+                            logTag, identifiedIntent, activeAgentForRouting.getIntent());
                     addUserMessage(sessionId, userInput);
-                    return resumeActiveThread(sessionId, userInput, activeThreadForRouting);
+                    return resumeActiveAgent(sessionId, userInput, activeAgentForRouting);
                 }
             }
 
@@ -382,11 +365,11 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             WorkflowOutput output = switch (resolution.getStatus()) {
                 case RESOLVED -> executeRoute(sessionId, resolution);
                 case DISAMBIGUATION -> {
-                    ActiveThreadInfo active = getOwnActiveThread(sessionId);
+                    ActiveAgentInfo active = getOwnActiveAgent(sessionId);
                     if (active != null) {
-                        suspendOwnAgent(sessionId, active.getIntent(), active.getThreadId());
-                        clearOwnActiveThread(sessionId);
-                        log.info("[{}] Disambiguation: suspended own activeThread intent={}", logTag, active.getIntent());
+                        suspendOwnAgent(sessionId, active.getIntent());
+                        clearOwnActiveAgent(sessionId);
+                        log.info("[{}] Disambiguation: suspended own activeAgent intent={}", logTag, active.getIntent());
                     }
                     String groupId = resolveGroupId(resolution);
                     if (groupId != null) {
@@ -415,7 +398,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private WorkflowOutput executeRoute(String sessionId, RoutingResolution resolution) {
         // 防御: 如果意图已suspended但路由判了SWITCH，自动升级为RESUME
         if (!"RESUME".equals(resolution.getRouteType())
-                && getOwnSuspendedThread(sessionId, resolution.getIntentName()) != null) {
+                && getOwnSuspendedAgent(sessionId, resolution.getIntentName()) != null) {
             log.info("[{}] Auto-upgrade {}→RESUME for suspended intent={}",
                     logTag, resolution.getRouteType(), resolution.getIntentName());
             return handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
@@ -427,39 +410,49 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     }
 
     private WorkflowOutput handleSwitchNew(String sessionId, String intent, String rewrittenInput) {
-        ActiveThreadInfo currentActive = getOwnActiveThread(sessionId);
+        ActiveAgentInfo currentActive = getOwnActiveAgent(sessionId);
         if (currentActive != null) {
-            suspendOwnAgent(sessionId, currentActive.getIntent(), currentActive.getThreadId());
+            suspendOwnAgent(sessionId, currentActive.getIntent());
             log.info("[{}] Suspended current: intent={}", logTag, currentActive.getIntent());
         }
-        return executeNewThread(sessionId, intent, rewrittenInput);
+        return executeNewAgent(sessionId, intent, rewrittenInput);
     }
 
+    /**
+     * 恢复挂起的意图 — 官方模式二: GES.resumeGraph(graph, intent, userInput, sessionId)
+     *
+     * 简化: 不再从SuspendedInfo取accumulatedParams，checkpoint自动保留
+     */
     private WorkflowOutput handleResume(String sessionId, String intent, String userInput) {
-        SuspendedInfo suspendedInfo = getOwnSuspendedThread(sessionId, intent);
+        SuspendedInfo suspendedInfo = getOwnSuspendedAgent(sessionId, intent);
         if (suspendedInfo == null) {
-            log.warn("[{}] RESUME but no suspended thread for intent={}, fallback to SWITCH", logTag, intent);
+            log.warn("[{}] RESUME but no suspended agent for intent={}, fallback to SWITCH", logTag, intent);
             return handleSwitchNew(sessionId, intent, userInput);
         }
 
-        ActiveThreadInfo currentActive = getOwnActiveThread(sessionId);
-        if (currentActive != null && !currentActive.getThreadId().equals(suspendedInfo.getThreadId())) {
-            suspendOwnAgent(sessionId, currentActive.getIntent(), currentActive.getThreadId());
+        ActiveAgentInfo currentActive = getOwnActiveAgent(sessionId);
+        if (currentActive != null && !currentActive.getIntent().equals(suspendedInfo.getIntent())) {
+            suspendOwnAgent(sessionId, currentActive.getIntent());
         }
 
         resumeOwnAgent(sessionId, intent);
 
-        Map<String, Object> suspendedParams = suspendedInfo.getAccumulatedParams();
-        log.info("[{}] RESUME with suspendedParams: intent={}, params={}", logTag, intent, suspendedParams);
+        log.info("[{}] RESUME with checkpoint: intent={}", logTag, intent);
 
-        String newThreadId = generateThreadId();
-        setOwnActiveThread(sessionId, newThreadId, intent);
+        // 获取graph并设置activeAgent
+        var graph = intentRegistry.getGraph(intent);
+        if (graph == null) {
+            return WorkflowOutput.error("Graph not found for intent: " + intent);
+        }
 
-        WorkflowOutput result = graphExecutionEngine.resumeGraph(intent, newThreadId, userInput, sessionId, suspendedParams);
+        setOwnActiveAgent(sessionId, intent);
+
+        // 官方模式二: updateState + stream(null, config)
+        WorkflowOutput result = graphExecutionEngine.resumeGraph(graph, intent, userInput, sessionId);
         saveL2Result(sessionId, result);
 
         if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {
-            clearOwnActiveThread(sessionId);
+            clearOwnActiveAgent(sessionId);
         }
 
         return result;
@@ -483,7 +476,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     @Override
     public void clearSession(String sessionId) {
-        clearOwnActiveThread(sessionId);
+        clearOwnActiveAgent(sessionId);
         suspendedAgents.remove(sessionId);
         disambiguationStates.remove(sessionId);
     }
@@ -491,15 +484,14 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     @Override
     public String getSessionStateDescription(String sessionId) {
         StringBuilder sb = new StringBuilder();
-        ActiveThreadInfo active = getOwnActiveThread(sessionId);
+        ActiveAgentInfo active = getOwnActiveAgent(sessionId);
         Map<String, SuspendedInfo> suspended = getAllOwnSuspended(sessionId);
         DisambiguationState disambiguation = getDisambiguationState(sessionId);
 
         if (disambiguation != null) {
             sb.append("当前在消歧模式: 意图组=").append(disambiguation.getGroupId());
         } else if (active != null) {
-            sb.append("当前活跃意图: ").append(active.getIntent())
-                    .append(" (线程: ").append(active.getThreadId().substring(0, 8)).append("...)");
+            sb.append("当前活跃意图: ").append(active.getIntent());
         } else {
             sb.append("当前无活跃意图");
         }

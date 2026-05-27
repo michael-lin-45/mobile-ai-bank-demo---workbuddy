@@ -13,22 +13,19 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.UserMessage;
 
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * L1领域服务抽象基类 - 提取Single/Multi共性的状态管理和工具方法
  *
- * 共性逻辑:
- * - activeThread管理 (per session, per domain): get/set/clear/saveL2Result
- * - ChatMemory管理: addUserMessage, recordSystemReply
- * - resumeGraph模式: 新threadId + 注入accumulatedParams + 保存结果
- * - executeNewThread模式: 取graph → 新thread → 执行 → 保存 → 完成清空
- * - clearSession / getSessionStateDescription
- * - 意图自描述: getHandledIntents() 供外部查询此服务处理哪些意图
+ * 核心设计（官方模式二）:
+ * - threadId = sessionId（GES推导，L1不传递）
+ * - accumulatedParams 不再需要在L1层保存（checkpoint自动保留完整OverAllState）
+ * - ActiveAgentInfo 只保留 intent + lastQuestion
+ * - resumeActiveAgent: 调用GES.resumeGraph(graph, intent, userInput, sessionId)
+ * - executeNewAgent: 调用GES.executeGraph(graph, intent, rewrittenInput, sessionId)
  *
  * 不共性的逻辑(由子类实现):
  * - handle(): 控制流完全不同,各自实现
@@ -38,10 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Cancel设计:
  * - L1层不暴露cancel公共方法
  * - 子智能体执行中的取消(如"不转了"): 由L2子Graph的cancelAwareExtractParams检测并处理
- *   流程: FOLLOW → resumeGraph → 子Graph自行检测取消意图 → cancelExecutionNode
  * - Multi消歧中的取消(如"算了"): 由IntentResolver.isCancelExpression()检测 → CANCELLED状态
- *   流程: 已在MultiSubAgentDomainService.handle()的switch分支中处理
- * - 未来如果L0 reactAgent需要主动取消某个L1的执行,再添加cancel接口
  */
 @Slf4j
 public abstract class AbstractDomainService implements DomainHandler {
@@ -55,34 +49,26 @@ public abstract class AbstractDomainService implements DomainHandler {
 
     // ==================== 共享状态 ====================
 
-    /** 本领域自有的activeThread (per session) */
-    private final Map<String, ActiveThreadInfo> activeThreads = new ConcurrentHashMap<>();
+    /** 本领域自有的activeAgent (per session) */
+    private final Map<String, ActiveAgentInfo> activeAgents = new ConcurrentHashMap<>();
 
-    /** activeThread过期时间(分钟) - 与suspendedExpireMinutes保持一致 */
-    private final long activeThreadExpireMinutes;
+    /** activeAgent过期时间(分钟) - 与suspendedExpireMinutes保持一致 */
+    private final long activeAgentExpireMinutes;
 
     // ==================== 共享数据类 ====================
 
     @Data
-    public static class ActiveThreadInfo {
-        private final String threadId;
+    public static class ActiveAgentInfo {
         private final String intent;
         private final Instant createdAt;
         private final Instant expiresAt;
-        /** 累积的参数 (如transfer.receiver, wealthConsult.riskLevel等) */
-        private Map<String, Object> accumulatedParams = new HashMap<>();
         /** L2子智能体最后的提问(INTERRUPTED时设置,COMPLETED时清空) */
         private String lastQuestion;
 
-        public ActiveThreadInfo(String threadId, String intent, Instant createdAt, Instant expiresAt) {
-            this.threadId = threadId;
+        public ActiveAgentInfo(String intent, Instant createdAt, Instant expiresAt) {
             this.intent = intent;
             this.createdAt = createdAt;
             this.expiresAt = expiresAt;
-        }
-
-        public void setAccumulatedParams(Map<String, Object> params) {
-            this.accumulatedParams = params != null ? new HashMap<>(params) : new HashMap<>();
         }
     }
 
@@ -114,49 +100,49 @@ public abstract class AbstractDomainService implements DomainHandler {
                                     ContextRouter contextRouter,
                                     GraphExecutionEngine graphExecutionEngine,
                                     IntentRegistry intentRegistry,
-                                    long activeThreadExpireMinutes) {
+                                    long activeAgentExpireMinutes) {
         this.domainName = domainName;
         this.logTag = logTag;
         this.chatMemory = chatMemory;
         this.contextRouter = contextRouter;
         this.graphExecutionEngine = graphExecutionEngine;
         this.intentRegistry = intentRegistry;
-        this.activeThreadExpireMinutes = activeThreadExpireMinutes;
+        this.activeAgentExpireMinutes = activeAgentExpireMinutes;
     }
 
-    // ==================== activeThread管理 ====================
+    // ==================== activeAgent管理 ====================
 
-    protected ActiveThreadInfo getOwnActiveThread(String sessionId) {
-        ActiveThreadInfo info = activeThreads.get(sessionId);
+    protected ActiveAgentInfo getOwnActiveAgent(String sessionId) {
+        ActiveAgentInfo info = activeAgents.get(sessionId);
         if (info != null && info.getExpiresAt().isBefore(Instant.now())) {
-            activeThreads.remove(sessionId);
-            log.info("[{}] ActiveThread expired: session={}, intent={}, createdAt={}",
+            activeAgents.remove(sessionId);
+            log.info("[{}] ActiveAgent expired: session={}, intent={}, createdAt={}",
                     logTag, sessionId, info.getIntent(), info.getCreatedAt());
             return null;
         }
         return info;
     }
 
-    protected void setOwnActiveThread(String sessionId, String threadId, String intent) {
-        if (threadId == null || intent == null) {
-            activeThreads.remove(sessionId);
+    protected void setOwnActiveAgent(String sessionId, String intent) {
+        if (intent == null) {
+            activeAgents.remove(sessionId);
         } else {
             Instant now = Instant.now();
-            Instant expiresAt = now.plusSeconds(activeThreadExpireMinutes * 60);
-            activeThreads.put(sessionId, new ActiveThreadInfo(threadId, intent, now, expiresAt));
+            Instant expiresAt = now.plusSeconds(activeAgentExpireMinutes * 60);
+            activeAgents.put(sessionId, new ActiveAgentInfo(intent, now, expiresAt));
         }
     }
 
-    protected void clearOwnActiveThread(String sessionId) {
-        activeThreads.remove(sessionId);
+    protected void clearOwnActiveAgent(String sessionId) {
+        activeAgents.remove(sessionId);
     }
 
-    /** 清理过期的activeThread (由子类的@Scheduled方法调用) */
-    protected void cleanupExpiredActiveThreads() {
+    /** 清理过期的activeAgent (由子类的@Scheduled方法调用) */
+    protected void cleanupExpiredActiveAgents() {
         Instant now = Instant.now();
-        activeThreads.entrySet().removeIf(entry -> {
+        activeAgents.entrySet().removeIf(entry -> {
             if (entry.getValue().getExpiresAt().isBefore(now)) {
-                log.debug("[{}] Auto cleaned expired activeThread: session={}, intent={}",
+                log.debug("[{}] Auto cleaned expired activeAgent: session={}, intent={}",
                         logTag, entry.getKey(), entry.getValue().getIntent());
                 return true;
             }
@@ -174,23 +160,17 @@ public abstract class AbstractDomainService implements DomainHandler {
         ChatHistoryUtils.recordReply(chatMemory, sessionId, output, logTag);
     }
 
-    // ==================== accumulatedParams + lastQuestion保存 ====================
+    // ==================== lastQuestion保存 ====================
 
     /**
-     * 从WorkflowOutput中保存accumulatedParams和lastQuestion到自有activeThread
+     * 从WorkflowOutput中保存lastQuestion到自有activeAgent
      *
-     * 这是状态自管的关键: GES返回结果，L1 Service负责保存
+     * 简化（官方模式二）: 不再保存accumulatedParams（checkpoint自动保留）
      */
     protected void saveL2Result(String sessionId, WorkflowOutput output) {
         if (output == null) return;
-        ActiveThreadInfo active = getOwnActiveThread(sessionId);
+        ActiveAgentInfo active = getOwnActiveAgent(sessionId);
         if (active != null) {
-            // 保存accumulatedParams
-            if (output.getAccumulatedParams() != null && !output.getAccumulatedParams().isEmpty()) {
-                active.setAccumulatedParams(output.getAccumulatedParams());
-                log.info("[{}] Saved accumulated params: {}", logTag, output.getAccumulatedParams());
-            }
-            // 保存/清空lastQuestion
             if (output.getStatus() == WorkflowStatus.INTERRUPTED && output.getQuestion() != null) {
                 active.setLastQuestion(output.getQuestion());
                 log.debug("[{}] Saved lastQuestion: {}", logTag, output.getQuestion());
@@ -202,85 +182,77 @@ public abstract class AbstractDomainService implements DomainHandler {
 
     // ==================== 工具方法 ====================
 
-    protected String generateThreadId() {
-        return UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-    }
-
     /**
      * 构建当前活跃意图字符串(供ContextRouter prompt用)
      */
     protected String buildCurrentAgent(String sessionId) {
-        ActiveThreadInfo active = getOwnActiveThread(sessionId);
+        ActiveAgentInfo active = getOwnActiveAgent(sessionId);
         return active != null ? active.getIntent() : "无";
     }
 
     // ==================== 共享流程方法 ====================
 
     /**
-     * FOLLOW + activeThread → resumeGraph模式
+     * FOLLOW + activeAgent → resumeGraph模式（官方模式二）
      *
      * Single和Multi都有这个分支，逻辑完全一致:
      * 1. addUserMessage
-     * 2. 生成新threadId
-     * 3. setActiveThread(保持原intent)
-     * 4. resumeGraph(注入accumulatedParams)
-     * 5. saveL2Result
-     * 6. recordSystemReply
+     * 2. resumeGraph(graph, intent, userInput, sessionId) — 不传accumulatedParams
+     * 3. saveL2Result
+     * 4. recordSystemReply
+     * 5. COMPLETED → clearActiveAgent
      */
-    protected WorkflowOutput resumeActiveThread(String sessionId, String userInput, ActiveThreadInfo active) {
-        log.info("[{}] FOLLOW with own activeThread: intent={}, params={}",
-                logTag, active.getIntent(), active.getAccumulatedParams());
+    protected WorkflowOutput resumeActiveAgent(String sessionId, String userInput, ActiveAgentInfo active) {
+        log.info("[{}] FOLLOW with own activeAgent: intent={}", logTag, active.getIntent());
         addUserMessage(sessionId, userInput);
 
-        String newThreadId = generateThreadId();
-        setOwnActiveThread(sessionId, newThreadId, active.getIntent());
+        var graph = intentRegistry.getGraph(active.getIntent());
+        if (graph == null) {
+            return WorkflowOutput.error("Graph not found for intent: " + active.getIntent());
+        }
 
         WorkflowOutput resumeResult = graphExecutionEngine.resumeGraph(
-                active.getIntent(), newThreadId, userInput, sessionId,
-                active.getAccumulatedParams());
+                graph, active.getIntent(), userInput, sessionId);
         saveL2Result(sessionId, resumeResult);
         recordSystemReply(sessionId, resumeResult);
 
-        // 完成后清空activeThread，避免下次FOLLOW复用旧参数
         if (WorkflowStatus.COMPLETED.equals(resumeResult.getStatus())) {
-            clearOwnActiveThread(sessionId);
+            clearOwnActiveAgent(sessionId);
         }
 
         return resumeResult;
     }
 
     /**
-     * 新建thread执行Graph模式 (handleSwitchNew的核心)
+     * 新建agent执行Graph模式 (handleSwitchNew的核心)
      *
      * Single和Multi都有这个逻辑:
      * 1. 取Graph
-     * 2. 新threadId
-     * 3. setActiveThread
-     * 4. executeGraph
-     * 5. saveL2Result
-     * 6. COMPLETED → clearActiveThread
+     * 2. setActiveAgent
+     * 3. executeGraph
+     * 4. saveL2Result
+     * 5. COMPLETED → clearActiveAgent
      *
-     * 注意: suspend当前线程的逻辑由子类在调用前处理(Single不suspend, Multi先suspend再调用)
+     * 注意: suspend当前agent的逻辑由子类在调用前处理(Single不suspend, Multi先suspend再调用)
      *
      * @param sessionId 会话ID
      * @param intent 意图名(Single为固定值, Multi为动态值)
      * @param rewrittenInput 改写后的输入
      * @return 执行结果
      */
-    protected WorkflowOutput executeNewThread(String sessionId, String intent, String rewrittenInput) {
+    protected WorkflowOutput executeNewAgent(String sessionId, String intent, String rewrittenInput) {
         var graph = intentRegistry.getGraph(intent);
         if (graph == null) {
             return WorkflowOutput.error("Graph not found for intent: " + intent);
         }
 
-        String newThreadId = generateThreadId();
-        setOwnActiveThread(sessionId, newThreadId, intent);
+        setOwnActiveAgent(sessionId, intent);
 
-        WorkflowOutput result = graphExecutionEngine.executeGraph(graph, intent, newThreadId, rewrittenInput, sessionId, null);
+        WorkflowOutput result = graphExecutionEngine.executeGraph(graph, intent, rewrittenInput, sessionId);
         saveL2Result(sessionId, result);
 
         if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {
-            clearOwnActiveThread(sessionId);
+            clearOwnActiveAgent(sessionId);
         }
 
         return result;
@@ -290,21 +262,21 @@ public abstract class AbstractDomainService implements DomainHandler {
 
     /**
      * Auto-upgrade: ContextRouter 判 SWITCH 但 IntentRouter 识别的意图
-     * 与 activeThread 的意图一致 → 降级回 FOLLOW
+     * 与 activeAgent 的意图一致 → 降级回 FOLLOW
      *
-     * 保护场景: ContextRouter 误判导致 accumulatedParams 丢失
+     * 保护场景: ContextRouter 误判导致意图丢失
      *
-     * @return 如果升级成功返回 resumeActiveThread 结果，否则返回 null（由调用方继续正常流程）
+     * @return 如果升级成功返回 resumeActiveAgent 结果，否则返回 null（由调用方继续正常流程）
      */
-    protected WorkflowOutput tryAutoUpgradeFollowUp(ActiveThreadInfo activeThread,
+    protected WorkflowOutput tryAutoUpgradeFollowUp(ActiveAgentInfo activeAgent,
                                                      RoutingResult phase2,
                                                      String sessionId, String userInput) {
-        if (activeThread != null && phase2 != null) {
+        if (activeAgent != null && phase2 != null) {
             String identifiedIntent = phase2.getIntentName();
-            if (identifiedIntent != null && identifiedIntent.equals(activeThread.getIntent())) {
-                log.info("[{}] Auto-upgrade SWITCH→FOLLOW: identifiedIntent={} matches activeThread.intent={}",
-                        logTag, identifiedIntent, activeThread.getIntent());
-                return resumeActiveThread(sessionId, userInput, activeThread);
+            if (identifiedIntent != null && identifiedIntent.equals(activeAgent.getIntent())) {
+                log.info("[{}] Auto-upgrade SWITCH→FOLLOW: identifiedIntent={} matches activeAgent.intent={}",
+                        logTag, identifiedIntent, activeAgent.getIntent());
+                return resumeActiveAgent(sessionId, userInput, activeAgent);
             }
         }
         return null; // 不匹配，由调用方继续正常流程
