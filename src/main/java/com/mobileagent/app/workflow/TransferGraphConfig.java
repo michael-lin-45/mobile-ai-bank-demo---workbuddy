@@ -77,8 +77,8 @@ public class TransferGraphConfig extends AbstractGraphConfig {
         StateGraph graph = new StateGraph(createKeyStrategyFactory())
                 .addNode("extractParams", node_async(this::extractParamsNode))
                 .addNode("paramRouter", node_async(this::paramRouterNode))
-                .addNode("askReceiver", node_async(this::askReceiverNode))
-                .addNode("askAmount", node_async(this::askAmountNode))
+                .addNode("askReceiver", askNode("askReceiver", this::askReceiverLogic))
+                .addNode("askAmount", askNode("askAmount", this::askAmountLogic))
                 .addNode("executeTransfer", node_async(this::executeTransferNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
@@ -91,7 +91,7 @@ public class TransferGraphConfig extends AbstractGraphConfig {
         addAskConditionalEdges(graph, "askReceiver");
         addAskConditionalEdges(graph, "askAmount");
 
-        CompiledGraph compiled = graph.compile(createCompileConfig("askReceiver", "askAmount"));
+        CompiledGraph compiled = graph.compile(createInterruptCompileConfig());
 
         log.info("[TransferGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
@@ -142,7 +142,7 @@ public class TransferGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
-    private Map<String, Object> askReceiverNode(OverAllState state) {
+    private Map<String, Object> askReceiverLogic(OverAllState state) {
         String userInput = getLatestInput(state);
         log.info("[TransferGraph.askReceiver] userInput={}", userInput);
 
@@ -170,7 +170,7 @@ public class TransferGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
-    private Map<String, Object> askAmountNode(OverAllState state) {
+    private Map<String, Object> askAmountLogic(OverAllState state) {
         String userInput = getLatestInput(state);
         log.info("[TransferGraph.askAmount] userInput={}", userInput);
 

@@ -76,8 +76,8 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         StateGraph graph = new StateGraph(createKeyStrategyFactory())
                 .addNode("extractParams", node_async(this::extractParamsNode))
                 .addNode("paramRouter", node_async(this::paramRouterNode))
-                .addNode("askRiskLevel", node_async(this::askRiskLevelNode))
-                .addNode("askFocusArea", node_async(this::askFocusAreaNode))
+                .addNode("askRiskLevel", askNode("askRiskLevel", this::askRiskLevelLogic))
+                .addNode("askFocusArea", askNode("askFocusArea", this::askFocusAreaLogic))
                 .addNode("executeWealthConsult", node_async(this::executeWealthConsultNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
@@ -90,7 +90,7 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         addAskConditionalEdges(graph, "askRiskLevel");
         addAskConditionalEdges(graph, "askFocusArea");
 
-        CompiledGraph compiled = graph.compile(createCompileConfig("askRiskLevel", "askFocusArea"));
+        CompiledGraph compiled = graph.compile(createInterruptCompileConfig());
 
         log.info("[WealthConsultGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
@@ -140,7 +140,7 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
-    private Map<String, Object> askRiskLevelNode(OverAllState state) {
+    private Map<String, Object> askRiskLevelLogic(OverAllState state) {
         String userInput = getLatestInput(state);
         log.info("[WealthConsultGraph.askRiskLevel] userInput={}", userInput);
 
@@ -173,7 +173,7 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
-    private Map<String, Object> askFocusAreaNode(OverAllState state) {
+    private Map<String, Object> askFocusAreaLogic(OverAllState state) {
         String userInput = getLatestInput(state);
         log.info("[WealthConsultGraph.askFocusArea] userInput={}", userInput);
 

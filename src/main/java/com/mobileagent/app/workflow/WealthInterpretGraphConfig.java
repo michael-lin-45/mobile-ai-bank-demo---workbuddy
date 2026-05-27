@@ -73,7 +73,7 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
         StateGraph graph = new StateGraph(createKeyStrategyFactory())
                 .addNode("extractParams", node_async(this::extractParamsNode))
                 .addNode("paramRouter", node_async(this::paramRouterNode))
-                .addNode("askProductName", node_async(this::askProductNameNode))
+                .addNode("askProductName", askNode("askProductName", this::askProductNameLogic))
                 .addNode("executeWealthInterpret", node_async(this::executeWealthInterpretNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
@@ -85,7 +85,7 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
         // ask节点条件路由
         addAskConditionalEdges(graph, "askProductName");
 
-        CompiledGraph compiled = graph.compile(createCompileConfig("askProductName"));
+        CompiledGraph compiled = graph.compile(createInterruptCompileConfig());
 
         log.info("[WealthInterpretGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
@@ -130,7 +130,7 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
-    private Map<String, Object> askProductNameNode(OverAllState state) {
+    private Map<String, Object> askProductNameLogic(OverAllState state) {
         String userInput = getLatestInput(state);
         log.info("[WealthInterpretGraph.askProductName] userInput={}", userInput);
 

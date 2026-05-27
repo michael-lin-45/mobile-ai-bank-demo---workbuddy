@@ -34,6 +34,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  * - 取消信号处理:
  *   - cancelAwareExtractParams: 自动拦截_cancelSignal + LLM取消意图检测, 子类无需关心
  *   - cancelAwareParamRouter: 自动拦截_cancelSignal, 子类只需关心业务路由
+ *   - askNode(): 创建ask节点时自动包装cancelAwareAsk + 注册interruptBefore, 子类无需手写样板代码
  *   - addCancelNode: 一行代码添加cancelExecution节点+END边
  *   - addCancelEdge: 一行代码给paramRouter的edges map添加CANCEL路由
  *   - detectCancelFromInput: 关键字+LLM分层检测取消意图(流程统一,关键字和提示词均可定制)
@@ -50,12 +51,27 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  *
  * 子类可覆盖:
  * - onCleanup(): 取消时的自定义清理逻辑 (如释放资源、回滚等)
+ * - getCancelKeywords(): 领域特定取消关键词 (如"不转了""不查了")
+ *
+ * 子类构建Graph时的约定:
+ * - ask节点: 使用askNode("name", this::logic) 代替 node_async(this::logic)
+ * - 编译: 使用createInterruptCompileConfig() 代替 createCompileConfig("askX", "askY")
+ * - 取消路由: 使用addCancelEdge(edges) + createCancelAwareRouter()
+ * - ask条件边: 使用addAskConditionalEdges(graph, "askX")
  */
 @Slf4j
 public abstract class AbstractGraphConfig {
 
     protected final ChatModel chatModel;
     protected final ObjectMapper objectMapper;
+
+    /**
+     * 自动收集的interrupt节点列表 - 由askNode()自动填充, 无需手写interruptBefore数组
+     *
+     * askNode()每次调用时自动将节点名加入此列表, 编译时通过createInterruptCompileConfig()使用。
+     * 子类无需手动维护interruptBefore列表, 杜绝"忘写interruptBefore"或"节点名拼写错误"的风险。
+     */
+    private final List<String> interruptNodes = new ArrayList<>();
 
     protected AbstractGraphConfig(ChatModel chatModel) {
         this.chatModel = chatModel;
@@ -303,6 +319,7 @@ public abstract class AbstractGraphConfig {
         result.put("_outputType", "TEXT");
         result.put("_isFinal", true);
         result.put("_cancelSignal", null);
+        result.put("_question", null);
         if (cleanupResult != null && !cleanupResult.isEmpty()) {
             result.putAll(cleanupResult);
         }
@@ -356,6 +373,58 @@ public abstract class AbstractGraphConfig {
             return Map.of("_paramName", "CANCEL");
         }
         return null;
+    }
+
+    /**
+     * 带取消检查的ask节点 - 由askNode()内部调用, 子类不再需要手动调用
+     *
+     * 检测逻辑:
+     * 1. 检查_cancelSignal信号(由cancelGraph()注入)
+     * 2. 关键字+LLM检测用户输入中的取消意图(ask节点在清空_latestUserInput前检测)
+     *
+     * @return 非null表示检测到取消, null表示正常执行
+     */
+    private Map<String, Object> cancelAwareAsk(OverAllState state) {
+        if (isCancelled(state)) {
+            log.info("[{}.askNode] Cancel signal detected", getGraphName());
+            return Map.of("_cancelSignal", true);
+        }
+        if (detectCancelFromInput(state)) {
+            log.info("[{}.askNode] Cancel intent detected from user input", getGraphName());
+            return Map.of("_cancelSignal", true);
+        }
+        return null;
+    }
+
+    /**
+     * 创建带取消检测 + 自动interruptBefore的ask节点
+     *
+     * 一站式完成三件事:
+     * 1. 自动包装cancelAwareAsk取消检测 (无需在ask逻辑中手写两行样板代码)
+     * 2. 自动注册到interruptBefore列表 (无需手写节点名数组, 杜绝拼写错误/遗漏)
+     * 3. 转换为AsyncNodeAction (无需手写node_async())
+     *
+     * 子类用法:
+     *   .addNode("askReceiver", askNode("askReceiver", this::askReceiverLogic))
+     *
+     * askReceiverLogic只需写纯业务逻辑, 不需要cancelAwareAsk样板:
+     *   private Map<String, Object> askReceiverLogic(OverAllState state) {
+     *       // 直接写业务逻辑, 取消检测已由askNode自动处理
+     *       String userInput = getLatestInput(state);
+     *       ...
+     *   }
+     *
+     * @param nodeName 节点名 (同时用于interruptBefore注册和图节点标识)
+     * @param askLogic 纯业务逻辑 (不需要包含取消检测代码)
+     * @return 包装了取消检测的AsyncNodeAction
+     */
+    protected AsyncNodeAction askNode(String nodeName, java.util.function.Function<OverAllState, Map<String, Object>> askLogic) {
+        interruptNodes.add(nodeName);
+        return node_async(state -> {
+            Map<String, Object> cancelResult = cancelAwareAsk(state);
+            if (cancelResult != null) return cancelResult;
+            return askLogic.apply(state);
+        });
     }
 
     /**
@@ -436,6 +505,19 @@ public abstract class AbstractGraphConfig {
                 .interruptBefore(interruptBeforeNodes)
                 .recursionLimit(50)
                 .build();
+    }
+
+    /**
+     * 使用askNode()自动收集的interruptNodes构建CompileConfig
+     *
+     * 子类用法:
+     *   graph.compile(createInterruptCompileConfig())
+     *
+     * 无需手写节点名数组, 所有通过askNode()注册的节点自动成为interruptBefore节点。
+     * 替代旧方式: graph.compile(createCompileConfig("askReceiver", "askAmount"))
+     */
+    protected CompileConfig createInterruptCompileConfig() {
+        return createCompileConfig(interruptNodes.toArray(new String[0]));
     }
 
     /** 创建ask节点的条件路由 (有用户输入→paramRouter, 无→END) */

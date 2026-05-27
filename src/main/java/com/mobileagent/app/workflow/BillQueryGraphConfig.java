@@ -75,8 +75,8 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
         StateGraph graph = new StateGraph(createKeyStrategyFactory())
                 .addNode("extractParams", node_async(this::extractParamsNode))
                 .addNode("paramRouter", node_async(this::paramRouterNode))
-                .addNode("askTime", node_async(this::askTimeNode))
-                .addNode("askType", node_async(this::askTypeNode))
+                .addNode("askTime", askNode("askTime", this::askTimeLogic))
+                .addNode("askType", askNode("askType", this::askTypeLogic))
                 .addNode("executeBillQuery", node_async(this::executeBillQueryNode))
                 .addEdge(START, "extractParams")
                 .addEdge("extractParams", "paramRouter")
@@ -89,7 +89,7 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
         addAskConditionalEdges(graph, "askTime");
         addAskConditionalEdges(graph, "askType");
 
-        CompiledGraph compiled = graph.compile(createCompileConfig("askTime", "askType"));
+        CompiledGraph compiled = graph.compile(createInterruptCompileConfig());
 
         log.info("[BillQueryGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
@@ -139,7 +139,7 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
-    private Map<String, Object> askTimeNode(OverAllState state) {
+    private Map<String, Object> askTimeLogic(OverAllState state) {
         String userInput = getLatestInput(state);
         log.info("[BillQueryGraph.askTime] userInput={}", userInput);
 
@@ -167,7 +167,7 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
-    private Map<String, Object> askTypeNode(OverAllState state) {
+    private Map<String, Object> askTypeLogic(OverAllState state) {
         String userInput = getLatestInput(state);
         log.info("[BillQueryGraph.askType] userInput={}", userInput);
 
