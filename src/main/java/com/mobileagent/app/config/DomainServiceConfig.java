@@ -4,6 +4,7 @@ import com.mobileagent.app.domain.AbstractDomainService;
 import com.mobileagent.app.domain.ChatService;
 import com.mobileagent.app.domain.MultiSubAgentDomainService;
 import com.mobileagent.app.domain.SingleSubAgentDomainService;
+import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.DomainServiceRegistry;
@@ -36,6 +37,7 @@ public class DomainServiceConfig {
             IntentRouter intentRouter,
             GraphExecutionEngine graphExecutionEngine,
             IntentRegistry intentRegistry,
+            GlobalSessionStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             @Qualifier("transferChatMemory") ChatMemory transferChatMemory) {
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
@@ -48,6 +50,7 @@ public class DomainServiceConfig {
                 .intentRouter(intentRouter)
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
+                .globalSessionStore(globalSessionStore)
                 .build();
         domainServiceRegistry.register("TRANSFER", service);
         return service;
@@ -61,6 +64,7 @@ public class DomainServiceConfig {
             IntentRouter intentRouter,
             GraphExecutionEngine graphExecutionEngine,
             IntentRegistry intentRegistry,
+            GlobalSessionStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             @Qualifier("billChatMemory") ChatMemory billChatMemory) {
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
@@ -73,6 +77,7 @@ public class DomainServiceConfig {
                 .intentRouter(intentRouter)
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
+                .globalSessionStore(globalSessionStore)
                 .build();
         domainServiceRegistry.register("BILL", service);
         return service;
@@ -86,6 +91,7 @@ public class DomainServiceConfig {
             IntentResolver intentResolver,
             GraphExecutionEngine graphExecutionEngine,
             IntentRegistry intentRegistry,
+            GlobalSessionStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             @Qualifier("wealthChatMemory") ChatMemory wealthChatMemory) {
         MultiSubAgentDomainService service = MultiSubAgentDomainService.builder()
@@ -96,6 +102,7 @@ public class DomainServiceConfig {
                 .intentResolver(intentResolver)
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
+                .globalSessionStore(globalSessionStore)
                 .routingTemplatePath("prompts/l1-routing.st")
                 .intentionTemplatePath("prompts/l1-intention.st")
                 .rejectedMessage("该理财功能暂不支持，目前仅支持理财咨询和理财产品解读")

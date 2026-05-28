@@ -13,12 +13,10 @@ import java.util.Map;
  * Graph执行服务 - 封装官方模式二: interruptBefore + updateState + resume
  *
  * 核心设计:
- * - threadId = sessionId（稳定，不随机生成，resume时复用同一checkpoint）
- * - executeGraph: 首次执行，stream(input, config)
- * - resumeGraph: 官方模式二，updateState + stream(null, updatedConfig)
- * - cancelGraph: 注入_cancelSignal后resume，子Graph自行清理并终止
- * - 不再传递accumulatedParams（checkpoint自动保留完整OverAllState）
- * - 不再传递threadId（由sessionId推导）
+ * - 每次新执行(executeGraph)由调用方传入独立threadId，不再用sessionId作为threadId
+ * - 这样同一会话下不同次执行有独立Checkpoint，避免历史脏数据自动合并
+ * - executeGraph: 首次执行，stream(input, config)，input含全局OverAllState数据
+ * - resumeGraph: updateState(globalStateData) + stream(null, updatedConfig)，globalStateData含全局OverAllState数据
  *
  * 关键注意事项:
  * - getState() 必须用原始config（只有threadId），不能用updateState返回的updatedConfig
@@ -29,9 +27,9 @@ import java.util.Map;
 @Service
 public class GraphExecutionEngine {
 
-    /** 生成 threadId = sessionId 的 config */
-    private RunnableConfig threadConfig(String sessionId) {
-        return RunnableConfig.builder().threadId(sessionId).build();
+    /** 生成包含 threadId 的 config */
+    private RunnableConfig threadConfig(String threadId) {
+        return RunnableConfig.builder().threadId(threadId).build();
     }
 
     /**
@@ -39,20 +37,15 @@ public class GraphExecutionEngine {
      *
      * @param graph 目标CompiledGraph
      * @param intent 意图名称
-     * @param userInput 用户输入
-     * @param sessionId 会话ID（= threadId）
+     * @param input 输入数据Map（由调用方构建，含messages、跨域数据等）
+     * @param threadId 线程ID（每次新执行唯一，不再用sessionId）
      */
     public WorkflowOutput executeGraph(CompiledGraph graph, String intent,
-                                       String userInput, String sessionId) {
+                                       Map<String, Object> input, String threadId) {
         try {
-            RunnableConfig config = threadConfig(sessionId);
+            RunnableConfig config = threadConfig(threadId);
 
-            Map<String, Object> input = new HashMap<>();
-            input.put("messages", userInput);
-            input.put("_latestUserInput", userInput);
-            input.put("_question", null);
-
-            log.info("[GraphExec] Executing graph: intent={}, sessionId={}, input={}", intent, sessionId, userInput);
+            log.info("[GraphExec] Executing graph: intent={}, threadId={}, inputKeys={}", intent, threadId, input.keySet());
 
             graph.stream(input, config).blockLast();
             return checkGraphResult(graph, config, intent);
@@ -67,26 +60,33 @@ public class GraphExecutionEngine {
      * 恢复执行Graph — 官方模式二: updateState + stream(null, updatedConfig)
      *
      * 流程:
-     * 1. config = threadConfig(sessionId) — threadId=sessionId，读该Graph的checkpoint
-     * 2. updateState(config, {_latestUserInput: userInput}, null) — 注入用户输入
+     * 1. config = threadConfig(threadId) — 用存储的threadId读取该Graph的checkpoint
+     * 2. updateState(config, {_globalStateData: globalStateData, _latestUserInput: userInput}, null)
      * 3. stream(null, updatedConfig) — 从中断点恢复执行
      * 4. checkGraphResult(graph, config, intent) — 用原始config读最新checkpoint
      *
      * @param graph 目标CompiledGraph
      * @param intent 意图名称
      * @param userInput 用户输入
-     * @param sessionId 会话ID（= threadId）
+     * @param threadId 线程ID（从ActiveAgentInfo/SuspendedInfo中取出）
+     * @param globalStateData 全局OverAllState数据（用 _globalStateData 一个key包住注入checkpoint）
      */
     public WorkflowOutput resumeGraph(CompiledGraph graph, String intent,
-                                      String userInput, String sessionId) {
+                                      String userInput, String threadId,
+                                      Map<String, Object> globalStateData) {
         try {
-            RunnableConfig config = threadConfig(sessionId);
+            RunnableConfig config = threadConfig(threadId);
 
-            log.info("[GraphExec] Resume graph: intent={}, sessionId={}, userInput={}", intent, sessionId, userInput);
+            log.info("[GraphExec] Resume graph: intent={}, threadId={}, userInput={}", intent, threadId, userInput);
 
-            // Step 1: updateState 注入用户输入
-            RunnableConfig updatedConfig = graph.updateState(
-                    config, Map.of("_latestUserInput", userInput), null);
+            // Step 1: updateState 注入全局数据(整体) + 用户输入
+            Map<String, Object> updateData = new HashMap<>();
+            if (globalStateData != null && !globalStateData.isEmpty()) {
+                updateData.put("_globalStateData", globalStateData);
+            }
+            updateData.put("_latestUserInput", userInput);
+
+            RunnableConfig updatedConfig = graph.updateState(config, updateData, null);
 
             // Step 2: stream(null, updatedConfig) 从中断点恢复
             graph.stream(null, updatedConfig).blockLast();
@@ -97,40 +97,6 @@ public class GraphExecutionEngine {
         } catch (Exception e) {
             log.error("[GraphExec] Resume graph failed", e);
             return WorkflowOutput.error("恢复执行出错: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 取消Graph执行 — 注入_cancelSignal后resume，子Graph自行清理并终止
-     *
-     * @param graph 目标CompiledGraph
-     * @param intent 意图名称
-     * @param sessionId 会话ID（= threadId）
-     */
-    public WorkflowOutput cancelGraph(CompiledGraph graph, String intent, String sessionId) {
-        if (graph == null) {
-            log.warn("[GraphExec.cancelGraph] Graph is null for intent={}", intent);
-            return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
-        }
-
-        try {
-            RunnableConfig config = threadConfig(sessionId);
-
-            Map<String, Object> updateData = new HashMap<>();
-            updateData.put("_latestUserInput", "取消");
-            updateData.put("_cancelSignal", true);
-
-            log.info("[GraphExec.cancelGraph] Cancel graph: intent={}, sessionId={}", intent, sessionId);
-
-            RunnableConfig updatedConfig = graph.updateState(config, updateData, null);
-            graph.stream(null, updatedConfig).blockLast();
-
-            log.info("[GraphExec.cancelGraph] Graph cancelled successfully: intent={}", intent);
-            return WorkflowOutput.completed(intent, "好的,已取消当前操作。还有什么可以帮您的吗？");
-
-        } catch (Exception e) {
-            log.error("[GraphExec.cancelGraph] Cancel graph failed", e);
-            return WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
         }
     }
 

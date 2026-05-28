@@ -146,13 +146,11 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
             if (productName != null && !productName.isEmpty()) {
                 result.put("wealthInterpret.productName", productName);
                 log.info("[WealthInterpretGraph.askProductName] Extracted productName={}", productName);
-            } else {
-                result.put("wealthInterpret.productName", userInput.trim());
-                log.info("[WealthInterpretGraph.askProductName] Fallback: using raw input as productName={}", userInput.trim());
             }
+            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
         } catch (Exception e) {
             log.error("[WealthInterpretGraph.askProductName] Extraction failed", e);
-            result.put("wealthInterpret.productName", userInput.trim());
+            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;

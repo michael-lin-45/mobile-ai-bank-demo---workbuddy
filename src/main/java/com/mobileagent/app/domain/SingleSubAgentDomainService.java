@@ -5,6 +5,7 @@ import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentRouter;
+import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -48,7 +49,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     private SingleSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.chatMemory,
                 builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
-                builder.activeAgentExpireMinutes);
+                builder.globalSessionStore, builder.activeAgentExpireMinutes);
         this.intent = builder.intent;
         this.intentDescription = builder.intentDescription;
         this.routingTemplatePath = builder.routingTemplatePath != null
@@ -74,6 +75,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         private IntentRouter intentRouter;
         private GraphExecutionEngine graphExecutionEngine;
         private IntentRegistry intentRegistry;
+        private GlobalSessionStore globalSessionStore;
         private long activeAgentExpireMinutes = 20;
 
         public Builder domainName(String domainName) { this.domainName = domainName; return this; }
@@ -87,6 +89,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         public Builder intentRouter(IntentRouter intentRouter) { this.intentRouter = intentRouter; return this; }
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
+        public Builder globalSessionStore(GlobalSessionStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
         public Builder activeAgentExpireMinutes(long activeAgentExpireMinutes) { this.activeAgentExpireMinutes = activeAgentExpireMinutes; return this; }
 
         public SingleSubAgentDomainService build() {
@@ -98,6 +101,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(intentRouter, "intentRouter is required");
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
             Objects.requireNonNull(intentRegistry, "intentRegistry is required");
+            Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
             // 预热模板: 构造时加载到缓存,运行时零IO
             String resolvedRoutingPath = routingTemplatePath != null ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
             String resolvedIntentionPath = intentionTemplatePath != null ? intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;

@@ -7,6 +7,7 @@ import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
+import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.Data;
@@ -31,10 +32,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * 4. Phase2: IntentResolver → RoutingResolution (RESOLVED/DISAMBIGUATION/REJECTED/CANCELLED)
  * 5. RESOLVED → executeRoute (auto-upgrade + handleSwitchNew/handleResume)
  *
- * 官方模式二简化:
- * - SuspendedInfo 只保留 intent + 时间戳（无threadId，无accumulatedParams）
- * - handleResume 用 GES.resumeGraph(graph, intent, userInput, sessionId) — 不传suspendedParams
- * - suspendOwnAgent 只需传 sessionId + intent
+ * 官方模式二 + threadId独立架构:
+ * - SuspendedInfo 保留 intent + threadId + 时间戳
+ * - handleResume 用 SuspendedInfo 中的 threadId 恢复（不再用sessionId）
+ * - handleSwitchNew 挂起当前 agent 时传递其 threadId
  *
  * Cancel:
  * - 不暴露cancel公共方法
@@ -69,11 +70,13 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     @Data
     public static class SuspendedInfo {
         private final String intent;
+        private final String threadId;
         private final Instant suspendedAt;
         private final Instant expiresAt;
 
-        public SuspendedInfo(String intent, Instant suspendedAt, Instant expiresAt) {
+        public SuspendedInfo(String intent, String threadId, Instant suspendedAt, Instant expiresAt) {
             this.intent = intent;
+            this.threadId = threadId;
             this.suspendedAt = suspendedAt;
             this.expiresAt = expiresAt;
         }
@@ -93,7 +96,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private MultiSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.chatMemory,
                 builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
-                builder.activeAgentExpireMinutes);
+                builder.globalSessionStore, builder.activeAgentExpireMinutes);
         this.intentResolver = builder.intentResolver;
         this.routingTemplatePath = builder.routingTemplatePath != null
                 ? builder.routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
@@ -119,6 +122,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         private IntentResolver intentResolver;
         private GraphExecutionEngine graphExecutionEngine;
         private IntentRegistry intentRegistry;
+        private GlobalSessionStore globalSessionStore;
         private String routingTemplatePath;
         private String intentionTemplatePath;
         private String rejectedMessage;
@@ -134,6 +138,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         public Builder intentResolver(IntentResolver intentResolver) { this.intentResolver = intentResolver; return this; }
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
+        public Builder globalSessionStore(GlobalSessionStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
         public Builder routingTemplatePath(String routingTemplatePath) { this.routingTemplatePath = routingTemplatePath; return this; }
         /** 意图识别模板路径(如"prompts/l1-intention.st")，默认使用通用模板 */
         public Builder intentionTemplatePath(String intentionTemplatePath) { this.intentionTemplatePath = intentionTemplatePath; return this; }
@@ -153,6 +158,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(intentResolver, "intentResolver is required");
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
             Objects.requireNonNull(intentRegistry, "intentRegistry is required");
+            Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
             // 预热模板: 构造时加载到缓存,运行时零IO
             String routingPath = routingTemplatePath != null
                     ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
@@ -166,7 +172,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     // ==================== suspendedAgents管理 ====================
 
-    private void suspendOwnAgent(String sessionId, String intent) {
+    private void suspendOwnAgent(String sessionId, String intent, String threadId) {
         Map<String, SuspendedInfo> sessionMap = suspendedAgents.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
 
         // 同一intent已挂起 → 无需重复挂起（checkpoint自动保留）
@@ -187,10 +193,10 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             }
         }
 
-        SuspendedInfo info = new SuspendedInfo(intent, Instant.now(),
+        SuspendedInfo info = new SuspendedInfo(intent, threadId, Instant.now(),
                 Instant.now().plusSeconds(suspendedExpireMinutes * 60));
         sessionMap.put(intent, info);
-        log.debug("[{}] Suspended agent: session={}, intent={}", logTag, sessionId, intent);
+        log.debug("[{}] Suspended agent: session={}, intent={}, threadId={}", logTag, sessionId, intent, threadId);
     }
 
     private SuspendedInfo getOwnSuspendedAgent(String sessionId, String intent) {
@@ -369,9 +375,9 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 case DISAMBIGUATION -> {
                     ActiveAgentInfo active = getOwnActiveAgent(sessionId);
                     if (active != null) {
-                        suspendOwnAgent(sessionId, active.getIntent());
+                        suspendOwnAgent(sessionId, active.getIntent(), active.getThreadId());
                         clearOwnActiveAgent(sessionId);
-                        log.info("[{}] Disambiguation: suspended own activeAgent intent={}", logTag, active.getIntent());
+                        log.info("[{}] Disambiguation: suspended own activeAgent intent={}, threadId={}", logTag, active.getIntent(), active.getThreadId());
                     }
                     String groupId = resolveGroupId(resolution);
                     if (groupId != null) {
@@ -414,16 +420,14 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private WorkflowOutput handleSwitchNew(String sessionId, String intent, String rewrittenInput) {
         ActiveAgentInfo currentActive = getOwnActiveAgent(sessionId);
         if (currentActive != null) {
-            suspendOwnAgent(sessionId, currentActive.getIntent());
-            log.info("[{}] Suspended current: intent={}", logTag, currentActive.getIntent());
+            suspendOwnAgent(sessionId, currentActive.getIntent(), currentActive.getThreadId());
+            log.info("[{}] Suspended current: intent={}, threadId={}", logTag, currentActive.getIntent(), currentActive.getThreadId());
         }
         return executeNewAgent(sessionId, intent, rewrittenInput);
     }
 
     /**
-     * 恢复挂起的意图 — 官方模式二: GES.resumeGraph(graph, intent, userInput, sessionId)
-     *
-     * 简化: 不再从SuspendedInfo取accumulatedParams，checkpoint自动保留
+     * 恢复挂起的意图 — 用SuspendedInfo中存储的threadId恢复，注入全局OverAllState数据
      */
     private WorkflowOutput handleResume(String sessionId, String intent, String userInput) {
         SuspendedInfo suspendedInfo = getOwnSuspendedAgent(sessionId, intent);
@@ -434,23 +438,28 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
         ActiveAgentInfo currentActive = getOwnActiveAgent(sessionId);
         if (currentActive != null && !currentActive.getIntent().equals(suspendedInfo.getIntent())) {
-            suspendOwnAgent(sessionId, currentActive.getIntent());
+            suspendOwnAgent(sessionId, currentActive.getIntent(), currentActive.getThreadId());
         }
 
         resumeOwnAgent(sessionId, intent);
 
-        log.info("[{}] RESUME with checkpoint: intent={}", logTag, intent);
+        String threadId = suspendedInfo.getThreadId();
+        log.info("[{}] RESUME with checkpoint: intent={}, threadId={}", logTag, intent, threadId);
 
-        // 获取graph并设置activeAgent
+        // 获取graph并设置activeAgent（保留原threadId）
         var graph = intentRegistry.getGraph(intent);
         if (graph == null) {
             return WorkflowOutput.error("Graph not found for intent: " + intent);
         }
 
-        setOwnActiveAgent(sessionId, intent);
+        setOwnActiveAgent(sessionId, intent, threadId);
 
-        // 官方模式二: updateState + stream(null, config)
-        WorkflowOutput result = graphExecutionEngine.resumeGraph(graph, intent, userInput, sessionId);
+        // 注入当前Session的全局OverAllState数据
+        Map<String, Object> globalStateData = globalSessionStore.getOrCreate(sessionId).data();
+
+        // 用存储的threadId恢复，注入全局数据
+        WorkflowOutput result = graphExecutionEngine.resumeGraph(graph, intent, userInput, threadId, globalStateData);
+
         saveL2Result(sessionId, result);
 
         if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {

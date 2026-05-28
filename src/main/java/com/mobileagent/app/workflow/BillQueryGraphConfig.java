@@ -155,13 +155,11 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
             if (timePeriod != null && !timePeriod.isEmpty()) {
                 result.put("bill.timePeriod", timePeriod);
                 log.info("[BillQueryGraph.askTime] Extracted timePeriod={}", timePeriod);
-            } else {
-                result.put("bill.timePeriod", userInput.trim());
-                log.info("[BillQueryGraph.askTime] Fallback: using raw input as timePeriod={}", userInput.trim());
             }
+            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
         } catch (Exception e) {
             log.error("[BillQueryGraph.askTime] Extraction failed", e);
-            result.put("bill.timePeriod", userInput.trim());
+            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;
@@ -183,13 +181,11 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
             if (expenseType != null && !expenseType.isEmpty()) {
                 result.put("bill.expenseType", expenseType);
                 log.info("[BillQueryGraph.askType] Extracted expenseType={}", expenseType);
-            } else {
-                result.put("bill.expenseType", userInput.trim());
-                log.info("[BillQueryGraph.askType] Fallback: using raw input as expenseType={}", userInput.trim());
             }
+            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
         } catch (Exception e) {
             log.error("[BillQueryGraph.askType] Extraction failed", e);
-            result.put("bill.expenseType", userInput.trim());
+            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;

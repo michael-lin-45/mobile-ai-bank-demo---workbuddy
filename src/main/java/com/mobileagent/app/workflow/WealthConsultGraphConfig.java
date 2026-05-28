@@ -156,10 +156,8 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
             if (riskLevel != null && !riskLevel.isEmpty()) {
                 result.put("wealthConsult.riskLevel", riskLevel);
                 log.info("[WealthConsultGraph.askRiskLevel] Extracted riskLevel={}", riskLevel);
-            } else {
-                result.put("wealthConsult.riskLevel", normalizeRiskLevel(userInput.trim()));
-                log.info("[WealthConsultGraph.askRiskLevel] Fallback: normalized riskLevel={}", userInput.trim());
             }
+            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
             String focusArea = (String) extracted.get("wealthConsult.focusArea");
             if (focusArea != null && !focusArea.isEmpty()) {
                 result.put("wealthConsult.focusArea", focusArea);
@@ -167,7 +165,7 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
             }
         } catch (Exception e) {
             log.error("[WealthConsultGraph.askRiskLevel] Extraction failed", e);
-            result.put("wealthConsult.riskLevel", normalizeRiskLevel(userInput.trim()));
+            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;
@@ -189,13 +187,11 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
             if (focusArea != null && !focusArea.isEmpty()) {
                 result.put("wealthConsult.focusArea", focusArea);
                 log.info("[WealthConsultGraph.askFocusArea] Extracted focusArea={}", focusArea);
-            } else {
-                result.put("wealthConsult.focusArea", normalizeFocusArea(userInput.trim()));
-                log.info("[WealthConsultGraph.askFocusArea] Fallback: normalized focusArea={}", userInput.trim());
             }
+            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
         } catch (Exception e) {
             log.error("[WealthConsultGraph.askFocusArea] Extraction failed", e);
-            result.put("wealthConsult.focusArea", normalizeFocusArea(userInput.trim()));
+            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;
@@ -277,7 +273,8 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         if (lower.contains("激进") || lower.contains("高风险") || lower.contains("进取")) return "激进";
         if (lower.contains("保守") || lower.contains("低风险") || lower.contains("稳健保守")) return "保守";
         if (lower.contains("稳健") || lower.contains("中等") || lower.contains("平衡")) return "稳健";
-        return "稳健";
+        // 无法映射时不猜测,返回null让paramRouter继续追问
+        return null;
     }
 
     private String normalizeFocusArea(String input) {
@@ -294,6 +291,10 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         if (input.contains("制造") || input.contains("工厂")) return "工业";
         if (input.contains("食品") || input.contains("餐饮") || input.contains("消费")) return "饮食";
         if (input.contains("影视") || input.contains("游戏") || input.contains("传媒")) return "娱乐";
-        return "全部";
+        // 用户明确表示不限定领域
+        if (input.contains("未指定") || input.contains("随便") || input.contains("都行")
+                || input.contains("不限") || input.contains("无所谓") || input.contains("都可以")) return "全部";
+        // 无法映射时不猜测,返回null让paramRouter继续追问
+        return null;
     }
 }

@@ -1,8 +1,10 @@
 package com.mobileagent.app.domain;
 
+import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.data.WorkflowStatus;
+import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
@@ -13,19 +15,20 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.UserMessage;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * L1领域服务抽象基类 - 提取Single/Multi共性的状态管理和工具方法
  *
- * 核心设计（官方模式二）:
- * - threadId = sessionId（GES推导，L1不传递）
- * - accumulatedParams 不再需要在L1层保存（checkpoint自动保留完整OverAllState）
- * - ActiveAgentInfo 只保留 intent + lastQuestion
- * - resumeActiveAgent: 调用GES.resumeGraph(graph, intent, userInput, sessionId)
- * - executeNewAgent: 调用GES.executeGraph(graph, intent, rewrittenInput, sessionId)
+ * 核心设计（threadId独立架构 + 全局OverAllState注入）:
+ * - 每次新执行(SWITCH/首次)生成独立threadId: sessionId + "-" + intent + "-" + hexSuffix
+ * - ActiveAgentInfo/SuspendedInfo存储各自的threadId，resume时从存储中取出
+ * - L1每次调用L2时(execute/resume)，将当前Session的GlobalSessionContext.data()注入L2
+ * - L2图的KeyStrategyFactory作为白名单，"想用就用，不想用不用"
  *
  * 不共性的逻辑(由子类实现):
  * - handle(): 控制流完全不同,各自实现
@@ -46,6 +49,7 @@ public abstract class AbstractDomainService implements DomainHandler {
     protected final ContextRouter contextRouter;
     protected final GraphExecutionEngine graphExecutionEngine;
     protected final IntentRegistry intentRegistry;
+    protected final GlobalSessionStore globalSessionStore;
 
     // ==================== 共享状态 ====================
 
@@ -60,13 +64,15 @@ public abstract class AbstractDomainService implements DomainHandler {
     @Data
     public static class ActiveAgentInfo {
         private final String intent;
+        private final String threadId;
         private final Instant createdAt;
         private final Instant expiresAt;
         /** L2子智能体最后的提问(INTERRUPTED时设置,COMPLETED时清空) */
         private String lastQuestion;
 
-        public ActiveAgentInfo(String intent, Instant createdAt, Instant expiresAt) {
+        public ActiveAgentInfo(String intent, String threadId, Instant createdAt, Instant expiresAt) {
             this.intent = intent;
+            this.threadId = threadId;
             this.createdAt = createdAt;
             this.expiresAt = expiresAt;
         }
@@ -100,6 +106,7 @@ public abstract class AbstractDomainService implements DomainHandler {
                                     ContextRouter contextRouter,
                                     GraphExecutionEngine graphExecutionEngine,
                                     IntentRegistry intentRegistry,
+                                    GlobalSessionStore globalSessionStore,
                                     long activeAgentExpireMinutes) {
         this.domainName = domainName;
         this.logTag = logTag;
@@ -107,6 +114,7 @@ public abstract class AbstractDomainService implements DomainHandler {
         this.contextRouter = contextRouter;
         this.graphExecutionEngine = graphExecutionEngine;
         this.intentRegistry = intentRegistry;
+        this.globalSessionStore = globalSessionStore;
         this.activeAgentExpireMinutes = activeAgentExpireMinutes;
     }
 
@@ -123,13 +131,13 @@ public abstract class AbstractDomainService implements DomainHandler {
         return info;
     }
 
-    protected void setOwnActiveAgent(String sessionId, String intent) {
+    protected void setOwnActiveAgent(String sessionId, String intent, String threadId) {
         if (intent == null) {
             activeAgents.remove(sessionId);
         } else {
             Instant now = Instant.now();
             Instant expiresAt = now.plusSeconds(activeAgentExpireMinutes * 60);
-            activeAgents.put(sessionId, new ActiveAgentInfo(intent, now, expiresAt));
+            activeAgents.put(sessionId, new ActiveAgentInfo(intent, threadId, now, expiresAt));
         }
     }
 
@@ -165,7 +173,7 @@ public abstract class AbstractDomainService implements DomainHandler {
     /**
      * 从WorkflowOutput中保存lastQuestion到自有activeAgent
      *
-     * 简化（官方模式二）: 不再保存accumulatedParams（checkpoint自动保留）
+     * 不再保存accumulatedParams（checkpoint自动保留）
      */
     protected void saveL2Result(String sessionId, WorkflowOutput output) {
         if (output == null) return;
@@ -183,6 +191,17 @@ public abstract class AbstractDomainService implements DomainHandler {
     // ==================== 工具方法 ====================
 
     /**
+     * 生成唯一threadId: sessionId + "-" + intent + "-" + hexSuffix
+     *
+     * 每次新执行(SWITCH/首次)生成独立threadId，避免同sessionId下
+     * Checkpoint自动合并历史脏数据的问题。
+     */
+    protected String generateThreadId(String sessionId, String intent) {
+        String suffix = Integer.toHexString(ThreadLocalRandom.current().nextInt(0x1000000));
+        return sessionId + "-" + intent + "-" + suffix;
+    }
+
+    /**
      * 构建当前活跃意图字符串(供ContextRouter prompt用)
      */
     protected String buildCurrentAgent(String sessionId) {
@@ -193,17 +212,17 @@ public abstract class AbstractDomainService implements DomainHandler {
     // ==================== 共享流程方法 ====================
 
     /**
-     * FOLLOW + activeAgent → resumeGraph模式（官方模式二）
-     *
-     * Single和Multi都有这个分支，逻辑完全一致:
-     * 1. addUserMessage
-     * 2. resumeGraph(graph, intent, userInput, sessionId) — 不传accumulatedParams
-     * 3. saveL2Result
-     * 4. recordSystemReply
-     * 5. COMPLETED → clearActiveAgent
-     */
+      * FOLLOW + activeAgent → resumeGraph模式（threadId独立架构 + 全局OverAllState注入）
+      *
+      * Single和Multi都有这个分支，逻辑完全一致:
+      * 1. addUserMessage
+      * 2. resumeGraph(graph, intent, userInput, threadId, globalStateData) — 注入全局数据
+      * 3. saveL2Result
+      * 4. recordSystemReply
+      * 5. COMPLETED → clearActiveAgent
+      */
     protected WorkflowOutput resumeActiveAgent(String sessionId, String userInput, ActiveAgentInfo active) {
-        log.info("[{}] FOLLOW with own activeAgent: intent={}", logTag, active.getIntent());
+        log.info("[{}] FOLLOW with own activeAgent: intent={}, threadId={}", logTag, active.getIntent(), active.getThreadId());
         addUserMessage(sessionId, userInput);
 
         var graph = intentRegistry.getGraph(active.getIntent());
@@ -211,8 +230,13 @@ public abstract class AbstractDomainService implements DomainHandler {
             return WorkflowOutput.error("Graph not found for intent: " + active.getIntent());
         }
 
+        // 注入当前Session的全局OverAllState数据
+        Map<String, Object> globalStateData = globalSessionStore.getOrCreate(sessionId).data();
+
+        // 用存储的threadId恢复，注入全局数据
         WorkflowOutput resumeResult = graphExecutionEngine.resumeGraph(
-                graph, active.getIntent(), userInput, sessionId);
+                graph, active.getIntent(), userInput, active.getThreadId(), globalStateData);
+
         saveL2Result(sessionId, resumeResult);
         recordSystemReply(sessionId, resumeResult);
 
@@ -224,31 +248,42 @@ public abstract class AbstractDomainService implements DomainHandler {
     }
 
     /**
-     * 新建agent执行Graph模式 (handleSwitchNew的核心)
-     *
-     * Single和Multi都有这个逻辑:
-     * 1. 取Graph
-     * 2. setActiveAgent
-     * 3. executeGraph
-     * 4. saveL2Result
-     * 5. COMPLETED → clearActiveAgent
-     *
-     * 注意: suspend当前agent的逻辑由子类在调用前处理(Single不suspend, Multi先suspend再调用)
-     *
-     * @param sessionId 会话ID
-     * @param intent 意图名(Single为固定值, Multi为动态值)
-     * @param rewrittenInput 改写后的输入
-     * @return 执行结果
-     */
+      * 新建agent执行Graph模式 (handleSwitchNew的核心)
+      *
+      * threadId独立架构 + 全局OverAllState注入:
+      * 1. 生成独立threadId（避免Checkpoint脏数据自动合并）
+      * 2. 构建input Map（基础输入 + GlobalSessionContext.data()）
+      * 3. 取Graph
+      * 4. setActiveAgent(sessionId, intent, threadId)
+      * 5. executeGraph(graph, intent, input, threadId)
+      * 6. saveL2Result
+      * 7. COMPLETED → clearActiveAgent
+      *
+      * 注意: suspend当前agent的逻辑由子类在调用前处理(Single不suspend, Multi先suspend再调用)
+      *
+      * @param sessionId 会话ID
+      * @param intent 意图名(Single为固定值, Multi为动态值)
+      * @param rewrittenInput 改写后的输入
+      * @return 执行结果
+      */
     protected WorkflowOutput executeNewAgent(String sessionId, String intent, String rewrittenInput) {
         var graph = intentRegistry.getGraph(intent);
         if (graph == null) {
             return WorkflowOutput.error("Graph not found for intent: " + intent);
         }
 
-        setOwnActiveAgent(sessionId, intent);
+        // 1. 生成独立threadId
+        String threadId = generateThreadId(sessionId, intent);
 
-        WorkflowOutput result = graphExecutionEngine.executeGraph(graph, intent, rewrittenInput, sessionId);
+        // 2. 构建input Map（含全局OverAllState注入）
+        Map<String, Object> input = buildGraphInput(sessionId, rewrittenInput);
+
+        // 3. 设置activeAgent（含threadId）
+        setOwnActiveAgent(sessionId, intent, threadId);
+
+        // 4. 用独立threadId执行Graph
+        WorkflowOutput result = graphExecutionEngine.executeGraph(graph, intent, input, threadId);
+
         saveL2Result(sessionId, result);
 
         if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {
@@ -256,6 +291,28 @@ public abstract class AbstractDomainService implements DomainHandler {
         }
 
         return result;
+    }
+
+    /**
+     * 构建L2子图的input Map
+     *
+     * 包含基础输入 + 全局OverAllState数据（用 _globalStateData 一个key包住，不打散）。
+     * L2图通过 state.value("_globalStateData") 获取整个Map，自己决定怎么用。
+     */
+    private Map<String, Object> buildGraphInput(String sessionId, String rewrittenInput) {
+        Map<String, Object> input = new HashMap<>();
+        input.put("messages", rewrittenInput);
+        input.put("_latestUserInput", rewrittenInput);
+        input.put("_question", null);
+
+        // 全局OverAllState数据作为一个整体注入，L2图自己决定怎么用
+        Map<String, Object> globalData = globalSessionStore.getOrCreate(sessionId).data();
+        if (globalData != null && !globalData.isEmpty()) {
+            input.put("_globalStateData", globalData);
+            log.debug("[{}] Injected global OverAllState data: keys={}", logTag, globalData.keySet());
+        }
+
+        return input;
     }
 
     // ==================== 抽象方法 ====================

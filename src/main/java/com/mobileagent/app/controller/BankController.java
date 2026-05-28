@@ -2,6 +2,7 @@ package com.mobileagent.app.controller;
 
 import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.domain.DomainHandler;
+import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.router.DomainServiceRegistry;
 import com.mobileagent.app.router.DomainRouter;
 import com.mobileagent.app.data.WorkflowOutput;
@@ -51,15 +52,18 @@ public class BankController {
     private final DomainRouter domainRouter;
     private final DomainServiceRegistry domainServiceRegistry;
     private final ChatMemory chatMemory;
+    private final GlobalSessionStore globalSessionStore;
     private final int globalContextMaxPairs;
 
     public BankController(DomainRouter domainRouter,
                           DomainServiceRegistry domainServiceRegistry,
                           ChatMemory chatMemory,
+                          GlobalSessionStore globalSessionStore,
                           @org.springframework.beans.factory.annotation.Value("${routing.history.global-context-max-pairs:10}") int globalContextMaxPairs) {
         this.domainRouter = domainRouter;
         this.domainServiceRegistry = domainServiceRegistry;
         this.chatMemory = chatMemory;
+        this.globalSessionStore = globalSessionStore;
         this.globalContextMaxPairs = globalContextMaxPairs;
     }
 
@@ -190,6 +194,7 @@ public class BankController {
         }
         domainRouter.clearLastDomain(sessionId);
         chatMemory.clear(sessionId);
+        globalSessionStore.clearSession(sessionId);
         return Map.of("status", "cleared", "sessionId", sessionId);
     }
 

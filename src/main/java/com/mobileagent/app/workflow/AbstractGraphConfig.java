@@ -337,7 +337,7 @@ public abstract class AbstractGraphConfig {
      *   }
      *
      * 检测逻辑 (分层优化):
-     * 1. 检查_cancelSignal信号(由cancelGraph()注入)
+     * 1. 检查_cancelSignal信号(由L1注入)
      * 2. 关键字匹配 (0ms) - 常见取消表达直接命中
      * 3. LLM判断 (200-500ms) - 关键字未命中时的兜底
      *
@@ -379,7 +379,7 @@ public abstract class AbstractGraphConfig {
      * 带取消检查的ask节点 - 由askNode()内部调用, 子类不再需要手动调用
      *
      * 检测逻辑:
-     * 1. 检查_cancelSignal信号(由cancelGraph()注入)
+     * 1. 检查_cancelSignal信号(由L1注入)
      * 2. 关键字+LLM检测用户输入中的取消意图(ask节点在清空_latestUserInput前检测)
      *
      * @return 非null表示检测到取消, null表示正常执行
@@ -485,6 +485,7 @@ public abstract class AbstractGraphConfig {
             strategies.put("_outputType", new ReplaceStrategy());
             strategies.put("_isFinal", new ReplaceStrategy());
             strategies.put("_cancelSignal", new ReplaceStrategy());
+            strategies.put("_globalStateData", new ReplaceStrategy());
             // 子类自定义keys
             registerCustomKeys(strategies);
             return strategies;

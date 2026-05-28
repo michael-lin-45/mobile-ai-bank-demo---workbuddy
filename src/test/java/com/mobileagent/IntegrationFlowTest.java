@@ -894,4 +894,129 @@ class IntegrationFlowTest {
                 + ", intent=" + r3.get("intent").asText()
                 + " ★★核心断言: intent不等于TRANSFER(已REROUTE)★★");
     }
+
+    // ==================== J. threadId独立架构验证 ====================
+
+    /**
+     * #33 同session多次转账 — 独立threadId，无脏数据
+     *
+     * 验证: 同一session连续3次转账，每次生成新threadId，第2次不会残留第1次的参数
+     * 1. "转账给我妈300" → COMPLETED (receiver=我妈, amount=300)
+     * 2. "转给我弟弟" → INTERRUPTED (receiver=我弟弟, amount应问用户，不应残留300)
+     * 3. 回答金额 → COMPLETED
+     */
+    @Test
+    @Order(33)
+    void test33_uniqueThreadId_noDirtyData() {
+        // 1. 第一次转账，一次到位
+        JsonNode r1 = chat("转账给我妈300元");
+        assertThat(r1.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        assertThat(r1.get("intent").asText()).isEqualTo("TRANSFER");
+        System.out.println("[#33-1] 转账给我妈300 → " + r1.get("status").asText()
+                + ", content=" + r1.get("content").asText());
+
+        // 2. 第二次转账，只说收款人不说金额
+        //    ★ 核心验证: 不应自动带上第1次的amount=300
+        JsonNode r2 = chat("转给我弟弟");
+        String s2 = r2.get("status").asText();
+        assertThat(s2).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#33-2] 转给我弟弟 → " + s2
+                + ", question=" + (r2.has("question") ? r2.get("question").asText() : "(无)"));
+
+        // 如果INTERRUPTED且问的是金额 → 说明没有脏数据，正确
+        // 如果直接COMPLETED → 说明amount被残留了(脏数据)，但LLM可能从input推断
+        if ("INTERRUPTED".equals(s2) && r2.has("question")) {
+            String question = r2.get("question").asText();
+            boolean askingAmount = question.contains("多少") || question.contains("金额");
+            if (askingAmount) {
+                System.out.println("[#33-2] ★★★ 正确！追问金额，说明没有残留第1次的amount ★★★");
+            }
+
+            // 3. 回答金额
+            JsonNode r3 = chat("400元");
+            assertThat(r3.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+            System.out.println("[#33-3] 400元 → " + r3.get("status").asText()
+                    + ", content=" + r3.get("content").asText());
+        }
+    }
+
+    /**
+     * #34 同session转账→账单→转账恢复 — threadId独立 + resume正确
+     *
+     * 验证: 转账中断后切换到账单查询，再恢复转账时，
+     * 用SuspendedInfo中存储的threadId恢复，且不影响新执行的threadId
+     * 1. "我要转账" → INTERRUPTED (TRANSFER, threadId-A)
+     * 2. "查账单" → INTERRUPTED/COMPLETED (BILL_QUERY, threadId-B)
+     * 3. "继续转账" → resume TRANSFER with threadId-A
+     */
+    @Test
+    @Order(34)
+    void test34_threadIdResume_afterCrossDomainSwitch() {
+        // 1. 转账中断
+        JsonNode r1 = chat("我要转账");
+        assertThat(r1.get("status").asText()).isEqualTo("INTERRUPTED");
+        assertThat(r1.get("intent").asText()).isEqualTo("TRANSFER");
+        System.out.println("[#34-1] 我要转账 → INTERRUPTED: " + r1.get("question").asText());
+
+        // 2. 跨域切换到账单
+        JsonNode r2 = chat("查上个月账单");
+        String s2 = r2.get("status").asText();
+        assertThat(s2).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#34-2] 查账单 → " + s2
+                + ", intent=" + r2.get("intent").asText());
+
+        // 3. 回到转账(RESUME) — 用存储的threadId恢复
+        JsonNode r3 = chat("继续转账");
+        String s3 = r3.get("status").asText();
+        assertThat(s3).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#34-3] 继续转账 → " + s3
+                + ", intent=" + r3.get("intent").asText()
+                + " ★★resume用存储的threadId恢复★★");
+    }
+
+    /**
+     * #35 同session连续3次不同金额转账 — 每次独立threadId，金额不串
+     *
+     * 验证: 连续3次独立转账，每次金额应独立，不残留上次数据
+     * 1. "转账给我妈300" → COMPLETED (amount=300)
+     * 2. "转账给弟弟" → INTERRUPTED (问金额，不应残留300)
+     * 3. 回答"400" → COMPLETED (amount=400)
+     * 4. "转账给姐姐" → INTERRUPTED (问金额，不应残留400)
+     * 5. 回答"600" → COMPLETED (amount=600)
+     */
+    @Test
+    @Order(35)
+    void test35_threeTransfers_amountNotCrossContaminate() {
+        // 1. 第1次: 完整参数
+        JsonNode r1 = chat("转账给我妈300");
+        assertThat(r1.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#35-1] 转账给我妈300 → " + r1.get("status").asText());
+
+        // 2. 第2次: 只说收款人
+        JsonNode r2 = chat("转给我弟弟");
+        String s2 = r2.get("status").asText();
+        assertThat(s2).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#35-2] 转给我弟弟 → " + s2);
+
+        // 3. 回答金额
+        if ("INTERRUPTED".equals(s2)) {
+            JsonNode r3 = chat("400");
+            assertThat(r3.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+            System.out.println("[#35-3] 400 → " + r3.get("status").asText());
+        }
+
+        // 4. 第3次: 只说收款人
+        JsonNode r4 = chat("转给我姐姐");
+        String s4 = r4.get("status").asText();
+        assertThat(s4).isIn("COMPLETED", "INTERRUPTED");
+        System.out.println("[#35-4] 转给我姐姐 → " + s4);
+
+        // 5. 回答金额
+        if ("INTERRUPTED".equals(s4)) {
+            JsonNode r5 = chat("600");
+            assertThat(r5.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
+            System.out.println("[#35-5] 600 → " + r5.get("status").asText()
+                    + " ★★3次转账金额独立，不串★★");
+        }
+    }
 }

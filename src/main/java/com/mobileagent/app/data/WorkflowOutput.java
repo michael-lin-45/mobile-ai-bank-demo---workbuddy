@@ -9,10 +9,6 @@ import java.util.List;
  * Graph执行结果DTO - Controller返回给前端的统一响应格式
  *
  * 状态类型: 见 {@link WorkflowStatus}
- *
- * 核心简化（官方模式二）:
- * - 删除 threadId: threadId = sessionId，调用方已有，无需传递
- * - 删除 accumulatedParams: checkpoint 自动保留完整 OverAllState，无需手动传递
  */
 @Data
 @Builder

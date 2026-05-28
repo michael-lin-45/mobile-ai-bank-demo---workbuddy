@@ -69,7 +69,12 @@
      d) 用户意图不属于本领域任何子智能体的scope范围
    - 无法确定时 → belongs_to_domain=true (保守策略，宁可不REROUTE也不误杀)
 
-4. 歧义检测: 如果用户输入只能匹配到意图组级别，标记is_ambiguous=true
+4. 歧义检测(必须严格执行):
+   - 如果用户输入只能匹配到意图组级别(如"看看理财"可匹配推荐或解读)，标记is_ambiguous=true
+   - 关键原则: 用户输入不包含区分组内意图的明确信号时，必须标ambiguous，不要替用户选一个
+   - 例: "看看理财""理财""想了解理财" → 只匹配到WEALTH组 → is_ambiguous=true, candidate_intents=["WEALTH_CONSULT","WEALTH_INTERPRET"]
+   - 例: "推荐理财""帮我选理财" → 明确指向CONSULT → is_ambiguous=false
+   - 例: "解读朝朝盈" → 明确指向INTERPRET → is_ambiguous=false
 
 5. 路由判断: 意图在挂起列表中→RESUME，否则→SWITCH
 

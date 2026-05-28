@@ -158,13 +158,11 @@ public class TransferGraphConfig extends AbstractGraphConfig {
             if (receiver != null && !receiver.isEmpty()) {
                 result.put("transfer.receiver", receiver);
                 log.info("[TransferGraph.askReceiver] Extracted receiver={}", receiver);
-            } else {
-                result.put("transfer.receiver", userInput.trim());
-                log.info("[TransferGraph.askReceiver] Fallback: using raw input as receiver={}", userInput.trim());
             }
+            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
         } catch (Exception e) {
             log.error("[TransferGraph.askReceiver] Extraction failed", e);
-            result.put("transfer.receiver", userInput.trim());
+            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;

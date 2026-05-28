@@ -39,6 +39,7 @@ public class AppInitConfig {
         intentRegistry.bindGraph("BILL_QUERY", billQueryGraph);
         intentRegistry.bindGraph("WEALTH_CONSULT", wealthConsultGraph);
         intentRegistry.bindGraph("WEALTH_INTERPRET", wealthInterpretGraph);
-        log.info("[AppInitConfig] All graphs bound to IntentRegistry: TRANSFER, BILL_QUERY, WEALTH_CONSULT, WEALTH_INTERPRET");
+
+        log.info("[AppInitConfig] All graphs bound to IntentRegistry");
     }
 }
