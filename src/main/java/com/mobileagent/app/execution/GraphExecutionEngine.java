@@ -101,6 +101,26 @@ public class GraphExecutionEngine {
     }
 
     /**
+     * 清理已完成Graph的checkpoint — 防止OverAllState垃圾堆积
+     *
+     * 只在Graph正常完成后调用(INTERRUPTED不能清理,需要保留给resume)。
+     * 通过 CompiledGraph.compileConfig.checkpointSaver().release(config) 释放该threadId下的所有checkpoint。
+     */
+    private void clearCheckpoint(CompiledGraph graph, RunnableConfig config, String intent) {
+        try {
+            var saverOpt = graph.compileConfig.checkpointSaver();
+            if (saverOpt.isPresent()) {
+                var tag = saverOpt.get().release(config);
+                log.info("[GraphExec] Checkpoint cleared: intent={}, threadId={}, checkpointsRemoved={}",
+                        intent, tag.threadId(), tag.checkpoints().size());
+            }
+        } catch (Exception e) {
+            // 清理失败不影响主流程,只记录警告
+            log.warn("[GraphExec] Failed to clear checkpoint: intent={}, error={}", intent, e.getMessage());
+        }
+    }
+
+    /**
      * 检查Graph执行结果 — 区分正常完成和中断
      *
      * 中断来源:
@@ -139,12 +159,14 @@ public class GraphExecutionEngine {
                 return WorkflowOutput.interrupted(intent, question);
             }
 
-            // 正常完成
+            // 正常完成 — 清理checkpoint,防止OverAllState垃圾堆积
             String content = currentState != null
                     ? (String) currentState.value("_outputContent").orElse("操作已完成")
                     : "操作已完成";
 
             log.info("[GraphExec] Graph completed: content={}", content);
+            clearCheckpoint(graph, config, intent);
+
             return WorkflowOutput.completed(intent, content);
 
         } catch (Exception e) {
