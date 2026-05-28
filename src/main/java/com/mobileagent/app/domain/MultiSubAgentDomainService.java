@@ -320,10 +320,12 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             String disambigGroupId = disambigState != null ? disambigState.getGroupId() : null;
             String domainIntentScopeList = intentRegistry.getDomainIntentScopeDescription(
                     handledIntents.stream().map(IntentInfo::getIntentName).toList());
+
             RoutingResolution resolution = intentResolver.resolve(sessionId, userInput, phase1, chatMemory,
                     isInDisambiguation(sessionId), disambigGroupId,
                     hasOwnSuspendedAgents(sessionId), getAllOwnSuspended(sessionId),
                     intentionTemplatePath, globalChatHistory, domainIntentScopeList);
+
             log.info("[{}] Routing resolution: status={}, intent={}, outOfDomain={}, globalChatHistory=[{}]",
                     logTag, resolution.getStatus(), resolution.getIntentName(), resolution.isOutOfDomain(),
                     globalChatHistory != null && !globalChatHistory.isBlank() ? globalChatHistory.substring(0, Math.min(200, globalChatHistory.length())) + "..." : "(空)");
