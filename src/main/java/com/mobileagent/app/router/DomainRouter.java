@@ -1,9 +1,12 @@
 package com.mobileagent.app.router;
 
 import com.mobileagent.app.config.RoutingProperties;
+import com.mobileagent.app.memory.SessionStateStore;
+import com.mobileagent.app.memory.SessionStateStoreConfig;
 import com.mobileagent.app.util.ChatHistoryUtils;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -39,6 +42,9 @@ public class DomainRouter {
     /** UNSUPPORTED领域名(特殊处理: 提取具体功能名) */
     private static final String UNSUPPORTED_DOMAIN = "UNSUPPORTED";
 
+    /** lastActiveDomain命名空间 */
+    private static final String LAST_DOMAIN_NS = "last-domains";
+
     // ==================== 实例字段 ====================
 
     private final ChatClient domainChatClient;
@@ -47,14 +53,15 @@ public class DomainRouter {
     private final int judgmentMaxPairs;
     private final long lastDomainExpireMinutes;
 
-    /** L0自有状态: 最近活跃领域 (sessionId → LastDomainEntry) */
-    private final Map<String, LastDomainEntry> lastActiveDomains = new ConcurrentHashMap<>();
+    /** L0自有状态: 最近活跃领域 (sessionId → LastDomainEntry) — 通过SessionStateStore抽象 */
+    private final SessionStateStore<LastDomainEntry> lastDomainStore;
 
     // ==================== 构造 ====================
 
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
                         ChatMemory chatMemory,
                         RoutingProperties routingProperties,
+                        SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
                         @org.springframework.beans.factory.annotation.Value("${routing.history.global-context-max-pairs:10}") int judgmentMaxPairs,
                         @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes) {
         this.domainChatClient = domainChatClient;
@@ -62,6 +69,7 @@ public class DomainRouter {
         this.objectMapper = new ObjectMapper();
         this.judgmentMaxPairs = judgmentMaxPairs;
         this.lastDomainExpireMinutes = lastDomainExpireMinutes;
+        this.lastDomainStore = storeFactory.create(LAST_DOMAIN_NS, new TypeReference<LastDomainEntry>() {});
 
         // 从配置加载领域关键词
         Map<String, Set<String>> keywords = new LinkedHashMap<>();
@@ -80,8 +88,13 @@ public class DomainRouter {
         }
     }
 
-    /** lastActiveDomain条目 */
-    private record LastDomainEntry(String domain, Instant setAt) {}
+    /** lastActiveDomain条目 — public用于Jackson序列化(Redis模式) */
+    public record LastDomainEntry(String domain, Instant setAt) {
+        /** 是否已过期 */
+        public boolean isExpired(long expireMinutes) {
+            return setAt.plusSeconds(expireMinutes * 60).isBefore(Instant.now());
+        }
+    }
 
     // ==================== 主入口 ====================
 
@@ -236,15 +249,15 @@ public class DomainRouter {
     // ==================== lastActiveDomain管理 ====================
 
     private void updateLastDomain(String sessionId, String domain) {
-        lastActiveDomains.put(sessionId, new LastDomainEntry(domain, Instant.now()));
+        lastDomainStore.put(LAST_DOMAIN_NS, sessionId, new LastDomainEntry(domain, Instant.now()));
         log.debug("[DomainRouter] Updated lastDomain: session={}, domain={}", sessionId, domain);
     }
 
     private String getLastDomain(String sessionId) {
-        LastDomainEntry entry = lastActiveDomains.get(sessionId);
+        LastDomainEntry entry = lastDomainStore.get(LAST_DOMAIN_NS, sessionId).orElse(null);
         if (entry == null) return null;
-        if (entry.setAt().plusSeconds(lastDomainExpireMinutes * 60).isBefore(Instant.now())) {
-            lastActiveDomains.remove(sessionId);
+        if (entry.isExpired(lastDomainExpireMinutes)) {
+            lastDomainStore.remove(LAST_DOMAIN_NS, sessionId);
             return null;
         }
         return entry.domain();
@@ -266,19 +279,12 @@ public class DomainRouter {
     /** 定时清理过期的lastActiveDomain，每分钟执行一次 */
     @Scheduled(fixedRate = 60_000)
     public void cleanupExpiredLastDomains() {
-        Instant now = Instant.now();
-        lastActiveDomains.entrySet().removeIf(entry -> {
-            boolean expired = entry.getValue().setAt().plusSeconds(lastDomainExpireMinutes * 60).isBefore(now);
-            if (expired) {
-                log.debug("[DomainRouter] Expired lastDomain: session={}", entry.getKey());
-            }
-            return expired;
-        });
+        lastDomainStore.cleanExpired(LAST_DOMAIN_NS, entry -> entry.isExpired(lastDomainExpireMinutes));
     }
 
     /** 清除会话的lastDomain (供clearSession时调用) */
     public void clearLastDomain(String sessionId) {
-        lastActiveDomains.remove(sessionId);
+        lastDomainStore.remove(LAST_DOMAIN_NS, sessionId);
     }
 
     // ==================== Prompt构建 ====================

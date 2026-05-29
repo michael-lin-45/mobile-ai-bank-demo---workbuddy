@@ -6,17 +6,21 @@ import com.mobileagent.app.domain.MultiSubAgentDomainService;
 import com.mobileagent.app.domain.SingleSubAgentDomainService;
 import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
+import com.mobileagent.app.memory.SessionStateStore;
+import com.mobileagent.app.memory.SessionStateStoreConfig;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.DomainServiceRegistry;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
 import com.mobileagent.app.router.IntentRouter;
+import com.fasterxml.jackson.core.type.TypeReference;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * L1领域服务配置 - 用Builder构建SingleSubAgentDomainService/MultiSubAgentDomainService实例
@@ -39,7 +43,10 @@ public class DomainServiceConfig {
             IntentRegistry intentRegistry,
             GlobalSessionStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
+            SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
             @Qualifier("transferChatMemory") ChatMemory transferChatMemory) {
+        SessionStateStore<AbstractDomainService.ActiveAgentInfo> activeAgentStore =
+                storeFactory.create("active-agents:TransferService", new TypeReference<>() {});
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
                 .domainName("转账")
                 .logTag("TransferService")
@@ -51,6 +58,7 @@ public class DomainServiceConfig {
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .globalSessionStore(globalSessionStore)
+                .activeAgentStore(activeAgentStore)
                 .build();
         domainServiceRegistry.register("TRANSFER", service);
         return service;
@@ -66,7 +74,10 @@ public class DomainServiceConfig {
             IntentRegistry intentRegistry,
             GlobalSessionStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
+            SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
             @Qualifier("billChatMemory") ChatMemory billChatMemory) {
+        SessionStateStore<AbstractDomainService.ActiveAgentInfo> activeAgentStore =
+                storeFactory.create("active-agents:BillService", new TypeReference<>() {});
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
                 .domainName("账单")
                 .logTag("BillService")
@@ -78,6 +89,7 @@ public class DomainServiceConfig {
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .globalSessionStore(globalSessionStore)
+                .activeAgentStore(activeAgentStore)
                 .build();
         domainServiceRegistry.register("BILL", service);
         return service;
@@ -93,7 +105,14 @@ public class DomainServiceConfig {
             IntentRegistry intentRegistry,
             GlobalSessionStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
+            SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
             @Qualifier("wealthChatMemory") ChatMemory wealthChatMemory) {
+        SessionStateStore<AbstractDomainService.ActiveAgentInfo> activeAgentStore =
+                storeFactory.create("active-agents:WealthService", new TypeReference<>() {});
+        SessionStateStore<Map<String, MultiSubAgentDomainService.SuspendedInfo>> suspendedAgentStore =
+                storeFactory.create("suspended-agents:WealthService", new TypeReference<>() {});
+        SessionStateStore<MultiSubAgentDomainService.DisambiguationState> disambiguationStore =
+                storeFactory.create("disambiguation:WealthService", new TypeReference<>() {});
         MultiSubAgentDomainService service = MultiSubAgentDomainService.builder()
                 .domainName("理财")
                 .logTag("WealthService")
@@ -103,6 +122,9 @@ public class DomainServiceConfig {
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .globalSessionStore(globalSessionStore)
+                .activeAgentStore(activeAgentStore)
+                .suspendedAgentStore(suspendedAgentStore)
+                .disambiguationStore(disambiguationStore)
                 .routingTemplatePath("prompts/l1-routing.st")
                 .intentionTemplatePath("prompts/l1-intention.st")
                 .rejectedMessage("该理财功能暂不支持，目前仅支持理财咨询和理财产品解读")

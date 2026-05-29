@@ -4,12 +4,14 @@ import com.mobileagent.app.data.RoutingResolution;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.data.WorkflowStatus;
+import com.mobileagent.app.memory.SessionStateStore;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
 import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.util.TemplateUtils;
+import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -56,11 +58,11 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     // ==================== Multi独有状态 ====================
 
-    /** 本领域自有的挂起意图 (per session, intent → SuspendedInfo) */
-    private final Map<String, Map<String, SuspendedInfo>> suspendedAgents = new ConcurrentHashMap<>();
+    /** 本领域自有的挂起意图 (per session, sessionId → Map<intent, SuspendedInfo>) — 通过SessionStateStore抽象 */
+    private final SessionStateStore<Map<String, SuspendedInfo>> suspendedAgentStore;
 
-    /** 本领域自有的消歧状态 (per session) */
-    private final Map<String, DisambiguationState> disambiguationStates = new ConcurrentHashMap<>();
+    /** 本领域自有的消歧状态 (per session) — 通过SessionStateStore抽象 */
+    private final SessionStateStore<DisambiguationState> disambiguationStore;
 
     private final int maxSuspendedDepth;
     private final long suspendedExpireMinutes;
@@ -80,6 +82,11 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             this.suspendedAt = suspendedAt;
             this.expiresAt = expiresAt;
         }
+
+        /** 是否已过期 */
+        public boolean isExpired() {
+            return expiresAt.isBefore(Instant.now());
+        }
     }
 
     @Data
@@ -96,7 +103,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private MultiSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.chatMemory,
                 builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
-                builder.globalSessionStore, builder.activeAgentExpireMinutes);
+                builder.globalSessionStore, builder.activeAgentStore, builder.activeAgentExpireMinutes);
         this.intentResolver = builder.intentResolver;
         this.routingTemplatePath = builder.routingTemplatePath != null
                 ? builder.routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
@@ -108,6 +115,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 ? List.copyOf(builder.handledIntents) : List.of();
         this.maxSuspendedDepth = builder.maxSuspendedDepth;
         this.suspendedExpireMinutes = builder.suspendedExpireMinutes;
+        this.suspendedAgentStore = builder.suspendedAgentStore;
+        this.disambiguationStore = builder.disambiguationStore;
     }
 
     public static Builder builder() {
@@ -123,6 +132,9 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         private GraphExecutionEngine graphExecutionEngine;
         private IntentRegistry intentRegistry;
         private GlobalSessionStore globalSessionStore;
+        private SessionStateStore<ActiveAgentInfo> activeAgentStore;
+        private SessionStateStore<Map<String, SuspendedInfo>> suspendedAgentStore;
+        private SessionStateStore<DisambiguationState> disambiguationStore;
         private String routingTemplatePath;
         private String intentionTemplatePath;
         private String rejectedMessage;
@@ -139,6 +151,9 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
         public Builder globalSessionStore(GlobalSessionStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
+        public Builder activeAgentStore(SessionStateStore<ActiveAgentInfo> activeAgentStore) { this.activeAgentStore = activeAgentStore; return this; }
+        public Builder suspendedAgentStore(SessionStateStore<Map<String, SuspendedInfo>> suspendedAgentStore) { this.suspendedAgentStore = suspendedAgentStore; return this; }
+        public Builder disambiguationStore(SessionStateStore<DisambiguationState> disambiguationStore) { this.disambiguationStore = disambiguationStore; return this; }
         public Builder routingTemplatePath(String routingTemplatePath) { this.routingTemplatePath = routingTemplatePath; return this; }
         /** 意图识别模板路径(如"prompts/l1-intention.st")，默认使用通用模板 */
         public Builder intentionTemplatePath(String intentionTemplatePath) { this.intentionTemplatePath = intentionTemplatePath; return this; }
@@ -159,6 +174,9 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
             Objects.requireNonNull(intentRegistry, "intentRegistry is required");
             Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
+            Objects.requireNonNull(activeAgentStore, "activeAgentStore is required");
+            Objects.requireNonNull(suspendedAgentStore, "suspendedAgentStore is required");
+            Objects.requireNonNull(disambiguationStore, "disambiguationStore is required");
             // 预热模板: 构造时加载到缓存,运行时零IO
             String routingPath = routingTemplatePath != null
                     ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
@@ -172,8 +190,11 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     // ==================== suspendedAgents管理 ====================
 
+    private static final String SUSPENDED_NS = "suspended"; // namespace后缀
+
     private void suspendOwnAgent(String sessionId, String intent, String threadId) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
+        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
+                .orElseGet(HashMap::new);
 
         // 同一intent已挂起 → 无需重复挂起（checkpoint自动保留）
         if (sessionMap.containsKey(intent)) {
@@ -196,78 +217,108 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         SuspendedInfo info = new SuspendedInfo(intent, threadId, Instant.now(),
                 Instant.now().plusSeconds(suspendedExpireMinutes * 60));
         sessionMap.put(intent, info);
+        suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
         log.debug("[{}] Suspended agent: session={}, intent={}, threadId={}", logTag, sessionId, intent, threadId);
     }
 
     private SuspendedInfo getOwnSuspendedAgent(String sessionId, String intent) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
+        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
+                .orElse(null);
         if (sessionMap == null) return null;
         SuspendedInfo info = sessionMap.get(intent);
-        if (info != null && info.getExpiresAt().isBefore(Instant.now())) {
+        if (info != null && info.isExpired()) {
             sessionMap.remove(intent);
+            suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
             return null;
         }
         return info;
     }
 
     private Map<String, SuspendedInfo> getAllOwnSuspended(String sessionId) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
+        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
+                .orElse(null);
         if (sessionMap == null) return Collections.emptyMap();
-        sessionMap.entrySet().removeIf(e -> e.getValue().getExpiresAt().isBefore(Instant.now()));
-        return Collections.unmodifiableMap(sessionMap);
+        // 清理过期条目
+        sessionMap.entrySet().removeIf(e -> e.getValue().isExpired());
+        if (sessionMap.isEmpty()) {
+            suspendedAgentStore.remove(SUSPENDED_NS + ":" + logTag, sessionId);
+            return Collections.emptyMap();
+        }
+        suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
+        return Collections.unmodifiableMap(new HashMap<>(sessionMap));
     }
 
     private void resumeOwnAgent(String sessionId, String intent) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
+        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
+                .orElse(null);
         if (sessionMap != null) {
             sessionMap.remove(intent);
+            if (sessionMap.isEmpty()) {
+                suspendedAgentStore.remove(SUSPENDED_NS + ":" + logTag, sessionId);
+            } else {
+                suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
+            }
             log.debug("[{}] Resumed agent: session={}, intent={}", logTag, sessionId, intent);
         }
     }
 
     private boolean hasOwnSuspendedAgents(String sessionId) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgents.get(sessionId);
+        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
+                .orElse(null);
         if (sessionMap == null || sessionMap.isEmpty()) return false;
-        sessionMap.entrySet().removeIf(e -> e.getValue().getExpiresAt().isBefore(Instant.now()));
-        return !sessionMap.isEmpty();
+        sessionMap.entrySet().removeIf(e -> e.getValue().isExpired());
+        if (sessionMap.isEmpty()) {
+            suspendedAgentStore.remove(SUSPENDED_NS + ":" + logTag, sessionId);
+            return false;
+        }
+        suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
+        return true;
     }
 
     /** 定时清理过期的挂起记录和activeAgent, 每分钟执行一次 */
     @Scheduled(fixedRate = 60_000)
     public void cleanupExpiredSuspended() {
-        Instant now = Instant.now();
-        suspendedAgents.forEach((sessionId, sessionMap) -> {
+        // 清理过期的suspended entries
+        String ns = SUSPENDED_NS + ":" + logTag;
+        Map<String, Map<String, SuspendedInfo>> all = suspendedAgentStore.getAll(ns);
+        for (var entry : all.entrySet()) {
+            String sessionId = entry.getKey();
+            Map<String, SuspendedInfo> sessionMap = entry.getValue();
             sessionMap.entrySet().removeIf(e -> {
-                if (e.getValue().getExpiresAt().isBefore(now)) {
+                if (e.getValue().isExpired()) {
                     log.debug("[{}] Auto cleaned expired: session={}, intent={}", logTag, sessionId, e.getKey());
                     return true;
                 }
                 return false;
             });
             if (sessionMap.isEmpty()) {
-                suspendedAgents.remove(sessionId);
+                suspendedAgentStore.remove(ns, sessionId);
+            } else {
+                suspendedAgentStore.put(ns, sessionId, sessionMap);
             }
-        });
+        }
         // 同时清理过期的activeAgent
         cleanupExpiredActiveAgents();
     }
 
     // ==================== 消歧管理 ====================
 
+    private static final String DISAMBIG_NS = "disambig"; // namespace后缀
+
     private boolean isInDisambiguation(String sessionId) {
-        return disambiguationStates.containsKey(sessionId);
+        return disambiguationStore.containsKey(DISAMBIG_NS + ":" + logTag, sessionId);
     }
 
     private void setDisambiguationState(String sessionId, DisambiguationState state) {
-        disambiguationStates.put(sessionId, state);
+        disambiguationStore.put(DISAMBIG_NS + ":" + logTag, sessionId, state);
     }
 
     private DisambiguationState getDisambiguationState(String sessionId) {
-        return disambiguationStates.get(sessionId);
+        return disambiguationStore.get(DISAMBIG_NS + ":" + logTag, sessionId).orElse(null);
     }
 
     private void clearDisambiguationState(String sessionId) {
-        disambiguationStates.remove(sessionId);
+        disambiguationStore.remove(DISAMBIG_NS + ":" + logTag, sessionId);
     }
 
     // ==================== 状态描述(供外部调用) ====================
@@ -488,8 +539,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     @Override
     public void clearSession(String sessionId) {
         clearOwnActiveAgent(sessionId);
-        suspendedAgents.remove(sessionId);
-        disambiguationStates.remove(sessionId);
+        suspendedAgentStore.remove(SUSPENDED_NS + ":" + logTag, sessionId);
+        disambiguationStore.remove(DISAMBIG_NS + ":" + logTag, sessionId);
     }
 
     @Override

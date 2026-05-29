@@ -6,9 +6,11 @@ import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
+import com.mobileagent.app.memory.SessionStateStore;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.util.ChatHistoryUtils;
+import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -53,8 +55,8 @@ public abstract class AbstractDomainService implements DomainHandler {
 
     // ==================== 共享状态 ====================
 
-    /** 本领域自有的activeAgent (per session) */
-    private final Map<String, ActiveAgentInfo> activeAgents = new ConcurrentHashMap<>();
+    /** 本领域自有的activeAgent (per session) — 通过SessionStateStore抽象,支持InMemory/Redis切换 */
+    private final SessionStateStore<ActiveAgentInfo> activeAgentStore;
 
     /** activeAgent过期时间(分钟) - 与suspendedExpireMinutes保持一致 */
     private final long activeAgentExpireMinutes;
@@ -75,6 +77,11 @@ public abstract class AbstractDomainService implements DomainHandler {
             this.threadId = threadId;
             this.createdAt = createdAt;
             this.expiresAt = expiresAt;
+        }
+
+        /** 是否已过期 */
+        public boolean isExpired() {
+            return expiresAt.isBefore(Instant.now());
         }
     }
 
@@ -107,6 +114,7 @@ public abstract class AbstractDomainService implements DomainHandler {
                                     GraphExecutionEngine graphExecutionEngine,
                                     IntentRegistry intentRegistry,
                                     GlobalSessionStore globalSessionStore,
+                                    SessionStateStore<ActiveAgentInfo> activeAgentStore,
                                     long activeAgentExpireMinutes) {
         this.domainName = domainName;
         this.logTag = logTag;
@@ -115,15 +123,16 @@ public abstract class AbstractDomainService implements DomainHandler {
         this.graphExecutionEngine = graphExecutionEngine;
         this.intentRegistry = intentRegistry;
         this.globalSessionStore = globalSessionStore;
+        this.activeAgentStore = activeAgentStore;
         this.activeAgentExpireMinutes = activeAgentExpireMinutes;
     }
 
     // ==================== activeAgent管理 ====================
 
     protected ActiveAgentInfo getOwnActiveAgent(String sessionId) {
-        ActiveAgentInfo info = activeAgents.get(sessionId);
+        ActiveAgentInfo info = activeAgentStore.get(logTag, sessionId).orElse(null);
         if (info != null && info.getExpiresAt().isBefore(Instant.now())) {
-            activeAgents.remove(sessionId);
+            activeAgentStore.remove(logTag, sessionId);
             log.info("[{}] ActiveAgent expired: session={}, intent={}, createdAt={}",
                     logTag, sessionId, info.getIntent(), info.getCreatedAt());
             return null;
@@ -133,29 +142,21 @@ public abstract class AbstractDomainService implements DomainHandler {
 
     protected void setOwnActiveAgent(String sessionId, String intent, String threadId) {
         if (intent == null) {
-            activeAgents.remove(sessionId);
+            activeAgentStore.remove(logTag, sessionId);
         } else {
             Instant now = Instant.now();
             Instant expiresAt = now.plusSeconds(activeAgentExpireMinutes * 60);
-            activeAgents.put(sessionId, new ActiveAgentInfo(intent, threadId, now, expiresAt));
+            activeAgentStore.put(logTag, sessionId, new ActiveAgentInfo(intent, threadId, now, expiresAt));
         }
     }
 
     protected void clearOwnActiveAgent(String sessionId) {
-        activeAgents.remove(sessionId);
+        activeAgentStore.remove(logTag, sessionId);
     }
 
     /** 清理过期的activeAgent (由子类的@Scheduled方法调用) */
     protected void cleanupExpiredActiveAgents() {
-        Instant now = Instant.now();
-        activeAgents.entrySet().removeIf(entry -> {
-            if (entry.getValue().getExpiresAt().isBefore(now)) {
-                log.debug("[{}] Auto cleaned expired activeAgent: session={}, intent={}",
-                        logTag, entry.getKey(), entry.getValue().getIntent());
-                return true;
-            }
-            return false;
-        });
+        activeAgentStore.cleanExpired(logTag, ActiveAgentInfo::isExpired);
     }
 
     // ==================== ChatMemory管理 ====================
