@@ -2,7 +2,7 @@ package com.mobileagent.app.execution;
 
 import com.alibaba.cloud.ai.graph.KeyStrategy;
 import com.alibaba.cloud.ai.graph.OverAllState;
-import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
+import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -35,12 +35,12 @@ public class GlobalSessionContext {
 
     private final String sessionId;
     private final OverAllState state;
-    private final MemorySaver memorySaver;
+    private final BaseCheckpointSaver checkpointSaver;
 
-    public GlobalSessionContext(String sessionId, OverAllState state, MemorySaver memorySaver) {
+    public GlobalSessionContext(String sessionId, OverAllState state, BaseCheckpointSaver checkpointSaver) {
         this.sessionId = sessionId;
         this.state = state;
-        this.memorySaver = memorySaver;
+        this.checkpointSaver = checkpointSaver;
     }
 
     // ==================== 读取 ====================

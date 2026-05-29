@@ -3,10 +3,11 @@ package com.mobileagent.app.execution;
 import com.alibaba.cloud.ai.graph.KeyStrategy;
 import com.alibaba.cloud.ai.graph.KeyStrategyFactory;
 import com.alibaba.cloud.ai.graph.OverAllState;
+import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
 import com.alibaba.cloud.ai.graph.checkpoint.config.SaverConfig;
-import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.state.strategy.AppendStrategy;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
+import com.mobileagent.app.memory.CheckpointSaverConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -38,16 +39,16 @@ public class GlobalSessionStore {
     /** 全局 KeyStrategyFactory — 包含所有域的 key，用于创建 GlobalSessionContext 的 OverAllState */
     private final KeyStrategyFactory keyStrategyFactory;
 
-    /** 全局 MemorySaver — 持久化 GlobalSessionContext 的 OverAllState */
-    private final MemorySaver memorySaver;
+    /** CheckpointSaver工厂 — 创建独立的saver实例给GlobalSessionContext */
+    private final CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory;
 
     /** sessionId → GlobalSessionContext */
     private final Map<String, GlobalSessionContext> sessionContexts = new ConcurrentHashMap<>();
 
-    public GlobalSessionStore() {
+    public GlobalSessionStore(CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory) {
         this.keyStrategyFactory = createUnifiedKeyStrategyFactory();
-        this.memorySaver = new MemorySaver();
-        log.info("[GlobalSessionStore] Initialized with unified KeyStrategyFactory + MemorySaver");
+        this.checkpointSaverFactory = checkpointSaverFactory;
+        log.info("[GlobalSessionStore] Initialized with unified KeyStrategyFactory + CheckpointSaverFactory");
     }
 
     // ==================== GlobalSessionContext 管理 ====================
@@ -70,7 +71,10 @@ public class GlobalSessionStore {
         OverAllState state = new OverAllState();
         state.registerKeyAndStrategy(strategies);
 
-        return new GlobalSessionContext(sessionId, state, memorySaver);
+        // 创建独立的 CheckpointSaver 实例
+        BaseCheckpointSaver saver = checkpointSaverFactory.create();
+
+        return new GlobalSessionContext(sessionId, state, saver);
     }
 
     // ==================== Session 生命周期 ====================

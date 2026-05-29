@@ -3,7 +3,7 @@ package com.mobileagent.app.config;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.openai.OpenAiChatModel;
@@ -134,36 +134,40 @@ public class ModelConfig {
 
     /** 全局ChatMemory - L0 DomainRouter使用,记录所有对话 */
     @Bean
-    public ChatMemory chatMemory(@Value("${routing.history.max-pairs:4}") int maxPairs) {
+    public ChatMemory chatMemory(ChatMemoryRepository chatMemoryRepository,
+                                  @Value("${routing.history.max-pairs:4}") int maxPairs) {
         return MessageWindowChatMemory.builder()
-                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .chatMemoryRepository(chatMemoryRepository)
                 .maxMessages(maxPairs * 2)
                 .build();
     }
 
     /** 理财领域ChatMemory - WealthService使用,只记录理财相关消息 */
     @Bean("wealthChatMemory")
-    public ChatMemory wealthChatMemory(@Value("${routing.history.max-pairs:4}") int maxPairs) {
+    public ChatMemory wealthChatMemory(ChatMemoryRepository chatMemoryRepository,
+                                        @Value("${routing.history.max-pairs:4}") int maxPairs) {
         return MessageWindowChatMemory.builder()
-                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .chatMemoryRepository(chatMemoryRepository)
                 .maxMessages(maxPairs * 2)
                 .build();
     }
 
     /** 转账领域ChatMemory - TransferService使用,只记录转账相关消息 */
     @Bean("transferChatMemory")
-    public ChatMemory transferChatMemory(@Value("${routing.history.max-pairs:4}") int maxPairs) {
+    public ChatMemory transferChatMemory(ChatMemoryRepository chatMemoryRepository,
+                                          @Value("${routing.history.max-pairs:4}") int maxPairs) {
         return MessageWindowChatMemory.builder()
-                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .chatMemoryRepository(chatMemoryRepository)
                 .maxMessages(maxPairs * 2)
                 .build();
     }
 
     /** 账单领域ChatMemory - BillService使用,只记录账单相关消息 */
     @Bean("billChatMemory")
-    public ChatMemory billChatMemory(@Value("${routing.history.max-pairs:4}") int maxPairs) {
+    public ChatMemory billChatMemory(ChatMemoryRepository chatMemoryRepository,
+                                      @Value("${routing.history.max-pairs:4}") int maxPairs) {
         return MessageWindowChatMemory.builder()
-                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .chatMemoryRepository(chatMemoryRepository)
                 .maxMessages(maxPairs * 2)
                 .build();
     }
