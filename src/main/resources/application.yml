@@ -108,6 +108,15 @@ tool-timeout:
   read-seconds: 30
   write-seconds: 60
 
+# 状态存储配置 — 改 type 后重启即可切换 in-memory / redis
+storage:
+  type: in-memory    # in-memory | redis
+  redis:
+    host: localhost
+    port: 6379
+    # password:
+    database: 0
+
 memory:
   conversation:
     recent-days: 30
