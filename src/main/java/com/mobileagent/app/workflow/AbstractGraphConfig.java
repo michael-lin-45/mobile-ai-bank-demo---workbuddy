@@ -1,9 +1,10 @@
 package com.mobileagent.app.workflow;
 
 import com.alibaba.cloud.ai.graph.*;
+import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
 import com.alibaba.cloud.ai.graph.checkpoint.config.SaverConfig;
-import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.CompileConfig;
+import com.mobileagent.app.memory.CheckpointSaverConfig;
 import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
 import com.alibaba.cloud.ai.graph.exception.GraphStateException;
@@ -64,6 +65,7 @@ public abstract class AbstractGraphConfig {
 
     protected final ChatModel chatModel;
     protected final ObjectMapper objectMapper;
+    protected final CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory;
 
     /**
      * 自动收集的interrupt节点列表 - 由askNode()自动填充, 无需手写interruptBefore数组
@@ -73,9 +75,11 @@ public abstract class AbstractGraphConfig {
      */
     private final List<String> interruptNodes = new ArrayList<>();
 
-    protected AbstractGraphConfig(ChatModel chatModel) {
+    protected AbstractGraphConfig(ChatModel chatModel,
+                                  CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory) {
         this.chatModel = chatModel;
         this.objectMapper = new ObjectMapper();
+        this.checkpointSaverFactory = checkpointSaverFactory;
     }
 
     // ==================== 子类必须实现 ====================
@@ -492,10 +496,11 @@ public abstract class AbstractGraphConfig {
         };
     }
 
-    /** 构建带MemorySaver的SaverConfig */
+    /** 构建带CheckpointSaver的SaverConfig — 每次编译Graph创建独立的saver实例 */
     protected SaverConfig createSaverConfig() {
+        BaseCheckpointSaver saver = checkpointSaverFactory.create();
         return SaverConfig.builder()
-                .register(new MemorySaver())
+                .register(saver)
                 .build();
     }
 
