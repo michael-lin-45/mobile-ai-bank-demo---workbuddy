@@ -1,20 +1,23 @@
 package com.mobileagent.app.domain;
 
 import com.alibaba.cloud.ai.graph.CompiledGraph;
+import com.mobileagent.app.data.ChunkType;
 import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
+import com.mobileagent.app.execution.StreamingChatMemoryWriter;
 import com.mobileagent.app.memory.SessionStateStore;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
-import com.mobileagent.app.util.ChatHistoryUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.UserMessage;
+import reactor.core.publisher.Flux;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -161,31 +164,40 @@ public abstract class AbstractDomainService implements DomainHandler {
 
     // ==================== ChatMemory管理 ====================
 
+    /**
+     * 领域ChatMemory的sessionId — 用 sessionId + "@" + logTag 隔离
+     *
+     * 4个ChatMemory bean共享同一个ChatMemoryRepository，如果都用原始sessionId，
+     * L0和L1的写入会互相覆盖/重复。加前缀后：
+     *   全局chatMemory:  "abc123"           → L0写，全局历史
+     *   转账chatMemory:  "abc123@TransferService" → L1写，领域历史
+     *   理财chatMemory:  "abc123@WealthService"   → L1写，领域历史
+     *   账单chatMemory:  "abc123@BillService"     → L1写，领域历史
+     */
+    protected String domainSessionId(String sessionId) {
+        return sessionId + "@" + logTag;
+    }
+
     protected void addUserMessage(String sessionId, String userInput) {
-        chatMemory.add(sessionId, new UserMessage(userInput));
+        chatMemory.add(domainSessionId(sessionId), new UserMessage(userInput));
     }
-
-    protected void recordSystemReply(String sessionId, WorkflowOutput output) {
-        ChatHistoryUtils.recordReply(chatMemory, sessionId, output, logTag);
-    }
-
-    // ==================== lastQuestion保存 ====================
 
     /**
-     * 从WorkflowOutput中保存lastQuestion到自有activeAgent
+     * activeAgent状态管理 — 与ChatMemory写入解耦
      *
-     * 不再保存accumulatedParams（checkpoint自动保留）
+     * 在doOnNext中调用，处理终结chunk的activeAgent状态变更
      */
-    protected void saveL2Result(String sessionId, WorkflowOutput output) {
-        if (output == null) return;
+    protected void handleActiveAgentState(String sessionId, StreamChunk chunk) {
+        if (!chunk.isTerminal()) return;
+
         ActiveAgentInfo active = getOwnActiveAgent(sessionId);
-        if (active != null) {
-            if (output.getStatus() == WorkflowStatus.INTERRUPTED && output.getQuestion() != null) {
-                active.setLastQuestion(output.getQuestion());
-                log.debug("[{}] Saved lastQuestion: {}", logTag, output.getQuestion());
-            } else if (output.getStatus() == WorkflowStatus.COMPLETED) {
-                active.setLastQuestion(null);
-            }
+        if (active == null) return;
+
+        if (chunk.getType() == ChunkType.INTERRUPTED && chunk.getQuestion() != null) {
+            active.setLastQuestion(chunk.getQuestion());
+        } else if (chunk.getType() == ChunkType.COMPLETE) {
+            active.setLastQuestion(null);
+            clearOwnActiveAgent(sessionId);
         }
     }
 
@@ -217,35 +229,30 @@ public abstract class AbstractDomainService implements DomainHandler {
       *
       * Single和Multi都有这个分支，逻辑完全一致:
       * 1. addUserMessage
-      * 2. resumeGraph(graph, intent, userInput, threadId, globalStateData) — 注入全局数据
-      * 3. saveL2Result
-      * 4. recordSystemReply
-      * 5. COMPLETED → clearActiveAgent
+      * 2. resumeGraph → Flux<StreamChunk>
+      * 3. doOnNext: AssistantWriter.onChunk + handleActiveAgentState
       */
-    protected WorkflowOutput resumeActiveAgent(String sessionId, String userInput, ActiveAgentInfo active) {
+    protected Flux<StreamChunk> resumeActiveAgent(String sessionId, String userInput, ActiveAgentInfo active) {
         log.info("[{}] FOLLOW with own activeAgent: intent={}, threadId={}", logTag, active.getIntent(), active.getThreadId());
         addUserMessage(sessionId, userInput);
 
         var graph = intentRegistry.getGraph(active.getIntent());
         if (graph == null) {
-            return WorkflowOutput.error("Graph not found for intent: " + active.getIntent());
+            return Flux.just(StreamChunk.error("Graph not found for intent: " + active.getIntent()));
         }
 
-        // 注入当前Session的全局OverAllState数据
         Map<String, Object> globalStateData = globalSessionStore.getOrCreate(sessionId).data();
 
-        // 用存储的threadId恢复，注入全局数据
-        WorkflowOutput resumeResult = graphExecutionEngine.resumeGraph(
-                graph, active.getIntent(), userInput, active.getThreadId(), globalStateData);
+        // per-request独立的ChatMemory写入器 — 并发安全
+        StreamingChatMemoryWriter.AssistantWriter assistantWriter =
+                new StreamingChatMemoryWriter.AssistantWriter(chatMemory, domainSessionId(sessionId));
 
-        saveL2Result(sessionId, resumeResult);
-        recordSystemReply(sessionId, resumeResult);
-
-        if (WorkflowStatus.COMPLETED.equals(resumeResult.getStatus())) {
-            clearOwnActiveAgent(sessionId);
-        }
-
-        return resumeResult;
+        return graphExecutionEngine.resumeGraph(graph, active.getIntent(), userInput,
+                        active.getThreadId(), globalStateData)
+                .doOnNext(chunk -> {
+                    assistantWriter.onChunk(chunk);
+                    handleActiveAgentState(sessionId, chunk);
+                });
     }
 
     /**
@@ -256,21 +263,20 @@ public abstract class AbstractDomainService implements DomainHandler {
       * 2. 构建input Map（基础输入 + GlobalSessionContext.data()）
       * 3. 取Graph
       * 4. setActiveAgent(sessionId, intent, threadId)
-      * 5. executeGraph(graph, intent, input, threadId)
-      * 6. saveL2Result
-      * 7. COMPLETED → clearActiveAgent
+      * 5. executeGraph → Flux<StreamChunk>
+      * 6. doOnNext: AssistantWriter.onChunk + handleActiveAgentState
       *
       * 注意: suspend当前agent的逻辑由子类在调用前处理(Single不suspend, Multi先suspend再调用)
       *
       * @param sessionId 会话ID
       * @param intent 意图名(Single为固定值, Multi为动态值)
       * @param rewrittenInput 改写后的输入
-      * @return 执行结果
+      * @return Flux<StreamChunk>
       */
-    protected WorkflowOutput executeNewAgent(String sessionId, String intent, String rewrittenInput) {
+    protected Flux<StreamChunk> executeNewAgent(String sessionId, String intent, String rewrittenInput) {
         var graph = intentRegistry.getGraph(intent);
         if (graph == null) {
-            return WorkflowOutput.error("Graph not found for intent: " + intent);
+            return Flux.just(StreamChunk.error("Graph not found for intent: " + intent));
         }
 
         // 1. 生成独立threadId
@@ -282,16 +288,16 @@ public abstract class AbstractDomainService implements DomainHandler {
         // 3. 设置activeAgent（含threadId）
         setOwnActiveAgent(sessionId, intent, threadId);
 
-        // 4. 用独立threadId执行Graph
-        WorkflowOutput result = graphExecutionEngine.executeGraph(graph, intent, input, threadId);
+        // 4. per-request独立的ChatMemory写入器 — 并发安全
+        StreamingChatMemoryWriter.AssistantWriter assistantWriter =
+                new StreamingChatMemoryWriter.AssistantWriter(chatMemory, domainSessionId(sessionId));
 
-        saveL2Result(sessionId, result);
-
-        if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {
-            clearOwnActiveAgent(sessionId);
-        }
-
-        return result;
+        // 5. 用独立threadId执行Graph
+        return graphExecutionEngine.executeGraph(graph, intent, input, threadId)
+                .doOnNext(chunk -> {
+                    assistantWriter.onChunk(chunk);
+                    handleActiveAgentState(sessionId, chunk);
+                });
     }
 
     /**
@@ -326,7 +332,7 @@ public abstract class AbstractDomainService implements DomainHandler {
      *
      * @return 如果升级成功返回 resumeActiveAgent 结果，否则返回 null（由调用方继续正常流程）
      */
-    protected WorkflowOutput tryAutoUpgradeFollowUp(ActiveAgentInfo activeAgent,
+    protected Flux<StreamChunk> tryAutoUpgradeFollowUp(ActiveAgentInfo activeAgent,
                                                      RoutingResult phase2,
                                                      String sessionId, String userInput) {
         if (activeAgent != null && phase2 != null) {
@@ -347,7 +353,7 @@ public abstract class AbstractDomainService implements DomainHandler {
      * @param userInput 用户输入
      * @param globalChatHistory 全局跨域对话历史(由L0/BankController格式化后传入，不缓存，仅作改写参考)
      */
-    public abstract WorkflowOutput handle(String sessionId, String userInput, String globalChatHistory);
+    public abstract Flux<StreamChunk> handle(String sessionId, String userInput, String globalChatHistory);
 
     /** 清除会话所有状态 */
     public abstract void clearSession(String sessionId);

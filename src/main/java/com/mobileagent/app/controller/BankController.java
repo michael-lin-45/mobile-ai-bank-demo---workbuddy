@@ -1,20 +1,25 @@
 package com.mobileagent.app.controller;
 
-import com.mobileagent.app.data.WorkflowStatus;
+import com.mobileagent.app.data.ChunkType;
+import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.domain.DomainHandler;
 import com.mobileagent.app.execution.GlobalSessionStore;
+import com.mobileagent.app.execution.StreamingChatMemoryWriter;
+import com.mobileagent.app.infrastructure.SseOutputAdapter;
 import com.mobileagent.app.router.DomainServiceRegistry;
 import com.mobileagent.app.router.DomainRouter;
-import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.util.ChatHistoryUtils;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
 
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 银行主控制器 - L0调度层
@@ -26,19 +31,18 @@ import java.util.Set;
  * 4. L2: 子智能体Graph执行
  *
  * REROUTE机制:
- * - L1返回WorkflowStatus.REROUTE时，排除当前域重新路由
+ * - L1返回REROUTE chunk时，排除当前域重新路由
  * - 最多重试MAX_REROUTE次，超限后CHAT域兜底
  * - REROUTE不对用户可见，只记录最终结果到全局ChatMemory
  *
- * 状态管理:
- * - 不依赖AgentStateManager，各L1 Service自管状态
- * - clearSession: 遍历所有注册的DomainHandler清理
- * - getState: 聚合各L1 Service的状态描述
+ * Content Negotiation:
+ * - Accept: text/event-stream → SSE (SseEmitter, OpenAI兼容格式)
+ * - Accept: application/json  → JSON (blockLast取终结chunk)
  *
- * 对话历史管理:
- * - 全局ChatMemory: 记录所有对话,供L0 DomainRouter手动读取,同时格式化后传给L1做跨域指代消解
- * - 领域ChatMemory: 各L1 Service独立维护,供ContextRouter/IntentRouter手动读取
- * - 全局跨域历史: L0传给L1的字符串快照,不缓存,仅作改写参考
+ * ChatMemory写入:
+ * - UserMessage: 管道入口写入
+ * - CHUNK: 累积到StringBuilder，不写ChatMemory
+ * - 终结chunk: 拼接累积文本 → chatMemory.add(AssistantMessage)
  */
 @Slf4j
 @RestController
@@ -53,84 +57,107 @@ public class BankController {
     private final DomainServiceRegistry domainServiceRegistry;
     private final ChatMemory chatMemory;
     private final GlobalSessionStore globalSessionStore;
+    private final SseOutputAdapter sseAdapter;
     private final int globalContextMaxPairs;
 
     public BankController(DomainRouter domainRouter,
                           DomainServiceRegistry domainServiceRegistry,
                           ChatMemory chatMemory,
                           GlobalSessionStore globalSessionStore,
+                          SseOutputAdapter sseAdapter,
                           @org.springframework.beans.factory.annotation.Value("${routing.history.global-context-max-pairs:10}") int globalContextMaxPairs) {
         this.domainRouter = domainRouter;
         this.domainServiceRegistry = domainServiceRegistry;
         this.chatMemory = chatMemory;
         this.globalSessionStore = globalSessionStore;
+        this.sseAdapter = sseAdapter;
         this.globalContextMaxPairs = globalContextMaxPairs;
     }
 
-    @PostMapping("/chat")
-    public WorkflowOutput chat(@RequestParam String sessionId,
-                               @RequestBody Map<String, String> req) {
+    @PostMapping(value = "/chat", produces = {
+            MediaType.TEXT_EVENT_STREAM_VALUE,
+            MediaType.APPLICATION_JSON_VALUE
+    })
+    public Object chat(@RequestParam String sessionId,
+                       @RequestBody Map<String, String> req,
+                       @RequestHeader(value = "Accept", defaultValue = MediaType.APPLICATION_JSON_VALUE) String accept,
+                       HttpServletResponse response) {
         String userInput = req.get("message");
         log.info("[BankController] >>> chat: sessionId={}, message={}", sessionId, userInput);
 
         if (userInput == null || userInput.isBlank()) {
-            return WorkflowOutput.error("Message cannot be empty");
+            StreamChunk error = StreamChunk.error("Message cannot be empty");
+            if (accept.contains(MediaType.TEXT_EVENT_STREAM_VALUE)) {
+                return sseAdapter.toSse(Flux.just(error), response);
+            }
+            return error.toWorkflowOutput();
         }
 
-        try {
-            Set<String> excludedDomains = new HashSet<>();
-            WorkflowOutput output = null;
-            String currentDomain = null;
-            int rerouteCount = 0;
+        Flux<StreamChunk> pipeline = buildChatPipeline(sessionId, userInput);
 
-            while (rerouteCount < maxRerouteAttempts) {
-                // L0: 领域路由(带排除列表)
-                DomainRouter.DomainResult domainResult = domainRouter.route(sessionId, userInput, excludedDomains);
-                currentDomain = domainResult.domain();
-                log.info("[BankController] L0 domain: {}, unsupportedFeature: {}, excluded: {}, rerouteCount: {}",
-                        currentDomain, domainResult.unsupportedFeature(), excludedDomains, rerouteCount);
-
-                // L0路由到了被排除的域 → LLM没尊重排除提示，直接算失败
-                if (excludedDomains.contains(currentDomain)) {
-                    rerouteCount++;
-                    log.warn("[BankController] L0 routed to excluded domain={}, counting as failed attempt ({}/{})",
-                            currentDomain, rerouteCount, maxRerouteAttempts);
-                    continue;
-                }
-
-                // 格式化全局跨域历史(供L1做跨域指代消解)
-                String globalChatHistory = ChatHistoryUtils.formatAndTruncate(
-                        chatMemory, sessionId, globalContextMaxPairs);
-
-                // 分发到L1 DomainHandler
-                output = dispatchToDomain(domainResult, sessionId, userInput, globalChatHistory);
-
-                // 非REROUTE → 结束循环
-                if (output.getStatus() != WorkflowStatus.REROUTE) break;
-
-                // REROUTE → 排除当前域，重新路由
-                excludedDomains.add(currentDomain);
-                rerouteCount++;
-                log.info("[BankController] REROUTE #{}: domain={} excluded, rerouteIntent={}, rerouteHint={}, excluded={}",
-                        rerouteCount, currentDomain, output.getRerouteIntent(), output.getRerouteHint(), excludedDomains);
-            }
-
-            // 超过maxRerouteAttempts → 返回错误给用户
-            if (output != null && output.getStatus() == WorkflowStatus.REROUTE) {
-                log.info("[BankController] Max reroute attempts ({}) exceeded, returning error to user", maxRerouteAttempts);
-                output = WorkflowOutput.completed(null, "抱歉，暂时无法识别您的请求，请换个方式描述。");
-            }
-
-            // 记录到全局ChatMemory(只记录最终结果，不记录中间REROUTE)
-            chatMemory.add(sessionId, new UserMessage(userInput));
-            recordSystemReply(sessionId, output);
-
-            return output;
-
-        } catch (Exception e) {
-            log.error("[BankController] Error processing chat", e);
-            return WorkflowOutput.error("处理请求时出错: " + e.getMessage());
+        if (accept.contains(MediaType.TEXT_EVENT_STREAM_VALUE)) {
+            return sseAdapter.toSse(pipeline, response);
         }
+
+        return sseAdapter.toJson(pipeline);
+    }
+
+    // ==================== 管道构建 ====================
+
+    private Flux<StreamChunk> buildChatPipeline(String sessionId, String userInput) {
+        Set<String> excludedDomains = new HashSet<>();
+        AtomicInteger rerouteCount = new AtomicInteger(0);
+
+        // UserMessage: 管道入口写入
+        StreamingChatMemoryWriter.writeUserMessage(chatMemory, sessionId, userInput);
+
+        // AssistantMessage: 累积CHUNK + 终结chunk时写入
+        StreamingChatMemoryWriter.AssistantWriter assistantWriter =
+                new StreamingChatMemoryWriter.AssistantWriter(chatMemory, sessionId);
+
+        return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount)
+                .doOnNext(assistantWriter::onChunk);
+    }
+
+    private Flux<StreamChunk> dispatchWithReroute(String sessionId, String userInput,
+                                                   Set<String> excludedDomains,
+                                                   AtomicInteger rerouteCount) {
+        DomainRouter.DomainResult domainResult = domainRouter.route(sessionId, userInput, excludedDomains);
+        String currentDomain = domainResult.domain();
+
+        log.info("[BankController] L0 domain: {}, unsupportedFeature: {}, excluded: {}, rerouteCount: {}",
+                currentDomain, domainResult.unsupportedFeature(), excludedDomains, rerouteCount.get());
+
+        // L0路由到了被排除的域 → LLM没尊重排除提示，直接算失败
+        if (excludedDomains.contains(currentDomain)) {
+            rerouteCount.incrementAndGet();
+            log.warn("[BankController] L0 routed to excluded domain={}, counting as failed attempt ({}/{})",
+                    currentDomain, rerouteCount.get(), maxRerouteAttempts);
+            if (rerouteCount.get() >= maxRerouteAttempts) {
+                return Flux.just(StreamChunk.complete(null, "抱歉，暂时无法识别您的请求，请换个方式描述。"));
+            }
+            return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount);
+        }
+
+        String globalChatHistory = ChatHistoryUtils.formatAndTruncate(
+                chatMemory, sessionId, globalContextMaxPairs);
+
+        // 分发到L1 DomainHandler
+        Flux<StreamChunk> resultFlux = dispatchToDomain(domainResult, sessionId, userInput, globalChatHistory);
+
+        return resultFlux.flatMap(chunk -> {
+            if (chunk.getType() != ChunkType.REROUTE) {
+                return Flux.just(chunk);
+            }
+            excludedDomains.add(currentDomain);
+            rerouteCount.incrementAndGet();
+            log.info("[BankController] REROUTE #{}: domain={} excluded, rerouteIntent={}, rerouteHint={}, excluded={}",
+                    rerouteCount.get(), currentDomain, chunk.getRerouteIntent(), chunk.getRerouteHint(), excludedDomains);
+            if (rerouteCount.get() >= maxRerouteAttempts) {
+                return Flux.just(StreamChunk.complete(null, "抱歉，暂时无法识别您的请求，请换个方式描述。"));
+            }
+            return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount);
+        });
     }
 
     // ==================== 领域分发 ====================
@@ -138,13 +165,13 @@ public class BankController {
     /**
      * 分发到L1 DomainHandler
      */
-    private WorkflowOutput dispatchToDomain(DomainRouter.DomainResult domainResult,
-                                             String sessionId, String userInput,
-                                             String globalChatHistory) {
+    private Flux<StreamChunk> dispatchToDomain(DomainRouter.DomainResult domainResult,
+                                                String sessionId, String userInput,
+                                                String globalChatHistory) {
         if (domainResult.isUnsupported()) {
             String feature = domainResult.unsupportedFeature() != null
                     ? domainResult.unsupportedFeature() : "该";
-            return WorkflowOutput.completed(null, feature + "功能暂不支持");
+            return Flux.just(StreamChunk.complete(null, feature + "功能暂不支持"));
         }
 
         DomainHandler handler = domainServiceRegistry.getHandler(domainResult.domain());
@@ -159,7 +186,7 @@ public class BankController {
             return chatHandler.handle(sessionId, userInput, globalChatHistory);
         }
 
-        return WorkflowOutput.completed(null, "功能暂不支持");
+        return Flux.just(StreamChunk.complete(null, "功能暂不支持"));
     }
 
     // ==================== 会话管理 ====================
@@ -196,11 +223,5 @@ public class BankController {
         chatMemory.clear(sessionId);
         globalSessionStore.clearSession(sessionId);
         return Map.of("status", "cleared", "sessionId", sessionId);
-    }
-
-    // ==================== 内部方法 ====================
-
-    private void recordSystemReply(String sessionId, WorkflowOutput output) {
-        ChatHistoryUtils.recordReply(chatMemory, sessionId, output, null);
     }
 }

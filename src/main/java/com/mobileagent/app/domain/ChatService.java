@@ -1,11 +1,12 @@
 package com.mobileagent.app.domain;
 
-import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.data.StreamChunk;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 /**
  * 闲聊L1 Service - 直接使用大模型与用户聊天
@@ -18,6 +19,8 @@ import org.springframework.stereotype.Service;
  * - 不需要记录到领域ChatMemory(闲聊没有独立的领域ChatMemory)
  * - 实现 DomainHandler 接口, 可被 DomainServiceRegistry 统一分发
  * - 增强 system prompt 支持银行知识FAQ, 接住 REROUTE 过来的问题
+ *
+ * ChatMemory由advisor自动管理，不需要AssistantWriter
  */
 @Slf4j
 @Service
@@ -32,13 +35,15 @@ public class ChatService implements DomainHandler {
     /**
      * 处理闲聊消息
      *
+     * ChatService用advisor自动管理ChatMemory，不需要AssistantWriter
+     *
      * @param sessionId 会话ID
      * @param userInput 用户输入
      * @param globalChatHistory 全局跨域对话历史(可能为null)
-     * @return 聊天回复
+     * @return Flux<StreamChunk>
      */
     @Override
-    public WorkflowOutput handle(String sessionId, String userInput, String globalChatHistory) {
+    public Flux<StreamChunk> handle(String sessionId, String userInput, String globalChatHistory) {
         log.info("[ChatService] Handling: sessionId={}, input={}", sessionId, userInput);
 
         try {
@@ -60,11 +65,12 @@ public class ChatService implements DomainHandler {
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[ChatService] LLM call completed in {}ms", elapsedMs);
 
-            return WorkflowOutput.completed("CHAT", content);
+            // ChatService用advisor自动管理ChatMemory，不需要AssistantWriter
+            return Flux.just(StreamChunk.complete("CHAT", content));
 
         } catch (Exception e) {
             log.error("[ChatService] Error handling chat", e);
-            return WorkflowOutput.error("聊天服务暂时不可用: " + e.getMessage());
+            return Flux.just(StreamChunk.error("聊天服务暂时不可用: " + e.getMessage()));
         }
     }
 

@@ -1,22 +1,27 @@
 package com.mobileagent.app.execution;
 
 import com.alibaba.cloud.ai.graph.*;
+import com.alibaba.cloud.ai.graph.streaming.OutputType;
+import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
+import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.data.WorkflowOutput;
-import com.mobileagent.app.data.WorkflowStatus;
+import com.mobileagent.app.router.IntentRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Graph执行服务 - 封装官方模式二: interruptBefore + updateState + resume
  *
  * 核心设计:
- * - 每次新执行(executeGraph)由调用方传入独立threadId，不再用sessionId作为threadId
- * - 这样同一会话下不同次执行有独立Checkpoint，避免历史脏数据自动合并
- * - executeGraph: 首次执行，stream(input, config)，input含全局OverAllState数据
- * - resumeGraph: updateState(globalStateData) + stream(null, updatedConfig)，globalStateData含全局OverAllState数据
+ * - 统一返回 Flux<StreamChunk>，流式/非流式差异对上层透明
+ * - 非流式Graph走已验证的 stream().blockLast() 路径，不冒险迁移
+ * - 流式Graph走 graphResponseStream() 路径（Phase 2启用）
+ * - GES是唯一读取 IntentRegistry.isStreamable() 的层
  *
  * 关键注意事项:
  * - getState() 必须用原始config（只有threadId），不能用updateState返回的updatedConfig
@@ -27,78 +32,207 @@ import java.util.Map;
 @Service
 public class GraphExecutionEngine {
 
+    private final IntentRegistry intentRegistry;
+
+    public GraphExecutionEngine(IntentRegistry intentRegistry) {
+        this.intentRegistry = intentRegistry;
+    }
+
     /** 生成包含 threadId 的 config */
     private RunnableConfig threadConfig(String threadId) {
         return RunnableConfig.builder().threadId(threadId).build();
     }
 
     /**
-     * 首次执行Graph — 新意图或跨域切换后的首次执行
+     * 首次执行Graph — 统一返回 Flux<StreamChunk>
      *
-     * @param graph 目标CompiledGraph
-     * @param intent 意图名称
-     * @param input 输入数据Map（由调用方构建，含messages、跨域数据等）
-     * @param threadId 线程ID（每次新执行唯一，不再用sessionId）
+     * GES闭环: 根据IntentRegistry.isStreamable()分流
+     * - false → executeBlocking (已验证路径)
+     * - true  → executeStreaming (Phase 2启用)
      */
-    public WorkflowOutput executeGraph(CompiledGraph graph, String intent,
-                                       Map<String, Object> input, String threadId) {
-        try {
-            RunnableConfig config = threadConfig(threadId);
-
-            log.info("[GraphExec] Executing graph: intent={}, threadId={}, inputKeys={}", intent, threadId, input.keySet());
-
-            graph.stream(input, config).blockLast();
-            return checkGraphResult(graph, config, intent);
-
-        } catch (Exception e) {
-            log.error("[GraphExec] Graph execution failed", e);
-            return WorkflowOutput.error("执行出错: " + e.getMessage());
+    public Flux<StreamChunk> executeGraph(CompiledGraph graph, String intent,
+                                           Map<String, Object> input, String threadId) {
+        boolean streamable = intentRegistry.isStreamable(intent);
+        if (!streamable) {
+            return executeBlocking(graph, intent, input, threadId);
         }
+        return executeStreaming(graph, intent, input, threadId);
     }
 
     /**
-     * 恢复执行Graph — 官方模式二: updateState + stream(null, updatedConfig)
-     *
-     * 流程:
-     * 1. config = threadConfig(threadId) — 用存储的threadId读取该Graph的checkpoint
-     * 2. updateState(config, {_globalStateData: globalStateData, _latestUserInput: userInput}, null)
-     * 3. stream(null, updatedConfig) — 从中断点恢复执行
-     * 4. checkGraphResult(graph, config, intent) — 用原始config读最新checkpoint
-     *
-     * @param graph 目标CompiledGraph
-     * @param intent 意图名称
-     * @param userInput 用户输入
-     * @param threadId 线程ID（从ActiveAgentInfo/SuspendedInfo中取出）
-     * @param globalStateData 全局OverAllState数据（用 _globalStateData 一个key包住注入checkpoint）
+     * 恢复执行Graph — 统一返回 Flux<StreamChunk>
      */
-    public WorkflowOutput resumeGraph(CompiledGraph graph, String intent,
-                                      String userInput, String threadId,
-                                      Map<String, Object> globalStateData) {
+    public Flux<StreamChunk> resumeGraph(CompiledGraph graph, String intent,
+                                          String userInput, String threadId,
+                                          Map<String, Object> globalStateData) {
+        boolean streamable = intentRegistry.isStreamable(intent);
+        if (!streamable) {
+            return resumeBlocking(graph, intent, userInput, threadId, globalStateData);
+        }
+        return resumeStreaming(graph, intent, userInput, threadId, globalStateData);
+    }
+
+    // ==================== 非流式路径（与原逻辑完全一致） ====================
+
+    private Flux<StreamChunk> executeBlocking(CompiledGraph graph, String intent,
+                                               Map<String, Object> input, String threadId) {
+        return Flux.defer(() -> {
+            try {
+                RunnableConfig config = threadConfig(threadId);
+                log.info("[GraphExec] Blocking execute: intent={}, threadId={}", intent, threadId);
+                graph.stream(input, config).blockLast();
+                WorkflowOutput output = checkGraphResult(graph, config, intent);
+                return Flux.just(StreamChunk.fromWorkflowOutput(output));
+            } catch (Exception e) {
+                log.error("[GraphExec] Blocking execute failed", e);
+                return Flux.just(StreamChunk.error("执行出错: " + e.getMessage()));
+            }
+        });
+    }
+
+    private Flux<StreamChunk> resumeBlocking(CompiledGraph graph, String intent,
+                                              String userInput, String threadId,
+                                              Map<String, Object> globalStateData) {
+        return Flux.defer(() -> {
+            try {
+                RunnableConfig config = threadConfig(threadId);
+                log.info("[GraphExec] Blocking resume: intent={}, threadId={}", intent, threadId);
+
+                Map<String, Object> updateData = new HashMap<>();
+                if (globalStateData != null && !globalStateData.isEmpty()) {
+                    updateData.put("_globalStateData", globalStateData);
+                }
+                updateData.put("_latestUserInput", userInput);
+                RunnableConfig updatedConfig = graph.updateState(config, updateData, null);
+                graph.stream(null, updatedConfig).blockLast();
+
+                WorkflowOutput output = checkGraphResult(graph, config, intent);
+                return Flux.just(StreamChunk.fromWorkflowOutput(output));
+            } catch (Exception e) {
+                log.error("[GraphExec] Blocking resume failed", e);
+                return Flux.just(StreamChunk.error("恢复执行出错: " + e.getMessage()));
+            }
+        });
+    }
+
+    // ==================== 流式路径（Phase 2启用，Phase 1为骨架） ====================
+
+    private Flux<StreamChunk> executeStreaming(CompiledGraph graph, String intent,
+                                                Map<String, Object> input, String threadId) {
         try {
             RunnableConfig config = threadConfig(threadId);
+            log.info("[GraphExec] Streaming execute: intent={}, threadId={}", intent, threadId);
 
-            log.info("[GraphExec] Resume graph: intent={}, threadId={}, userInput={}", intent, threadId, userInput);
+            return graph.graphResponseStream(input, config)
+                .map(graphResponse -> mapStreamingOutput(graphResponse, intent))
+                .filter(Objects::nonNull)
+                .concatWith(Flux.defer(() -> {
+                    StreamChunk terminal = buildStreamingTerminalChunk(graph, config, intent);
+                    return Flux.just(terminal);
+                }))
+                .onErrorResume(e -> {
+                    log.error("[GraphExec] Streaming execute failed", e);
+                    return Flux.just(StreamChunk.error("执行出错: " + e.getMessage()));
+                });
+        } catch (Exception e) {
+            log.error("[GraphExec] Streaming execute setup failed", e);
+            return Flux.just(StreamChunk.error("执行出错: " + e.getMessage()));
+        }
+    }
 
-            // Step 1: updateState 注入全局数据(整体) + 用户输入
+    private Flux<StreamChunk> resumeStreaming(CompiledGraph graph, String intent,
+                                               String userInput, String threadId,
+                                               Map<String, Object> globalStateData) {
+        try {
+            RunnableConfig config = threadConfig(threadId);
+            log.info("[GraphExec] Streaming resume: intent={}, threadId={}", intent, threadId);
+
             Map<String, Object> updateData = new HashMap<>();
             if (globalStateData != null && !globalStateData.isEmpty()) {
                 updateData.put("_globalStateData", globalStateData);
             }
             updateData.put("_latestUserInput", userInput);
-
             RunnableConfig updatedConfig = graph.updateState(config, updateData, null);
 
-            // Step 2: stream(null, updatedConfig) 从中断点恢复
-            graph.stream(null, updatedConfig).blockLast();
-
-            // Step 3: 用原始 config 读最新 checkpoint（不是 updatedConfig！）
-            return checkGraphResult(graph, config, intent);
-
+            return graph.graphResponseStream((Map<String, Object>) null, updatedConfig)
+                .map(graphResponse -> mapStreamingOutput(graphResponse, intent))
+                .filter(Objects::nonNull)
+                .concatWith(Flux.defer(() -> {
+                    StreamChunk terminal = buildStreamingTerminalChunk(graph, config, intent);
+                    return Flux.just(terminal);
+                }))
+                .onErrorResume(e -> {
+                    log.error("[GraphExec] Streaming resume failed", e);
+                    return Flux.just(StreamChunk.error("恢复执行出错: " + e.getMessage()));
+                });
         } catch (Exception e) {
-            log.error("[GraphExec] Resume graph failed", e);
-            return WorkflowOutput.error("恢复执行出错: " + e.getMessage());
+            log.error("[GraphExec] Streaming resume setup failed", e);
+            return Flux.just(StreamChunk.error("恢复执行出错: " + e.getMessage()));
         }
     }
+
+    /**
+     * 映射 StreamingOutput → StreamChunk
+     * 只有 AGENT_MODEL_STREAMING / GRAPH_NODE_STREAMING 产生CHUNK
+     * 其他类型一律过滤
+     */
+    private StreamChunk mapStreamingOutput(GraphResponse<NodeOutput> graphResponse,
+                                           String intent) {
+        if (graphResponse.isDone() && graphResponse.resultValue().isPresent()) {
+            Object value = graphResponse.resultValue().get();
+            if (value instanceof StreamingOutput<?> streaming) {
+                OutputType outputType = streaming.getOutputType();
+                if (outputType == OutputType.AGENT_MODEL_STREAMING
+                        || outputType == OutputType.GRAPH_NODE_STREAMING) {
+                    String chunk = streaming.chunk();
+                    if (chunk != null && !chunk.isEmpty()) {
+                        return StreamChunk.chunk(intent, chunk);
+                    }
+                }
+                return null; // FINISHED / TOOL / HOOK → 过滤
+            }
+        }
+        return null; // 普通NodeOutput（中间节点）或未完成 → 过滤
+    }
+
+    /**
+     * 构建流式路径的终结chunk
+     *
+     * 流式COMPLETE不带content（前端已通过CHUNK获得所有文本）
+     * ChatMemory的完整文本由StreamingChatMemoryWriter从累积器获取
+     */
+    private StreamChunk buildStreamingTerminalChunk(CompiledGraph graph, RunnableConfig config,
+                                                     String intent) {
+        try {
+            var snapshot = graph.getState(config);
+            if (snapshot == null) {
+                return StreamChunk.streamingDone(intent);
+            }
+
+            String nextNode = snapshot.next();
+            OverAllState state = snapshot.state();
+            String question = state != null ? (String) state.value("_question").orElse("") : "";
+
+            // interruptBefore中断 — 带question
+            if (nextNode != null && !nextNode.isEmpty() && !nextNode.equals("__END__")) {
+                return StreamChunk.interrupted(intent, question);
+            }
+            // ask→END中断 — 带question
+            if (question != null && !question.isEmpty()) {
+                return StreamChunk.interrupted(intent, question);
+            }
+
+            // 正常完成 — 不带content，只是结束信号
+            clearCheckpoint(graph, config, intent);
+            return StreamChunk.streamingDone(intent);
+
+        } catch (Exception e) {
+            log.error("[GraphExec] Failed to build streaming terminal chunk", e);
+            return StreamChunk.streamingDone(intent);
+        }
+    }
+
+    // ==================== 原有方法保留 ====================
 
     /**
      * 清理已完成Graph的checkpoint — 防止OverAllState垃圾堆积
@@ -121,13 +255,11 @@ public class GraphExecutionEngine {
     }
 
     /**
-     * 检查Graph执行结果 — 区分正常完成和中断
+     * 检查Graph执行结果 — 区分正常完成和中断（非流式路径复用）
      *
      * 中断来源:
      * 1. interruptBefore机制: next()非空且非__END__
      * 2. ask→END条件路由: graph结束但_question非空（兜底，不应触发）
-     *
-     * 注意: 不再提取accumulatedParams，checkpoint自动保留完整OverAllState
      */
     private WorkflowOutput checkGraphResult(CompiledGraph graph, RunnableConfig config,
                                              String intent) {

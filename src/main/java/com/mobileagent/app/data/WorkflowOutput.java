@@ -1,5 +1,6 @@
 package com.mobileagent.app.data;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Builder;
 import lombok.Data;
 
@@ -9,6 +10,9 @@ import java.util.List;
  * Graph执行结果DTO - Controller返回给前端的统一响应格式
  *
  * 状态类型: 见 {@link WorkflowStatus}
+ *
+ * 改造后角色: 仅作为 Accept: application/json 的视图适配器
+ * SSE模式不使用此类，直接序列化StreamChunk
  */
 @Data
 @Builder
@@ -32,10 +36,12 @@ public class WorkflowOutput {
     /** 候选意图列表 (DISAMBIGUATION时) */
     private List<String> candidateIntents;
 
-    /** REROUTE时建议的目标意图(如"TRANSFER")，可为null */
+    /** REROUTE时建议的目标意图 — L1→L0内部信号，不暴露给前端 */
+    @JsonIgnore
     private String rerouteIntent;
 
-    /** REROUTE时建议的目标域(如"TRANSFER")，可为null */
+    /** REROUTE时建议的目标域 — L1→L0内部信号，不暴露给前端 */
+    @JsonIgnore
     private String rerouteHint;
 
     public static WorkflowOutput completed(String intent, String content) {
@@ -79,7 +85,8 @@ public class WorkflowOutput {
                 .build();
     }
 
-    /** 根据状态提取回复内容 */
+    /** 根据状态提取回复内容 — 仅内部使用（ChatMemory写入），不序列化给前端 */
+    @JsonIgnore
     public String getReplyContent() {
         return switch (status) {
             case COMPLETED -> content;

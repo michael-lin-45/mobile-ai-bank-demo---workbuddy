@@ -1,7 +1,7 @@
 package com.mobileagent.app.domain;
 
 import com.mobileagent.app.data.RoutingResult;
-import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.memory.SessionStateStore;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
@@ -12,6 +12,7 @@ import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.scheduling.annotation.Scheduled;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Objects;
@@ -118,7 +119,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     // ==================== 主入口 ====================
 
     @Override
-    public WorkflowOutput handle(String sessionId, String userInput, String globalChatHistory) {
+    public Flux<StreamChunk> handle(String sessionId, String userInput, String globalChatHistory) {
         log.info("[{}] Handling: sessionId={}, input={}", logTag, sessionId, userInput);
 
         try {
@@ -139,7 +140,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
 
         } catch (Exception e) {
             log.error("[{}] Error handling message", logTag, e);
-            return WorkflowOutput.error("处理" + domainName + "请求时出错: " + e.getMessage());
+            return Flux.just(StreamChunk.error("处理" + domainName + "请求时出错: " + e.getMessage()));
         }
     }
 
@@ -147,12 +148,12 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
      * activeAgent + lastQuestion 场景
      * ContextRouter精准判断用户是否在回答子智能体的问题
      */
-    private WorkflowOutput handleWithLastQuestion(String sessionId, String userInput,
-                                                   String globalChatHistory, ActiveAgentInfo ownActive) {
+    private Flux<StreamChunk> handleWithLastQuestion(String sessionId, String userInput,
+                                                      String globalChatHistory, ActiveAgentInfo ownActive) {
         String currentAgent = ownActive.getIntent();
         String pendingAgents = "无";
 
-        RoutingResult phase1 = contextRouter.route(sessionId, userInput,
+        RoutingResult phase1 = contextRouter.route(domainSessionId(sessionId), userInput,
                 currentAgent, pendingAgents,
                 routingTemplatePath, domainName, chatMemory,
                 ownActive.getLastQuestion());
@@ -170,11 +171,11 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         // REROUTE判断: 意图不属于本域 (必须在auto-upgrade之前，否则知识FAQ会被误升级为FOLLOW)
         if (!phase2.isBelongsToDomain()) {
             log.info("[{}] REROUTE: belongsToDomain=false, intent={}", logTag, phase2.getIntentName());
-            return WorkflowOutput.reroute(phase2.getIntentName(), null);
+            return Flux.just(StreamChunk.reroute(phase2.getIntentName(), null));
         }
 
         // Auto-upgrade保护: IntentRouter识别的意图与activeAgent一致 → 降级回FOLLOW
-        WorkflowOutput upgraded = tryAutoUpgradeFollowUp(ownActive, phase2, sessionId, userInput);
+        Flux<StreamChunk> upgraded = tryAutoUpgradeFollowUp(ownActive, phase2, sessionId, userInput);
         if (upgraded != null) return upgraded;
 
         addUserMessage(sessionId, userInput);
@@ -184,11 +185,11 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     /**
      * 无activeAgent场景 — ContextRouter + IntentRouter + REROUTE检查
      */
-    private WorkflowOutput handleNewIntention(String sessionId, String userInput, String globalChatHistory) {
+    private Flux<StreamChunk> handleNewIntention(String sessionId, String userInput, String globalChatHistory) {
         String currentAgent = "无";
         String pendingAgents = "无";
 
-        RoutingResult phase1 = contextRouter.route(sessionId, userInput,
+        RoutingResult phase1 = contextRouter.route(domainSessionId(sessionId), userInput,
                 currentAgent, pendingAgents,
                 routingTemplatePath, domainName, chatMemory, null);
         log.info("[{}] Phase1 (no activeAgent): routeType={}, confidence={}",
@@ -200,7 +201,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         // REROUTE判断
         if (!phase2.isBelongsToDomain()) {
             log.info("[{}] REROUTE: belongsToDomain=false, intent={}", logTag, phase2.getIntentName());
-            return WorkflowOutput.reroute(phase2.getIntentName(), null);
+            return Flux.just(StreamChunk.reroute(phase2.getIntentName(), null));
         }
 
         String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
@@ -218,7 +219,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         String disambigContext = "无"; // Single无消歧
         String domainIntentScopeList = intentRegistry.getDomainIntentScopeDescription(List.of(intent));
 
-        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, phase1,
+        RoutingResult phase2 = intentRouter.rewriteAndIdentify(domainSessionId(sessionId), userInput, phase1,
                 currentAgent, pendingAgents, sessionState, disambigContext,
                 intentionTemplatePath, chatMemory, globalChatHistory, domainIntentScopeList);
         log.info("[{}] Phase2 IntentRouter: intent={}, belongsToDomain={}, rewritten=[{}]",
@@ -228,7 +229,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
 
     // ==================== SWITCH执行 ====================
 
-    private WorkflowOutput handleSwitchNew(String sessionId, String rewrittenInput) {
+    private Flux<StreamChunk> handleSwitchNew(String sessionId, String rewrittenInput) {
         return executeNewAgent(sessionId, intent, rewrittenInput);
     }
 

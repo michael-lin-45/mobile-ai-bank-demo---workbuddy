@@ -41,6 +41,8 @@ public class IntentRegistry {
         /** 本意图的处理范围描述，供IntentRouter判断belongs_to_domain */
         private final String scope;
         private CompiledGraph graph;
+        /** 是否为流式Graph — 由GES读取，L0/L1不关心 */
+        private boolean streamable;
 
         public IntentConfig(String name, String description, String paramSchema, boolean writeOp,
                             String intentType, String scope) {
@@ -88,14 +90,26 @@ public class IntentRegistry {
         registry.put(name, new IntentConfig(name, description, paramSchema, writeOp, intentType, scope));
     }
 
-    public void bindGraph(String intentName, CompiledGraph graph) {
+    public void bindGraph(String intentName, CompiledGraph graph, boolean streamable) {
         IntentConfig config = registry.get(intentName);
         if (config != null) {
             config.setGraph(graph);
-            log.info("Bound graph to intent: {}", intentName);
+            config.setStreamable(streamable);
+            log.info("Bound graph to intent: {} (streamable={})", intentName, streamable);
         } else {
             log.warn("Attempted to bind graph to unknown intent: {}", intentName);
         }
+    }
+
+    /** 绑定Graph — 默认非流式 */
+    public void bindGraph(String intentName, CompiledGraph graph) {
+        bindGraph(intentName, graph, false);
+    }
+
+    /** GES读取: 意图是否为流式Graph */
+    public boolean isStreamable(String intentName) {
+        IntentConfig config = registry.get(intentName);
+        return config != null && config.isStreamable();
     }
 
     public CompiledGraph getGraph(String intentName) {

@@ -2,6 +2,7 @@ package com.mobileagent.app.domain;
 
 import com.mobileagent.app.data.RoutingResolution;
 import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.data.WorkflowOutput;
 import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.memory.SessionStateStore;
@@ -10,12 +11,14 @@ import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
 import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
+import com.mobileagent.app.execution.StreamingChatMemoryWriter;
 import com.mobileagent.app.util.TemplateUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.scheduling.annotation.Scheduled;
+import reactor.core.publisher.Flux;
 
 import java.time.Instant;
 import java.util.*;
@@ -333,7 +336,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     // ==================== 主入口 ====================
 
     @Override
-    public WorkflowOutput handle(String sessionId, String userInput, String globalChatHistory) {
+    public Flux<StreamChunk> handle(String sessionId, String userInput, String globalChatHistory) {
         log.info("[{}] Handling: sessionId={}, input={}", logTag, sessionId, userInput);
 
         try {
@@ -344,7 +347,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             ActiveAgentInfo activeAgentForRouting = getOwnActiveAgent(sessionId);
             String lastQuestion = (activeAgentForRouting != null) ? activeAgentForRouting.getLastQuestion() : null;
 
-            RoutingResult phase1 = contextRouter.route(sessionId, userInput,
+            RoutingResult phase1 = contextRouter.route(domainSessionId(sessionId), userInput,
                     currentAgent, pendingAgents,
                     routingTemplatePath, domainName, chatMemory, lastQuestion);
             log.info("[{}] Phase1: routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
@@ -378,7 +381,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             String domainIntentScopeList = intentRegistry.getDomainIntentScopeDescription(
                     handledIntents.stream().map(IntentInfo::getIntentName).toList());
 
-            RoutingResolution resolution = intentResolver.resolve(sessionId, userInput, phase1, chatMemory,
+            RoutingResolution resolution = intentResolver.resolve(domainSessionId(sessionId), userInput, phase1, chatMemory,
                     isInDisambiguation(sessionId), disambigGroupId,
                     hasOwnSuspendedAgents(sessionId), getAllOwnSuspended(sessionId),
                     intentionTemplatePath, globalChatHistory, domainIntentScopeList);
@@ -395,14 +398,14 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 if (!isOwnIntent(effectiveIntent)) {
                     log.info("[{}] Cross-domain intent detected: intent={} not in handledIntents, → REROUTE",
                             logTag, effectiveIntent);
-                    return WorkflowOutput.reroute(effectiveIntent, null);
+                    return Flux.just(StreamChunk.reroute(effectiveIntent, null));
                 }
 
                 // outOfDomain: IntentRouter判断不属于本域scope
                 if (resolution.isOutOfDomain()) {
                     log.info("[{}] Out-of-domain intent detected: intent={}, → REROUTE",
                             logTag, effectiveIntent);
-                    return WorkflowOutput.reroute(effectiveIntent, null);
+                    return Flux.just(StreamChunk.reroute(effectiveIntent, null));
                 }
             }
 
@@ -421,7 +424,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             addUserMessage(sessionId, userInput);
 
             // ========== 根据决议执行 ==========
-            WorkflowOutput output = switch (resolution.getStatus()) {
+            return switch (resolution.getStatus()) {
                 case RESOLVED -> executeRoute(sessionId, resolution);
                 case DISAMBIGUATION -> {
                     ActiveAgentInfo active = getOwnActiveAgent(sessionId);
@@ -434,27 +437,24 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                     if (groupId != null) {
                         setDisambiguationState(sessionId, new DisambiguationState(groupId));
                     }
-                    yield WorkflowOutput.disambiguation(resolution.getQuestion(), resolution.getCandidateIntents());
+                    yield Flux.just(StreamChunk.disambiguation(resolution.getQuestion(), resolution.getCandidateIntents()));
                 }
-                case REJECTED -> WorkflowOutput.completed(null, rejectedMessage);
+                case REJECTED -> Flux.just(StreamChunk.complete(null, rejectedMessage));
                 case CANCELLED -> {
                     clearDisambiguationState(sessionId);
-                    yield WorkflowOutput.completed(null, "好的,已取消当前操作。还有什么可以帮您的吗？");
+                    yield Flux.just(StreamChunk.complete(null, "好的,已取消当前操作。还有什么可以帮您的吗？"));
                 }
             };
 
-            recordSystemReply(sessionId, output);
-            return output;
-
         } catch (Exception e) {
             log.error("[{}] Error handling message", logTag, e);
-            return WorkflowOutput.error("处理" + domainName + "请求时出错: " + e.getMessage());
+            return Flux.just(StreamChunk.error("处理" + domainName + "请求时出错: " + e.getMessage()));
         }
     }
 
     // ==================== 路由执行 ====================
 
-    private WorkflowOutput executeRoute(String sessionId, RoutingResolution resolution) {
+    private Flux<StreamChunk> executeRoute(String sessionId, RoutingResolution resolution) {
         // 防御: 如果意图已suspended但路由判了SWITCH，自动升级为RESUME
         if (!"RESUME".equals(resolution.getRouteType())
                 && getOwnSuspendedAgent(sessionId, resolution.getIntentName()) != null) {
@@ -468,7 +468,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         };
     }
 
-    private WorkflowOutput handleSwitchNew(String sessionId, String intent, String rewrittenInput) {
+    private Flux<StreamChunk> handleSwitchNew(String sessionId, String intent, String rewrittenInput) {
         ActiveAgentInfo currentActive = getOwnActiveAgent(sessionId);
         if (currentActive != null) {
             suspendOwnAgent(sessionId, currentActive.getIntent(), currentActive.getThreadId());
@@ -480,7 +480,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     /**
      * 恢复挂起的意图 — 用SuspendedInfo中存储的threadId恢复，注入全局OverAllState数据
      */
-    private WorkflowOutput handleResume(String sessionId, String intent, String userInput) {
+    private Flux<StreamChunk> handleResume(String sessionId, String intent, String userInput) {
         SuspendedInfo suspendedInfo = getOwnSuspendedAgent(sessionId, intent);
         if (suspendedInfo == null) {
             log.warn("[{}] RESUME but no suspended agent for intent={}, fallback to SWITCH", logTag, intent);
@@ -500,7 +500,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         // 获取graph并设置activeAgent（保留原threadId）
         var graph = intentRegistry.getGraph(intent);
         if (graph == null) {
-            return WorkflowOutput.error("Graph not found for intent: " + intent);
+            return Flux.just(StreamChunk.error("Graph not found for intent: " + intent));
         }
 
         setOwnActiveAgent(sessionId, intent, threadId);
@@ -508,16 +508,16 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         // 注入当前Session的全局OverAllState数据
         Map<String, Object> globalStateData = globalSessionStore.getOrCreate(sessionId).data();
 
+        // per-request独立的ChatMemory写入器
+        StreamingChatMemoryWriter.AssistantWriter assistantWriter =
+                new StreamingChatMemoryWriter.AssistantWriter(chatMemory, domainSessionId(sessionId));
+
         // 用存储的threadId恢复，注入全局数据
-        WorkflowOutput result = graphExecutionEngine.resumeGraph(graph, intent, userInput, threadId, globalStateData);
-
-        saveL2Result(sessionId, result);
-
-        if (WorkflowStatus.COMPLETED.equals(result.getStatus())) {
-            clearOwnActiveAgent(sessionId);
-        }
-
-        return result;
+        return graphExecutionEngine.resumeGraph(graph, intent, userInput, threadId, globalStateData)
+                .doOnNext(chunk -> {
+                    assistantWriter.onChunk(chunk);
+                    handleActiveAgentState(sessionId, chunk);
+                });
     }
 
     // ==================== 工具方法 ====================
