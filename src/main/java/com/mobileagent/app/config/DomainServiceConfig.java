@@ -1,12 +1,10 @@
 package com.mobileagent.app.config;
 
-import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.mobileagent.app.domain.AbstractDomainService;
 import com.mobileagent.app.domain.ChatService;
 import com.mobileagent.app.domain.MultiSubAgentDomainService;
 import com.mobileagent.app.domain.SingleSubAgentDomainService;
 import com.mobileagent.app.memory.DomainStateAware;
-import com.mobileagent.app.memory.model.DomainState;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.router.ContextRouter;
@@ -39,29 +37,17 @@ public class DomainServiceConfig {
 
     @Bean
     public DomainStateAware transferDomainStateAware() {
-        return new DomainStateAware() {
-            @Override public String getStateKey() { return "_transferState"; }
-            @Override public com.alibaba.cloud.ai.graph.KeyStrategy getStateStrategy() { return new ReplaceStrategy(); }
-            @Override public DomainState initialState() { return new DomainState("TRANSFER"); }
-        };
+        return DomainStateAware.of("_transferState", "TRANSFER");
     }
 
     @Bean
     public DomainStateAware billDomainStateAware() {
-        return new DomainStateAware() {
-            @Override public String getStateKey() { return "_billState"; }
-            @Override public com.alibaba.cloud.ai.graph.KeyStrategy getStateStrategy() { return new ReplaceStrategy(); }
-            @Override public DomainState initialState() { return new DomainState("BILL"); }
-        };
+        return DomainStateAware.of("_billState", "BILL");
     }
 
     @Bean
     public DomainStateAware wealthDomainStateAware() {
-        return new DomainStateAware() {
-            @Override public String getStateKey() { return "_wealthState"; }
-            @Override public com.alibaba.cloud.ai.graph.KeyStrategy getStateStrategy() { return new ReplaceStrategy(); }
-            @Override public DomainState initialState() { return new DomainState("WEALTH"); }
-        };
+        return DomainStateAware.of("_wealthState", "WEALTH");
     }
 
     // ==================== 转账 (1-1: TRANSFER) ====================
@@ -158,10 +144,8 @@ public class DomainServiceConfig {
     // ==================== CHAT ====================
 
     @Bean
-    public ChatServiceRegistration chatServiceRegistration(ChatService chatService, DomainServiceRegistry domainServiceRegistry) {
+    public Object chatServiceRegistration(ChatService chatService, DomainServiceRegistry domainServiceRegistry) {
         domainServiceRegistry.register("CHAT", chatService);
-        return new ChatServiceRegistration();
+        return Boolean.TRUE;
     }
-
-    private static class ChatServiceRegistration {}
 }

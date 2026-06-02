@@ -1,10 +1,10 @@
 package com.mobileagent.app.router;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.config.RoutingProperties;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -40,11 +40,12 @@ public class DomainRouter {
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
                         GlobalSessionStateStore globalSessionStore,
                         RoutingProperties routingProperties,
+                        ObjectMapper objectMapper,
                         @org.springframework.beans.factory.annotation.Value("${routing.history.l0-max-pairs:10}") int l0MaxPairs,
                         @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes) {
         this.domainChatClient = domainChatClient;
         this.globalSessionStore = globalSessionStore;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
         this.l0MaxPairs = l0MaxPairs;
         this.lastDomainExpireMinutes = lastDomainExpireMinutes;
 
@@ -120,15 +121,6 @@ public class DomainRouter {
             return new DomainResult(keywordDomain, unsupportedFeature, 1.0, "DETERMINISTIC:keyword");
         }
 
-        DomainResult ruleResult = routeByRules(input);
-        if (ruleResult != null) {
-            return ruleResult;
-        }
-
-        return null;
-    }
-
-    private DomainResult routeByRules(String input) {
         return null;
     }
 
@@ -243,68 +235,6 @@ public class DomainRouter {
     // ==================== 模板加载 ====================
 
     private String loadTemplate(String path) {
-        return TemplateUtils.loadTemplate(path, this::getDefaultDomainPrompt);
-    }
-
-    private String getDefaultDomainPrompt() {
-        return """
-            你是手机银行领域路由器，判断用户【当前消息】此刻的意图所属领域。
-
-            五个领域: WEALTH(理财), TRANSFER(转账), BILL(账单), UNSUPPORTED(银行功能但暂不支持), CHAT(闲聊)
-
-            当前会话状态:
-            {last_domain_context}
-
-            排除领域:
-            {excluded_domains_context}
-
-            ===对话历史(每条消息带领域标签)===
-            {chat_history}
-            ===对话历史结束===
-
-            注意: 对话历史中每条消息前的[转账]/[理财]/[账单]/[闲聊]标签表示该消息所属的领域，
-            帮助你在跨域对话中准确判断当前消息的领域归属。
-
-            ===用户当前消息===
-            {message}
-            ===当前消息结束===
-
-            ★★★ 最高优先级原则 ★★★
-            判断领域时，只看【当前消息】本身。对话历史和会话状态只用于: 当前消息意图不明确(如短回答"张三""500""稳健")时辅助判断。
-            当前消息意图明确时，历史信息完全忽略，绝不让历史影响判断。
-
-            ★★★ 话术类型分析 ★★★
-            【操作型话术】锚点=核心动词: "转1000到理财"→TRANSFER(动词=转), "买理财"→WEALTH(动词=买理财), "查那个理财的账单"→BILL(动词=查+名词=账单)
-            【问题型话术】锚点=核心名词+问法动词: "解读刚才转账的理财"→WEALTH(问法=解读), "理财花了多少"→BILL(核心=花了多少)
-
-            判断规则:
-            1. 当前消息意图清晰 → 按话术类型分析路由，历史不影响:
-               含"账单/明细/消费/支出/收入/收支/开销/流水" → BILL
-               含"转账/转/转钱/汇款/打款/付款/转给/打给" → TRANSFER
-               含"理财/投资/收益/基金/推荐/咨询/解读" → WEALTH
-               含"贷款/信用卡/活动/积分/开户/挂失/存款/保险" → UNSUPPORTED
-               多域冲突用话术类型分析:
-                 "转1000到理财产品" → 操作型,动词=转 → TRANSFER
-                 "解读刚才转账的理财" → 问题型,问法=解读 → WEALTH
-                 "查那个理财的账单" → 操作型,名词=账单 → BILL
-            2. 当前消息意图不明确(短回答) → 才参考对话历史:
-               历史问"转给谁？"，当前"张三" → TRANSFER
-               历史问"风险偏好？"，当前"稳健" → WEALTH
-            3. 对话历史也无法判断 → 才参考最近活跃领域
-            4. 只有取消词 → 路由到最近活跃领域
-            5. 排除领域规则: 如果排除列表非空，不要路由到被排除的领域；如果所有业务领域都被排除，路由到CHAT
-
-            实战案例:
-            "先看看我这个月的开支情况" → BILL(名词=开支→账单) | "那收入呢" → BILL(短回答,历史在查账) | "好，转3000吧" → TRANSFER(短回答,历史问转多少)
-            "听说有个朝朝盈的理财，先帮我解读一下" → WEALTH(问法=解读) | "科技吧，最近比较火" → WEALTH(短回答,历史问领域偏好)
-            "OK，给我妈转4000家用" → TRANSFER(动词=转) | "算了，不看了" → 最近活跃领域
-
-            严格输出JSON:
-            {
-              "domain": "WEALTH | TRANSFER | BILL | UNSUPPORTED | CHAT",
-              "unsupported_feature": "当domain=UNSUPPORTED时填写具体功能名，否则null",
-              "confidence": 0.0-1.0
-            }
-            """;
+        return TemplateUtils.loadTemplate(path);
     }
 }

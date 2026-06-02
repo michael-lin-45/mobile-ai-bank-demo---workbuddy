@@ -110,8 +110,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
             String routingPath = routingTemplatePath != null ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
             String intentionPath = intentionTemplatePath != null ? intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
-            TemplateUtils.warmUp(routingPath, () -> "");
-            TemplateUtils.warmUp(intentionPath, () -> "");
+            TemplateUtils.warmUp(routingPath);
+            TemplateUtils.warmUp(intentionPath);
             return new MultiSubAgentDomainService(this);
         }
     }

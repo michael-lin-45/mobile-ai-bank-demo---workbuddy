@@ -27,10 +27,11 @@ public class IntentRouter {
     private final ObjectMapper objectMapper;
 
     public IntentRouter(@Qualifier("intentChatClient") ChatClient chatClient,
-                           IntentRegistry intentRegistry) {
+                           IntentRegistry intentRegistry,
+                           ObjectMapper objectMapper) {
         this.chatClient = chatClient;
         this.intentRegistry = intentRegistry;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
     }
 
     private static final String DEFAULT_TEMPLATE_PATH = "prompts/l1-intention.st";
@@ -192,73 +193,6 @@ public class IntentRouter {
     }
 
     private String loadTemplate(String path) {
-        return TemplateUtils.loadTemplate(path, this::getDefaultRewritePrompt);
-    }
-
-    private String getDefaultRewritePrompt() {
-        return """
-            你是一个手机银行意图识别与改写器。意图识别是主要目的,上下文改写是为子智能体提取参数服务的手段。
-            
-            本领域处理以下意图:
-            {intent_scope_list}
-            
-            已注册意图列表(全局,供跨域归属判断参考):
-            {all_intent_list}
-            
-            改写模式: {mode}
-            
-            当前会话状态:
-            {session_state}
-            
-            当前意图: {intent_name}
-            挂起的意图: {pending_agents}
-            
-            消歧上下文: {disambig_context}
-            
-            ===对话历史===
-            {chat_history}
-            ===对话历史结束===
-
-            注意: 对话历史分为"本域"和"其他领域参考"两部分。
-            - 本域消息: 用于理解当前领域上下文，识别意图和改写输入
-            - 其他领域参考: 仅用于消解跨域指代(如"刚才转的500"→从转账历史中找到金额)
-            - 改写时，跨域指代必须从他域参考中消解，不要遗漏
-
-            ★★★ 改写边界(必须遵守) ★★★
-            - 只补全用户明确说过的内容(指代消解+参数继承)，不添加用户没说的信息
-            - 禁止为用户未指定的参数填默认值
-            - 未指定的参数由子智能体追问，改写器不应替用户做决定
-            
-            ===用户当前消息(用户此刻说的话，用于判断当前意图)===
-            {message}
-            ===当前消息结束===
-            
-            任务:
-            1. 意图识别(主要): 从已注册意图列表中选择最匹配的意图,无法归入则输出UNKNOWN
-            2. 上下文改写(辅助): 将依赖上下文的模糊表达改写为自包含的完整描述,方便子智能体直接提取参数
-               - 如果用户输入引用了其他领域的内容(如"刚才说的那个理财")，从其他领域参考中查找并消解指代
-            3. 归属判断: 判断用户意图是否属于本领域处理范围，必须结合意图的[类型][描述][范围]逐一比对
-               - ★ 核心原则: 用户意图必须**匹配子智能体的intentType**才能判定belongs_to_domain=true
-               - [OPERATION]类型: 用户必须要求**执行该操作**才属于scope("我要转账"→true, "我刚才转给谁了"→false)
-               - [QUERY]类型: 用户必须要求**查询数据**才属于scope("查账单"→true, "账单在哪看"→false)
-               - [CONSULTATION]类型: 用户必须要求**咨询/推荐/解读**才属于scope("推荐理财"→true, "理财有风险吗"→false)
-               - 追问/回顾操作结果、询问知识/概念/FAQ → belongs_to_domain=false
-               - 无法确定时 → belongs_to_domain=true (保守策略)
-            4. 歧义检测: 如果用户输入只能匹配到意图组,标记is_ambiguous=true
-            5. 路由判断: 意图在挂起列表中→RESUME,否则→SWITCH
-            
-            严格输出JSON:
-            {
-              "intent_name": "意图名称",
-              "rewritten_input": "改写后的自包含描述",
-              "belongs_to_domain": true,
-              "route_type": "SWITCH | RESUME",
-              "resume_target": "RESUME时填意图名,否则null",
-              "confidence": 0.0-1.0,
-              "is_ambiguous": false,
-              "candidate_intents": [],
-              "group_id": null
-            }
-            """;
+        return TemplateUtils.loadTemplate(path);
     }
 }

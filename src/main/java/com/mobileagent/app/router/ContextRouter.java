@@ -30,10 +30,11 @@ public class ContextRouter {
     private final ObjectMapper objectMapper;
 
     public ContextRouter(@Qualifier("contextChatClient") ChatClient chatClient,
-                        IntentRegistry intentRegistry) {
+                        IntentRegistry intentRegistry,
+                        ObjectMapper objectMapper) {
         this.chatClient = chatClient;
         this.intentRegistry = intentRegistry;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -183,49 +184,6 @@ public class ContextRouter {
     }
 
     private String loadTemplate(String path) {
-        return TemplateUtils.loadTemplate(path, this::getDefaultRoutingPrompt);
-    }
-
-    private String getDefaultRoutingPrompt() {
-        return """
-            你是一个手机银行意图路由器。根据【对话历史】理解上下文，根据【当前消息】判断意图类型。
-            
-            已注册意图列表:
-            {intent_list}
-            
-            当前会话状态:
-            {session_state}
-            
-            当前活跃意图: {current_agent}
-            挂起的意图: {pending_agents}
-            {last_question_context}
-            ===对话历史===
-            {chat_history}
-            ===对话历史结束===
-
-            注意: 对话历史分为"本域"和"其他领域参考"两部分。
-            - 本域消息: 当前领域内用户的对话，直接用于判断 FOLLOW/SWITCH/RESUME
-            - 其他领域参考: 仅用于理解跨域指代(如"刚才说的那个理财")，不作为路由判断依据
-            
-            ===用户当前消息(用户此刻说的话，用于判断当前意图)===
-            {message}
-            ===当前消息结束===
-            
-            判断路由类型:
-            1. FOLLOW: 用户的话顺着最近一轮对话继续,回答系统刚才的问题或补充信息
-            2. SWITCH: 用户另起了一个完全不同的话题,或同一领域内切换了不同意图
-            3. RESUME: 用户的话和当前话题有转折,但和之前某个被挂起的任务形成了顺延
-            
-            注意: 
-            - 同领域内切换不同意图 = SWITCH！例: 当前WEALTH_CONSULT(推荐),用户说"解读朝朝盈" → SWITCH
-            - 用户表达取消/放弃(如"不查了""算了""取消")应归FOLLOW,这是对当前agent的回应,由agent自行处理。
-            - 如果用户不是在回答系统刚问的问题,而是提出了新需求(即使还在同一领域),必须归SWITCH
-            
-            严格输出JSON,不要输出其他内容:
-            {
-              "route_type": "FOLLOW | SWITCH | RESUME",
-              "confidence": 0.0-1.0
-            }
-            """;
+        return TemplateUtils.loadTemplate(path);
     }
 }

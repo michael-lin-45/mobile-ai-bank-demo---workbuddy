@@ -3,6 +3,7 @@ package com.mobileagent.app.workflow;
 import com.alibaba.cloud.ai.graph.*;
 import com.alibaba.cloud.ai.graph.exception.GraphStateException;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.memory.CheckpointSaverConfig;
 import com.mobileagent.app.mock.MockBankingService;
 import lombok.extern.slf4j.Slf4j;
@@ -39,8 +40,9 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
 
     public WealthConsultGraphConfig(@Qualifier("paramExtractChatModel") ChatModel chatModel,
                                      CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory,
-                                     MockBankingService mockBankingService) {
-        super(chatModel, checkpointSaverFactory);
+                                     MockBankingService mockBankingService,
+                                     ObjectMapper objectMapper) {
+        super(chatModel, objectMapper, checkpointSaverFactory);
         this.mockBankingService = mockBankingService;
     }
 

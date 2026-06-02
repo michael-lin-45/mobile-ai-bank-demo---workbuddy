@@ -121,11 +121,6 @@ public class IntentRegistry {
         return registry.get(intentName);
     }
 
-    public boolean isWriteOp(String intentName) {
-        IntentConfig config = registry.get(intentName);
-        return config != null && config.isWriteOp();
-    }
-
     public Set<String> getIntentNames() {
         return Collections.unmodifiableSet(registry.keySet());
     }

@@ -76,9 +76,10 @@ public abstract class AbstractGraphConfig {
     private final List<String> interruptNodes = new ArrayList<>();
 
     protected AbstractGraphConfig(ChatModel chatModel,
+                                  ObjectMapper objectMapper,
                                   CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory) {
         this.chatModel = chatModel;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
         this.checkpointSaverFactory = checkpointSaverFactory;
     }
 

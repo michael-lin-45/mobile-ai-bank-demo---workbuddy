@@ -97,8 +97,8 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
             String resolvedRoutingPath = routingTemplatePath != null ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
             String resolvedIntentionPath = intentionTemplatePath != null ? intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
-            TemplateUtils.warmUp(resolvedRoutingPath, () -> "");
-            TemplateUtils.warmUp(resolvedIntentionPath, () -> "");
+            TemplateUtils.warmUp(resolvedRoutingPath);
+            TemplateUtils.warmUp(resolvedIntentionPath);
             return new SingleSubAgentDomainService(this);
         }
     }
