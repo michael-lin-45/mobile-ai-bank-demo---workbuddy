@@ -250,7 +250,7 @@ public class SubAgentState implements Serializable {
 
 ### 5.1 DomainStateAware 接口
 
-每个 L1 域服务实现此接口，声明自己在 OverAllState 中的 key 和策略。
+声明域在 OverAllState 中的 key 和策略，供 `KeyStrategyFactory` 动态注册。
 
 ```java
 public interface DomainStateAware {
@@ -266,42 +266,44 @@ public interface DomainStateAware {
 }
 ```
 
-### 5.2 GlobalSessionStateStore 自动收集
+### 5.2 DomainStateAware 与 DomainService 解耦（重要）
 
-```java
-@Component
-public class GlobalSessionStateStore {
-
-    public GlobalSessionStateStore(
-            CheckpointSaverFactory checkpointSaverFactory,
-            List<DomainStateAware> domainStateProviders) {  // Spring 自动注入所有实现
-        this.keyStrategyFactory = createKeyStrategyFactory(domainStateProviders);
-    }
-
-    private KeyStrategyFactory createKeyStrategyFactory(List<DomainStateAware> providers) {
-        return () -> {
-            Map<String, KeyStrategy> strategies = new HashMap<>();
-            // 公共 keys
-            strategies.put("messages", new AppendStrategy());
-            strategies.put("_lastDomain", new ReplaceStrategy());
-            // ... 其他公共 keys
-
-            // 动态注册: 每个 L1 域的 state key
-            for (DomainStateAware provider : providers) {
-                strategies.put(provider.getStateKey(), provider.getStateStrategy());
-            }
-            return strategies;
-        };
-    }
-}
+**原设计**：DomainService 直接实现 DomainStateAware → 导致循环依赖：
+```
+GlobalSessionStateStore → KeyStrategyFactory → List<DomainStateAware>
+  → DomainService → GlobalSessionStateStore (循环!)
 ```
 
-### 5.3 新增域流程
+**实际实现**：DomainStateAware 注册为独立的轻量级 Bean，与 DomainService 完全解耦。
 
-1. 创建 L1 域服务类，实现 `DomainStateAware`
-2. 注册为 Spring Bean
-3. GlobalSessionStateStore 自动收集 → OverAllState 自动注册 key
-4. **零改动 GlobalSessionStateStore**
+在 `DomainServiceConfig` 中以匿名 Bean 注册，零依赖，打破循环：
+
+```java
+@Bean DomainStateAware transferStateAware() {
+    return new DomainStateAware() {
+        public String getStateKey() { return "_transferState"; }
+        public KeyStrategy getStateStrategy() { return new ReplaceStrategy(); }
+        public DomainState initialState() { return new DomainState("TRANSFER"); }
+    };
+}
+// billStateAware, wealthStateAware 同理
+```
+
+**好处**：
+- 无需 `@Lazy` workaround
+- DomainService 无需关心注册逻辑
+- 新增域只需在 DomainServiceConfig 中添加一个匿名 Bean
+
+### 5.3 KeyStrategyFactory 独立为 Bean
+
+`KeyStrategyFactoryConfig` 作为独立的 `@Bean` 产出手动注册的 `KeyStrategyFactory`，由 `GlobalSessionStateStore` 和 `RedisGlobalSessionStorage` 共同注入使用。
+
+### 5.4 新增域流程
+
+1. 创建 L1 域服务类（无需实现 DomainStateAware）
+2. 在 `DomainServiceConfig` 中注册一个轻量级 `DomainStateAware` Bean
+3. KeyStrategyFactory 自动收集 → OverAllState 自动注册 key
+4. **零改动 GlobalSessionStateStore / KeyStrategyFactoryConfig**
 
 ---
 
@@ -707,6 +709,13 @@ globalSessionStore.clearSession(sessionId);
 
 ## 7. L2 子图数据回写
 
+> **当前状态**: 接口已预留，流程未接入。L2 开发团队可自行决定回写时机和策略。
+>
+> - `AbstractGraphConfig.extractSubAgentDataSnapshot()` 模板方法已定义，4个子图已实现
+> - `DomainState.subAgents` 字段和 `SubAgentState` 数据模型已就绪
+> - `GlobalSessionContext.updateDomainState()` API 可直接操作 subAgents
+> - L1 域服务的 `handleActiveAgentState()` 暂不调用写回，L2 团队自行接入
+
 ### 7.1 回写时机
 
 | 时机 | 操作 | interrupted | nextNode |
@@ -781,7 +790,13 @@ protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
 | `memory/SuspendedInfo.java` | 挂起子图信息 (从 MultiSubAgentDomainService 迁出) |
 | `memory/DisambiguationState.java` | 消歧状态 (从 MultiSubAgentDomainService 迁出) |
 | `memory/SubAgentState.java` | L2 子图数据快照 |
-| `memory/DomainStateAware.java` | 动态注册接口 |
+| `memory/DomainStateAware.java` | 动态注册接口 (轻量级Bean, 与DomainService解耦) |
+| `memory/KeyStrategyFactoryConfig.java` | KeyStrategyFactory 独立 @Bean |
+| `memory/GlobalSessionStorage.java` | 存储后端抽象接口 |
+| `memory/GlobalSessionStorageConfig.java` | 存储后端配置 (InMemory/Redis切换) |
+| `memory/impl/InMemoryGlobalSessionStorage.java` | InMemory 存储实现 |
+| `memory/impl/RedisGlobalSessionStorage.java` | Redis 存储实现 |
+| `memory/impl/RedisCheckpointSaver.java` | Redis CheckpointSaver (移至impl/) |
 
 ### 8.2 删除文件
 
@@ -988,24 +1003,26 @@ public void addUserMessage(String content) {
 
 CheckpointSaverConfig 不受影响，继续为 L2 子图提供 InMemory/Redis 的 CheckpointSaver。
 
-### 8.4 修改文件
+### 8.5 修改文件
 
 | 文件 | 改动 |
 |---|---|
-| `memory/GlobalSessionContext.java` | 删除 `checkpointSaver` 字段; 增加 `getDomainState()` / `updateDomainState()` helper |
-| `memory/GlobalSessionStateStore.java` | 重命名; 构造函数接收 `List<DomainStateAware>` 动态注册 key; 删除硬编码域 key; 删除 `checkpointSaverFactory` |
+| `memory/GlobalSessionContext.java` | 从 `execution/` 迁移到 `memory/`; 删除 `checkpointSaver` 字段; 增加 `getDomainState()` / `updateDomainState()` helper; 增加 `LastDomainEntry` record |
+| `memory/GlobalSessionStateStore.java` | 重命名自 GlobalSessionStore; 接收 `KeyStrategyFactory` + `GlobalSessionStorage`; 删除 `checkpointSaverFactory` |
 | `domain/AbstractDomainService.java` | 删除 `SessionStateStore<ActiveAgentInfo>` 依赖; 改用 `ctx.updateDomainState()` |
-| `domain/SingleSubAgentDomainService.java` | 删除 `SessionStateStore` 依赖; 实现 `DomainStateAware` |
-| `domain/MultiSubAgentDomainService.java` | 删除 3 个 `SessionStateStore` 依赖; 实现 `DomainStateAware` |
+| `domain/SingleSubAgentDomainService.java` | 删除 `SessionStateStore` 依赖; **不实现** `DomainStateAware` (解耦) |
+| `domain/MultiSubAgentDomainService.java` | 删除 3 个 `SessionStateStore` 依赖; **不实现** `DomainStateAware` (解耦) |
 | `domain/ChatService.java` | 更新 import (GlobalSessionStore → GlobalSessionStateStore) |
-| `config/DomainServiceConfig.java` | 删除 `SessionStateStoreFactory` 依赖; 删除 store 创建逻辑 |
-| `controller/BankController.java` | 更新 import; 更新 `clearSession` 逻辑 |
-| `router/DomainRouter.java` | 更新 import; `lastDomainExpireMinutes` 保留; `setLastDomain(domain, expireAt)` |
-| `workflow/AbstractGraphConfig.java` | 增加 `extractSubAgentDataSnapshot()` 模板方法 |
-| `workflow/TransferGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` |
-| `workflow/BillQueryGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` |
-| `workflow/WealthConsultGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` |
-| `workflow/WealthInterpretGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` |
+| `config/DomainServiceConfig.java` | 删除 `SessionStateStoreFactory` 依赖; 增加 3 个轻量级 `DomainStateAware` Bean (匿名类, 零依赖) |
+| `controller/BankController.java` | 更新 import; `clearSession` 改为 `globalSessionStore.clearSession()` |
+| `router/DomainRouter.java` | 更新 import; `setLastDomain(domain, expireAt)` |
+| `memory/CheckpointSaverConfig.java` | 增加 RedisCheckpointSaver import 路径 (移至 `impl/`) |
+| `workflow/AbstractGraphConfig.java` | 增加 `extractSubAgentDataSnapshot()` 模板方法 (默认返回空Map) |
+| `workflow/TransferGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` — 提取 receiver/amount/purpose |
+| `workflow/BillQueryGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` — 提取 timePeriod/expenseType |
+| `workflow/WealthConsultGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` — 提取 riskLevel/focusArea |
+| `workflow/WealthInterpretGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` — 提取 productName |
+| `resources/prompts/l0-domain.st` | 规则2增加"直接回答vs反问"区分; 新增Case6/7排除域场景 |
 
 ---
 
@@ -1044,10 +1061,31 @@ private KeyStrategyFactory createKeyStrategyFactory(List<DomainStateAware> provi
 
 ## 10. 待确认事项
 
-1. **StreamChunk 是否需要携带 nextNode 信息**：当前 `StreamChunk` 的 `INTERRUPTED` 类型只有 `question` 字段，没有 `nextNode`。需要确认是否在 StreamChunk 中增加 `nextNode` 字段，还是从 L2 Graph 的 snapshot 中提取。
+1. **StreamChunk 是否需要携带 nextNode 信息**：当前 `StreamChunk` 的 `INTERRUPTED` 类型只有 `question` 字段，没有 `nextNode`。需要确认是否在 StreamChunk 中增加 `nextNode` 字段，还是从 L2 Graph 的 snapshot 中提取。L2 开发团队接入回写时可决定。
 
 2. **L2 取消时的处理**：L2 子图因取消信号结束时，是否写回 SubAgentState？建议不写回（取消 = 放弃本次操作）。
 
-3. **SuspendedInfo 的定时清理**：当前通过 `@Scheduled` 定时清理过期 SuspendedInfo。迁移到 GlobalSessionContext 后，需要在读取时惰性清理（检查 `isExpired()`），或保留定时任务遍历所有 session。
+3. **SuspendedInfo 的定时清理**：已采用惰性清理方案 — 在 `hasOwnSuspendedAgents()` / `getOwnSuspendedAgent()` 读取时检查 `isExpired()` 并移除，无需 `@Scheduled` 定时任务。
 
-4. **Redis 持久化**：本设计先实现 InMemory 模式。Redis 模式下 `DomainState` 及其嵌套对象需要 Jackson 序列化，所有嵌套类已实现 `Serializable`，字段使用 `long` 替代 `Instant`，兼容性已保证。
+4. **Redis 持久化**：InMemory + Redis 两种模式均已实现。`DomainState` 及其嵌套对象已实现 `Serializable`，字段使用 `long` 替代 `Instant`，兼容性已保证。Redis 模式下修改 OverAllState 后需调 `storage.put()` 同步（见 8.4.6）。
+
+5. **L2 回写接入**：接口已预留（`extractSubAgentDataSnapshot()` + `DomainState.subAgents` + `SubAgentState`），L2 开发团队可自行决定回写时机和策略，无需修改框架层代码。
+
+---
+
+## 11. 实现状态汇总
+
+| 阶段 | 状态 | 说明 |
+|---|---|---|
+| 数据模型 (DomainState/SubAgentState等) | ✅ 完成 | `memory/model/` 下 5 个类 |
+| DomainStateAware 解耦 | ✅ 完成 | 轻量级匿名 Bean, 打破循环依赖 |
+| GlobalSessionContext 迁移 | ✅ 完成 | 从 `execution/` 迁到 `memory/`, 增加 helper |
+| GlobalSessionStorage 抽象 | ✅ 完成 | InMemory/Redis 双实现 + Config 切换 |
+| KeyStrategyFactory 独立 | ✅ 完成 | `KeyStrategyFactoryConfig` @Bean |
+| DomainService 重写 | ✅ 完成 | Abstract/Single/Multi 全部改用 ctx.updateDomainState() |
+| SessionStateStore 删除 | ✅ 完成 | 6 个文件已删除 |
+| L0 提示词修复 | ✅ 完成 | 规则2 "直接回答vs反问" + Case6/7 |
+| 包结构分层 | ✅ 完成 | `model/` + `impl/` |
+| L2 extractSubAgentDataSnapshot | ✅ 完成 | AbstractGraphConfig 模板方法 + 4 子类实现 |
+| L2 回写流程接入 | ⏳ 待 L2 团队 | 接口已预留, 流程未接入 |
+| 设计文档更新 | ✅ 完成 | 反映 DomainStateAware 解耦 + L2 接口预留 |

@@ -241,6 +241,20 @@ public class TransferGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
+    // ==================== SubAgent数据快照 ====================
+
+    @Override
+    protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
+        Map<String, Object> data = new HashMap<>();
+        String receiver = getStringValue(state, "transfer.receiver");
+        if (receiver != null && !receiver.isEmpty()) data.put("receiver", receiver);
+        Object amount = state.value("transfer.amount").orElse(null);
+        if (amount != null) data.put("amount", amount.toString());
+        String purpose = getStringValue(state, "transfer.purpose");
+        if (purpose != null && !purpose.isEmpty()) data.put("purpose", purpose);
+        return data;
+    }
+
     // ==================== Transfer特有方法 ====================
 
     @Override

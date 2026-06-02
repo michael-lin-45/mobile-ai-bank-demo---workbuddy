@@ -526,6 +526,29 @@ public abstract class AbstractGraphConfig {
         return createCompileConfig(interruptNodes.toArray(new String[0]));
     }
 
+    /**
+     * 从L2子图的OverAllState中提取业务数据快照
+     *
+     * L2子图执行中断或完成时, L1域服务调用此方法将L2的业务数据打包为Map,
+     * 再封装为SubAgentState写回GlobalSessionContext的DomainState.subAgents中。
+     *
+     * 各子图只需覆盖此方法, 声明自己关心的state key即可:
+     *   @Override
+     *   protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
+     *       Map<String, Object> data = new HashMap<>();
+     *       getStringValue(state, "transfer.receiver").ifPresent(v -> data.put("receiver", v));
+     *       return data;
+     *   }
+     *
+     * 默认实现返回空Map, 不提取任何数据。
+     *
+     * @param state L2子图的OverAllState
+     * @return 业务数据快照, key由各子图自行定义
+     */
+    protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
+        return new HashMap<>();
+    }
+
     /** 创建ask节点的条件路由 (有用户输入→paramRouter, 无→END) */
     protected void addAskConditionalEdges(StateGraph graph, String askNodeName) throws GraphStateException {
         graph.addConditionalEdges(askNodeName,

@@ -218,6 +218,18 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
+    // ==================== SubAgent数据快照 ====================
+
+    @Override
+    protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
+        Map<String, Object> data = new HashMap<>();
+        String riskLevel = getStringValue(state, "wealthConsult.riskLevel");
+        if (riskLevel != null && !riskLevel.isEmpty()) data.put("riskLevel", riskLevel);
+        String focusArea = getStringValue(state, "wealthConsult.focusArea");
+        if (focusArea != null && !focusArea.isEmpty()) data.put("focusArea", focusArea);
+        return data;
+    }
+
     // ==================== WealthConsult特有方法 ====================
 
     @Override

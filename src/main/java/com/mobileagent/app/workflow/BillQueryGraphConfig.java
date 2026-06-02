@@ -215,6 +215,18 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
+    // ==================== SubAgent数据快照 ====================
+
+    @Override
+    protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
+        Map<String, Object> data = new HashMap<>();
+        String timePeriod = getStringValue(state, "bill.timePeriod");
+        if (timePeriod != null && !timePeriod.isEmpty()) data.put("timePeriod", timePeriod);
+        String expenseType = getStringValue(state, "bill.expenseType");
+        if (expenseType != null && !expenseType.isEmpty()) data.put("expenseType", expenseType);
+        return data;
+    }
+
     // ==================== BillQuery特有方法 ====================
 
     @Override

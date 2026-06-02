@@ -233,6 +233,16 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
             """.formatted(productName);
     }
 
+    // ==================== SubAgent数据快照 ====================
+
+    @Override
+    protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
+        Map<String, Object> data = new HashMap<>();
+        String productName = getStringValue(state, "wealthInterpret.productName");
+        if (productName != null && !productName.isEmpty()) data.put("productName", productName);
+        return data;
+    }
+
     // ==================== WealthInterpret特有方法 ====================
 
     @Override
