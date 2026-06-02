@@ -28,6 +28,11 @@ models:
     base-url: ${CHAT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
     api-key: ${CHAT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
     model: ${CHAT_MODEL:qwen-turbo}
+  # L2 理财产品解读 - 流式输出，需要较好的模型生成高质量解读内容
+  wealth-interpret:
+    base-url: ${WEALTH_INTERPRET_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+    api-key: ${WEALTH_INTERPRET_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}
+    model: ${WEALTH_INTERPRET_MODEL:qwen-plus}
 
 routing:
   deterministic:

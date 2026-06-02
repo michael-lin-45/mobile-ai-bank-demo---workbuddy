@@ -6,10 +6,13 @@ import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.mobileagent.app.memory.CheckpointSaverConfig;
 import com.mobileagent.app.mock.MockBankingService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -26,21 +29,30 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
  *
  * 节点流程:
  * START → extractParams → paramRouter → askProductName (interruptBefore)
- *                                       ↘ executeWealthInterpret → END
+ *                                       ↘ executeWealthInterpret → END (流式节点)
  *                                       ↘ cancelExecution → END (_cancelSignal)
  * askProductName → paramRouter (循环)
+ *
+ * 流式设计:
+ * - executeWealthInterpret节点返回Map中包含Flux<ChatResponse>
+ * - Spring AI Alibaba Graph自动检测Flux值，包装为StreamingOutput
+ * - GES的executeStreaming路径将StreamingOutput转为StreamChunk.chunk()
+ * - 前端逐字追加显示，用户体验远优于等待全部生成完再显示
  */
 @Slf4j
 @Configuration
 public class WealthInterpretGraphConfig extends AbstractGraphConfig {
 
     private final MockBankingService mockBankingService;
+    private final ChatClient wealthInterpretChatClient;
 
     public WealthInterpretGraphConfig(@Qualifier("paramExtractChatModel") ChatModel chatModel,
                                        CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory,
-                                       MockBankingService mockBankingService) {
+                                       MockBankingService mockBankingService,
+                                       @Qualifier("wealthInterpretChatClient") ChatClient wealthInterpretChatClient) {
         super(chatModel, checkpointSaverFactory);
         this.mockBankingService = mockBankingService;
+        this.wealthInterpretChatClient = wealthInterpretChatClient;
     }
 
     @Override
@@ -159,18 +171,66 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
         return result;
     }
 
+    /**
+     * 流式理财产品解读节点 — 返回Map中包含Flux<ChatResponse>
+     *
+     * Spring AI Alibaba Graph的NodeExecutor.getEmbedFlux()会自动检测Map中的Flux值，
+     * 将每个ChatResponse包装为StreamingOutput(GRAPH_NODE_STREAMING/FINISHED)，
+     * GES的mapStreamingOutput()再转为StreamChunk.chunk()推给前端。
+     *
+     * 降级逻辑: 如果LLM调用初始化失败，降级为mock服务返回(非流式)
+     */
     private Map<String, Object> executeWealthInterpretNode(OverAllState state) {
         String productName = getStringValue(state, "wealthInterpret.productName");
-
-        log.info("[WealthInterpretGraph.executeWealthInterpret] productName={}", productName);
-
-        MockBankingService.WealthInterpretResult interpretResult = mockBankingService.wealthInterpret(productName);
+        log.info("[WealthInterpretGraph.executeWealthInterpret] productName={}, mode=STREAMING", productName);
 
         Map<String, Object> result = new HashMap<>();
-        result.put("_outputContent", interpretResult.message());
         result.put("_outputType", "TEXT");
         result.put("_isFinal", true);
+
+        try {
+            String prompt = buildWealthInterpretPrompt(productName);
+            Flux<ChatResponse> responseFlux = wealthInterpretChatClient.prompt()
+                    .user(prompt)
+                    .stream()
+                    .chatResponse();
+
+            // Map中的Flux值会被NodeExecutor.getEmbedFlux()自动检测
+            // 每个ChatResponse → StreamingOutput(GRAPH_NODE_STREAMING) → StreamChunk.chunk()
+            result.put("streaming_output", responseFlux);
+        } catch (Exception e) {
+            log.warn("[WealthInterpretGraph.executeWealthInterpret] LLM streaming init failed, falling back to mock", e);
+            // 降级: 使用mock服务返回完整结果(非流式)
+            MockBankingService.WealthInterpretResult interpretResult = mockBankingService.wealthInterpret(productName);
+            result.put("_outputContent", interpretResult.message());
+        }
+
         return result;
+    }
+
+    /**
+     * 构建理财产品解读prompt — 引导LLM生成详细的、结构化的产品解读
+     */
+    private String buildWealthInterpretPrompt(String productName) {
+        return """
+            你是一位专业的银行理财产品分析师，请为用户详细解读以下理财产品。
+
+            产品名称: %s
+
+            解读要求:
+            1. 产品类型及定位
+            2. 风险等级评估(R1-R5)
+            3. 历史年化收益率范围
+            4. 投资期限及流动性
+            5. 起购金额
+            6. 底层资产配置
+            7. 适合的投资者类型
+            8. 投资建议和注意事项
+
+            请用专业但易懂的语言，详细解读该产品，让普通投资者也能理解。
+            如果不确定具体数据，请基于产品名称给出合理的分析框架和参考范围。
+            字数控制在200个以内
+            """.formatted(productName);
     }
 
     // ==================== WealthInterpret特有方法 ====================

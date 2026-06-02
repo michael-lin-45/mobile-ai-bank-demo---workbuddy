@@ -124,8 +124,10 @@ public class GraphExecutionEngine {
             log.info("[GraphExec] Streaming execute: intent={}, threadId={}", intent, threadId);
 
             return graph.graphResponseStream(input, config)
-                .map(graphResponse -> mapStreamingOutput(graphResponse, intent))
-                .filter(Objects::nonNull)
+                .flatMap(graphResponse -> {
+                    StreamChunk chunk = mapStreamingOutput(graphResponse, intent);
+                    return chunk != null ? Flux.just(chunk) : Flux.empty();
+                })
                 .concatWith(Flux.defer(() -> {
                     StreamChunk terminal = buildStreamingTerminalChunk(graph, config, intent);
                     return Flux.just(terminal);
@@ -155,8 +157,10 @@ public class GraphExecutionEngine {
             RunnableConfig updatedConfig = graph.updateState(config, updateData, null);
 
             return graph.graphResponseStream((Map<String, Object>) null, updatedConfig)
-                .map(graphResponse -> mapStreamingOutput(graphResponse, intent))
-                .filter(Objects::nonNull)
+                .flatMap(graphResponse -> {
+                    StreamChunk chunk = mapStreamingOutput(graphResponse, intent);
+                    return chunk != null ? Flux.just(chunk) : Flux.empty();
+                })
                 .concatWith(Flux.defer(() -> {
                     StreamChunk terminal = buildStreamingTerminalChunk(graph, config, intent);
                     return Flux.just(terminal);
@@ -172,27 +176,54 @@ public class GraphExecutionEngine {
     }
 
     /**
-     * 映射 StreamingOutput → StreamChunk
+     * 从GraphResponse提取StreamingOutput → StreamChunk
+     *
+     * GraphResponse两种形态:
+     * - GraphResponse.of(data): output=completedFuture(data), resultValue=null, isDone=false
+     *   → 流式chunk走这条路径，必须通过getOutput().join()取值
+     * - GraphResponse.done(resultValue): output=null, resultValue有值, isDone=true
+     *   → 终结信号走这条路径，通过resultValue()取值
+     *
      * 只有 AGENT_MODEL_STREAMING / GRAPH_NODE_STREAMING 产生CHUNK
-     * 其他类型一律过滤
+     * 其他类型(中间节点NodeOutput、FINISHED、TOOL、HOOK)一律过滤
      */
     private StreamChunk mapStreamingOutput(GraphResponse<NodeOutput> graphResponse,
                                            String intent) {
-        if (graphResponse.isDone() && graphResponse.resultValue().isPresent()) {
-            Object value = graphResponse.resultValue().get();
-            if (value instanceof StreamingOutput<?> streaming) {
-                OutputType outputType = streaming.getOutputType();
-                if (outputType == OutputType.AGENT_MODEL_STREAMING
-                        || outputType == OutputType.GRAPH_NODE_STREAMING) {
-                    String chunk = streaming.chunk();
-                    if (chunk != null && !chunk.isEmpty()) {
-                        return StreamChunk.chunk(intent, chunk);
-                    }
+        Object value = extractValue(graphResponse);
+        if (value == null) return null;
+
+        if (value instanceof StreamingOutput<?> streaming) {
+            OutputType outputType = streaming.getOutputType();
+            if (outputType == OutputType.AGENT_MODEL_STREAMING
+                    || outputType == OutputType.GRAPH_NODE_STREAMING) {
+                String chunk = streaming.chunk();
+                if (chunk != null && !chunk.isEmpty()) {
+                    return StreamChunk.chunk(intent, chunk);
                 }
-                return null; // FINISHED / TOOL / HOOK → 过滤
             }
+            // FINISHED / TOOL / HOOK → 过滤
         }
-        return null; // 普通NodeOutput（中间节点）或未完成 → 过滤
+        return null; // 普通NodeOutput（中间节点）→ 过滤
+    }
+
+    /**
+     * 从GraphResponse提取值 — 兼容of()和done()两种形态
+     *
+     * of(data):  output != null → getOutput().join() 取值
+     * done(val): output == null → resultValue() 取值
+     */
+    private Object extractValue(GraphResponse<NodeOutput> graphResponse) {
+        try {
+            if (graphResponse.getOutput() != null && !graphResponse.getOutput().isCompletedExceptionally()) {
+                return graphResponse.getOutput().join();
+            }
+            if (graphResponse.resultValue().isPresent()) {
+                return graphResponse.resultValue().get();
+            }
+        } catch (Exception e) {
+            log.debug("[GraphExec] extractValue failed: {}", e.getMessage());
+        }
+        return null;
     }
 
     /**

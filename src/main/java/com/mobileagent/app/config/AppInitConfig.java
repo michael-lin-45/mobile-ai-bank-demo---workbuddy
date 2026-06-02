@@ -38,7 +38,7 @@ public class AppInitConfig {
         intentRegistry.bindGraph("TRANSFER", transferGraph);
         intentRegistry.bindGraph("BILL_QUERY", billQueryGraph);
         intentRegistry.bindGraph("WEALTH_CONSULT", wealthConsultGraph);
-        intentRegistry.bindGraph("WEALTH_INTERPRET", wealthInterpretGraph);
+        intentRegistry.bindGraph("WEALTH_INTERPRET", wealthInterpretGraph, true); // 流式Graph
 
         log.info("[AppInitConfig] All graphs bound to IntentRegistry");
     }

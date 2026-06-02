@@ -111,6 +111,22 @@ public class ModelConfig {
         return ChatClient.builder(chatModel).build();
     }
 
+    // ==================== wealthInterpret: L2 理财产品解读(流式) ====================
+
+    @Bean("wealthInterpretChatModel")
+    public ChatModel wealthInterpretChatModel(
+            @Value("${models.wealth-interpret.base-url}") String baseUrl,
+            @Value("${models.wealth-interpret.api-key}") String apiKey,
+            @Value("${models.wealth-interpret.model}") String model) {
+        log.info("[ModelConfig] wealthInterpretChatModel: baseUrl={}, model={}", baseUrl, model);
+        return buildChatModel(baseUrl, apiKey, model);
+    }
+
+    @Bean("wealthInterpretChatClient")
+    public ChatClient wealthInterpretChatClient(@org.springframework.beans.factory.annotation.Qualifier("wealthInterpretChatModel") ChatModel chatModel) {
+        return ChatClient.builder(chatModel).build();
+    }
+
     // ==================== chat: L1 闲聊 ====================
 
     @Bean("chatChatModel")
