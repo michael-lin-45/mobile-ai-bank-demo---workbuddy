@@ -159,10 +159,13 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
                 result.put("bill.timePeriod", timePeriod);
                 log.info("[BillQueryGraph.askTime] Extracted timePeriod={}", timePeriod);
             }
-            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
+            String expenseType = (String) extracted.get("bill.expenseType");
+            if (expenseType != null && !expenseType.isEmpty()) {
+                result.put("bill.expenseType", expenseType);
+                log.info("[BillQueryGraph.askTime] Also extracted expenseType={}", expenseType);
+            }
         } catch (Exception e) {
             log.error("[BillQueryGraph.askTime] Extraction failed", e);
-            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;
@@ -185,10 +188,13 @@ public class BillQueryGraphConfig extends AbstractGraphConfig {
                 result.put("bill.expenseType", expenseType);
                 log.info("[BillQueryGraph.askType] Extracted expenseType={}", expenseType);
             }
-            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
+            String timePeriod = (String) extracted.get("bill.timePeriod");
+            if (timePeriod != null && !timePeriod.isEmpty()) {
+                result.put("bill.timePeriod", timePeriod);
+                log.info("[BillQueryGraph.askType] Also extracted timePeriod={}", timePeriod);
+            }
         } catch (Exception e) {
             log.error("[BillQueryGraph.askType] Extraction failed", e);
-            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;

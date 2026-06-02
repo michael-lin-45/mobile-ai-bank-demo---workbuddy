@@ -9,6 +9,7 @@ import com.alibaba.cloud.ai.graph.state.strategy.AppendStrategy;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.mobileagent.app.memory.CheckpointSaverConfig;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
@@ -66,12 +67,10 @@ public class GlobalSessionStore {
     private GlobalSessionContext createNewContext(String sessionId) {
         log.info("[GlobalSessionStore] Creating new GlobalSessionContext for sessionId={}", sessionId);
 
-        // 创建 OverAllState：公共构造器 + registerKeyAndStrategy
         Map<String, KeyStrategy> strategies = keyStrategyFactory.apply();
         OverAllState state = new OverAllState();
         state.registerKeyAndStrategy(strategies);
 
-        // 创建独立的 CheckpointSaver 实例
         BaseCheckpointSaver saver = checkpointSaverFactory.create();
 
         return new GlobalSessionContext(sessionId, state, saver);
@@ -114,6 +113,7 @@ public class GlobalSessionStore {
             strategies.put("_isFinal", new ReplaceStrategy());
             strategies.put("_cancelSignal", new ReplaceStrategy());
             strategies.put("_globalStateData", new ReplaceStrategy());
+            strategies.put("_lastDomain", new ReplaceStrategy());
 
             // Transfer 域
             strategies.put("transfer.receiver", new ReplaceStrategy());

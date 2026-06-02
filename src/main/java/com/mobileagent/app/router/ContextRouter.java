@@ -2,12 +2,10 @@ package com.mobileagent.app.router;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.data.RoutingResult;
-import com.mobileagent.app.util.ChatHistoryUtils;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
@@ -16,9 +14,7 @@ import org.springframework.stereotype.Service;
  *
  * 设计:
  * - 全部走LLM判断,不做确定性规则短路(避免误判)
- * - 不使用ReadOnlyMemoryAdvisor，改为手动读取ChatMemory并格式化到{chat_history}占位符
- * - 调用方传入对应的ChatMemory实例(全局/领域级)，在system prompt中区分【对话历史】和【当前消息】
- * - ChatMemory写入由调用方统一管理
+ * - 调用方传入已格式化的chatHistory字符串，本类不再自行读取ChatMemory
  * - 不依赖AgentStateManager，由L1 Service传入状态字符串(currentAgent, pendingAgents, sessionState)
  *
  * 支持两种模板:
@@ -32,15 +28,12 @@ public class ContextRouter {
     private final ChatClient chatClient;
     private final IntentRegistry intentRegistry;
     private final ObjectMapper objectMapper;
-    private final int judgmentMaxPairs;
 
     public ContextRouter(@Qualifier("contextChatClient") ChatClient chatClient,
-                        IntentRegistry intentRegistry,
-                        @org.springframework.beans.factory.annotation.Value("${routing.history.judgment-max-pairs:5}") int judgmentMaxPairs) {
+                        IntentRegistry intentRegistry) {
         this.chatClient = chatClient;
         this.intentRegistry = intentRegistry;
         this.objectMapper = new ObjectMapper();
-        this.judgmentMaxPairs = judgmentMaxPairs;
     }
 
     /**
@@ -51,17 +44,16 @@ public class ContextRouter {
      * @param currentAgent 当前活跃意图名称(如"TRANSFER"或"无")
      * @param pendingAgents 挂起的意图列表描述(如"WEALTH_CONSULT, WEALTH_INTERPRET"或"无")
      * @param templatePath 提示词模板路径
-     * @param domainName 领域名称(用于简化模板中的领域标识,可为null)
-     * @param chatMemory 指定读取的ChatMemory实例(为null时无法读取历史)
-     * @param lastQuestion 子智能体最后的提问，null表示无。非空时注入prompt帮助LLM判断用户是否在回答问题
+     * @param domainName 领域名称
+     * @param chatHistory 已格式化的对话历史字符串(由调用方从GlobalSessionContext.messages获取)
+     * @param lastQuestion 子智能体最后的提问，null表示无
      * @return 路由结果(至少包含routeType)
      */
     public RoutingResult route(String sessionId, String userInput,
                                String currentAgent, String pendingAgents,
-                               String templatePath, String domainName, ChatMemory chatMemory,
+                               String templatePath, String domainName, String chatHistory,
                                String lastQuestion) {
         try {
-            String chatHistory = formatChatHistory(chatMemory, sessionId);
             String sessionState = buildSessionStateDescription(currentAgent, pendingAgents);
             String systemPrompt = buildRoutingSystemPrompt(userInput, currentAgent, pendingAgents,
                     sessionState, templatePath, domainName, chatHistory, lastQuestion);
@@ -91,16 +83,6 @@ public class ContextRouter {
         }
     }
 
-    /**
-     * 读取ChatMemory并格式化为文本历史(截断到配置对数)
-     */
-    private String formatChatHistory(ChatMemory chatMemory, String sessionId) {
-        return ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs);
-    }
-
-    /**
-     * 根据currentAgent和pendingAgents构建sessionState描述
-     */
     private String buildSessionStateDescription(String currentAgent, String pendingAgents) {
         StringBuilder sb = new StringBuilder();
         if (currentAgent != null && !"无".equals(currentAgent)) {
@@ -122,7 +104,6 @@ public class ContextRouter {
         String template = loadTemplate(templatePath);
         String intentList = intentRegistry.getIntentListDescription();
 
-        // lastQuestion区段: 非空时替换条件区段内容，空时移除条件区段
         String lastQuestionContext;
         if (lastQuestion != null && !lastQuestion.isBlank()) {
             lastQuestionContext = """
@@ -156,7 +137,6 @@ public class ContextRouter {
                 .replace("{chat_history}", chatHistory)
                 .replace("{last_question_context}", lastQuestionContext);
 
-        // 简化模板需要domain_name替换
         if (domainName != null) {
             prompt = prompt.replace("{domain_name}", domainName);
         }
@@ -189,10 +169,9 @@ public class ContextRouter {
     private String normalizeRouteType(String routeType, boolean simpleMode) {
         if (routeType == null) return "SWITCH";
         if (simpleMode) {
-            // 简化模式: 只支持FOLLOW和SWITCH
             return switch (routeType.toUpperCase()) {
                 case "CONTINUE_FOLLOWUP", "FOLLOW" -> "FOLLOW";
-                default -> "SWITCH"; // RESUME在简化模式下降级为SWITCH
+                default -> "SWITCH";
             };
         }
         return switch (routeType.toUpperCase()) {
@@ -220,9 +199,13 @@ public class ContextRouter {
             当前活跃意图: {current_agent}
             挂起的意图: {pending_agents}
             {last_question_context}
-            ===对话历史(用户之前的对话，用于理解上下文)===
+            ===对话历史===
             {chat_history}
             ===对话历史结束===
+
+            注意: 对话历史分为"本域"和"其他领域参考"两部分。
+            - 本域消息: 当前领域内用户的对话，直接用于判断 FOLLOW/SWITCH/RESUME
+            - 其他领域参考: 仅用于理解跨域指代(如"刚才说的那个理财")，不作为路由判断依据
             
             ===用户当前消息(用户此刻说的话，用于判断当前意图)===
             {message}

@@ -16,10 +16,9 @@ public interface DomainHandler {
      *
      * @param sessionId 会话ID
      * @param userInput 用户输入
-     * @param globalChatHistory 全局跨域对话历史
      * @return 处理结果流
      */
-    Flux<StreamChunk> handle(String sessionId, String userInput, String globalChatHistory);
+    Flux<StreamChunk> handle(String sessionId, String userInput);
 
     /**
      * 获取领域名称

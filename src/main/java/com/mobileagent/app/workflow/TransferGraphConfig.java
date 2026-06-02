@@ -162,10 +162,18 @@ public class TransferGraphConfig extends AbstractGraphConfig {
                 result.put("transfer.receiver", receiver);
                 log.info("[TransferGraph.askReceiver] Extracted receiver={}", receiver);
             }
-            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
+            Object amount = extracted.get("transfer.amount");
+            if (amount != null) {
+                result.put("transfer.amount", amount);
+                log.info("[TransferGraph.askReceiver] Also extracted amount={}", amount);
+            }
+            String purpose = (String) extracted.get("transfer.purpose");
+            if (purpose != null && !purpose.isEmpty()) {
+                result.put("transfer.purpose", purpose);
+                log.info("[TransferGraph.askReceiver] Also extracted purpose={}", purpose);
+            }
         } catch (Exception e) {
             log.error("[TransferGraph.askReceiver] Extraction failed", e);
-            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;
@@ -192,9 +200,17 @@ public class TransferGraphConfig extends AbstractGraphConfig {
                 if (directAmount != null) {
                     result.put("transfer.amount", directAmount);
                     log.info("[TransferGraph.askAmount] Direct parsed amount={}", directAmount);
-                } else {
-                    log.warn("[TransferGraph.askAmount] Could not parse amount from: {}", userInput);
                 }
+            }
+            String receiver = (String) extracted.get("transfer.receiver");
+            if (receiver != null && !receiver.isEmpty()) {
+                result.put("transfer.receiver", receiver);
+                log.info("[TransferGraph.askAmount] Also extracted receiver={}", receiver);
+            }
+            String purpose = (String) extracted.get("transfer.purpose");
+            if (purpose != null && !purpose.isEmpty()) {
+                result.put("transfer.purpose", purpose);
+                log.info("[TransferGraph.askAmount] Also extracted purpose={}", purpose);
             }
         } catch (Exception e) {
             log.error("[TransferGraph.askAmount] Extraction failed", e);

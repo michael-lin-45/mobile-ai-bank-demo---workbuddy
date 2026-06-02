@@ -22,7 +22,7 @@ import reactor.core.publisher.Flux;
  * 2. 流结束时发送 [DONE]（OpenAI格式）
  * 3. 设置SSE响应头
  *
- * 不关心业务语义（isTerminal、ChatMemory等），只做格式转换
+ * 不关心业务语义（isTerminal等），只做格式转换
  * L0/L1/L2通过StreamChunk的isTerminal()判断流结束，不依赖SSE
  */
 @Slf4j

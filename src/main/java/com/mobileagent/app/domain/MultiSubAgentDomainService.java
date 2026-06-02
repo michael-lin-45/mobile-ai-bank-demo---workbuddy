@@ -3,20 +3,16 @@ package com.mobileagent.app.domain;
 import com.mobileagent.app.data.RoutingResolution;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.StreamChunk;
-import com.mobileagent.app.data.WorkflowOutput;
-import com.mobileagent.app.data.WorkflowStatus;
 import com.mobileagent.app.memory.SessionStateStore;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
 import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
-import com.mobileagent.app.execution.StreamingChatMemoryWriter;
 import com.mobileagent.app.util.TemplateUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.scheduling.annotation.Scheduled;
 import reactor.core.publisher.Flux;
 
@@ -27,25 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 多子智能体领域服务 - 1-N关系 (1个L1对应N个L2)
  *
- * 适用场景: 理财(WEALTH_CONSULT/WEALTH_INTERPRET), 活动, 贷款 等
+ * 适用场景: 理财(WEALTH_CONSULT/WEALTH_INTERPRET) 等
  * 特点: 多个子意图之间可切换，需要suspendedAgents、消歧、Phase2意图识别
- *
- * 控制流 (5层决策):
- * 1. Phase1: ContextRouter (full模板) → FOLLOW / SWITCH / RESUME
- * 2. FOLLOW + activeAgent (非消歧中) → resumeGraph（官方模式二）
- * 3. FOLLOW + 无activeAgent + 有suspendedAgents → 降级走Phase2
- * 4. Phase2: IntentResolver → RoutingResolution (RESOLVED/DISAMBIGUATION/REJECTED/CANCELLED)
- * 5. RESOLVED → executeRoute (auto-upgrade + handleSwitchNew/handleResume)
- *
- * 官方模式二 + threadId独立架构:
- * - SuspendedInfo 保留 intent + threadId + 时间戳
- * - handleResume 用 SuspendedInfo 中的 threadId 恢复（不再用sessionId）
- * - handleSwitchNew 挂起当前 agent 时传递其 threadId
- *
- * Cancel:
- * - 不暴露cancel公共方法
- * - 子智能体执行中的取消: FOLLOW → resumeGraph → 子Graph的cancelAwareExtractParams检测
- * - 消歧中的取消: IntentResolver.isCancelExpression() → CANCELLED状态 → handle()中clearDisambiguationState
  */
 @Slf4j
 public class MultiSubAgentDomainService extends AbstractDomainService {
@@ -59,18 +38,11 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private final String rejectedMessage;
     private final List<IntentInfo> handledIntents;
 
-    // ==================== Multi独有状态 ====================
-
-    /** 本领域自有的挂起意图 (per session, sessionId → Map<intent, SuspendedInfo>) — 通过SessionStateStore抽象 */
     private final SessionStateStore<Map<String, SuspendedInfo>> suspendedAgentStore;
-
-    /** 本领域自有的消歧状态 (per session) — 通过SessionStateStore抽象 */
     private final SessionStateStore<DisambiguationState> disambiguationStore;
 
     private final int maxSuspendedDepth;
     private final long suspendedExpireMinutes;
-
-    // ==================== Multi独有数据类 ====================
 
     @Data
     public static class SuspendedInfo {
@@ -86,7 +58,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             this.expiresAt = expiresAt;
         }
 
-        /** 是否已过期 */
         public boolean isExpired() {
             return expiresAt.isBefore(Instant.now());
         }
@@ -104,9 +75,10 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     // ==================== 构造(Builder) ====================
 
     private MultiSubAgentDomainService(Builder builder) {
-        super(builder.domainName, builder.logTag, builder.chatMemory,
+        super(builder.domainName, builder.logTag, builder.domainKey,
                 builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
-                builder.globalSessionStore, builder.activeAgentStore, builder.activeAgentExpireMinutes);
+                builder.globalSessionStore, builder.activeAgentStore, builder.activeAgentExpireMinutes,
+                builder.l1DomainPairs);
         this.intentResolver = builder.intentResolver;
         this.routingTemplatePath = builder.routingTemplatePath != null
                 ? builder.routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
@@ -129,7 +101,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     public static class Builder {
         private String domainName;
         private String logTag;
-        private ChatMemory chatMemory;
+        private String domainKey;
         private ContextRouter contextRouter;
         private IntentResolver intentResolver;
         private GraphExecutionEngine graphExecutionEngine;
@@ -145,10 +117,11 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         private int maxSuspendedDepth = 3;
         private long suspendedExpireMinutes = 20;
         private long activeAgentExpireMinutes = 20;
+        private int l1DomainPairs = 6;
 
         public Builder domainName(String domainName) { this.domainName = domainName; return this; }
         public Builder logTag(String logTag) { this.logTag = logTag; return this; }
-        public Builder chatMemory(ChatMemory chatMemory) { this.chatMemory = chatMemory; return this; }
+        public Builder domainKey(String domainKey) { this.domainKey = domainKey; return this; }
         public Builder contextRouter(ContextRouter contextRouter) { this.contextRouter = contextRouter; return this; }
         public Builder intentResolver(IntentResolver intentResolver) { this.intentResolver = intentResolver; return this; }
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
@@ -158,20 +131,18 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         public Builder suspendedAgentStore(SessionStateStore<Map<String, SuspendedInfo>> suspendedAgentStore) { this.suspendedAgentStore = suspendedAgentStore; return this; }
         public Builder disambiguationStore(SessionStateStore<DisambiguationState> disambiguationStore) { this.disambiguationStore = disambiguationStore; return this; }
         public Builder routingTemplatePath(String routingTemplatePath) { this.routingTemplatePath = routingTemplatePath; return this; }
-        /** 意图识别模板路径(如"prompts/l1-intention.st")，默认使用通用模板 */
         public Builder intentionTemplatePath(String intentionTemplatePath) { this.intentionTemplatePath = intentionTemplatePath; return this; }
         public Builder rejectedMessage(String rejectedMessage) { this.rejectedMessage = rejectedMessage; return this; }
-        /** 此领域服务处理的所有意图及其描述 */
         public Builder handledIntents(List<IntentInfo> handledIntents) { this.handledIntents = handledIntents; return this; }
         public Builder maxSuspendedDepth(int maxSuspendedDepth) { this.maxSuspendedDepth = maxSuspendedDepth; return this; }
         public Builder suspendedExpireMinutes(long suspendedExpireMinutes) { this.suspendedExpireMinutes = suspendedExpireMinutes; return this; }
-        /** activeAgent过期时间(分钟)，默认20分钟，与suspendedExpireMinutes保持一致 */
         public Builder activeAgentExpireMinutes(long activeAgentExpireMinutes) { this.activeAgentExpireMinutes = activeAgentExpireMinutes; return this; }
+        public Builder l1DomainPairs(int l1DomainPairs) { this.l1DomainPairs = l1DomainPairs; return this; }
 
         public MultiSubAgentDomainService build() {
             Objects.requireNonNull(domainName, "domainName is required");
             Objects.requireNonNull(logTag, "logTag is required");
-            Objects.requireNonNull(chatMemory, "chatMemory is required");
+            Objects.requireNonNull(domainKey, "domainKey is required");
             Objects.requireNonNull(contextRouter, "contextRouter is required");
             Objects.requireNonNull(intentResolver, "intentResolver is required");
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
@@ -180,11 +151,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(activeAgentStore, "activeAgentStore is required");
             Objects.requireNonNull(suspendedAgentStore, "suspendedAgentStore is required");
             Objects.requireNonNull(disambiguationStore, "disambiguationStore is required");
-            // 预热模板: 构造时加载到缓存,运行时零IO
-            String routingPath = routingTemplatePath != null
-                    ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
-            String intentionPath = intentionTemplatePath != null
-                    ? intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
+            String routingPath = routingTemplatePath != null ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
+            String intentionPath = intentionTemplatePath != null ? intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
             TemplateUtils.warmUp(routingPath, () -> "");
             TemplateUtils.warmUp(intentionPath, () -> "");
             return new MultiSubAgentDomainService(this);
@@ -193,19 +161,17 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     // ==================== suspendedAgents管理 ====================
 
-    private static final String SUSPENDED_NS = "suspended"; // namespace后缀
+    private static final String SUSPENDED_NS = "suspended";
 
     private void suspendOwnAgent(String sessionId, String intent, String threadId) {
         Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
                 .orElseGet(HashMap::new);
 
-        // 同一intent已挂起 → 无需重复挂起（checkpoint自动保留）
         if (sessionMap.containsKey(intent)) {
             log.debug("[{}] Suspended agent already exists: session={}, intent={}", logTag, sessionId, intent);
             return;
         }
 
-        // 检查深度限制
         if (sessionMap.size() >= maxSuspendedDepth) {
             String oldestKey = sessionMap.entrySet().stream()
                     .min(Comparator.comparing(e -> e.getValue().getSuspendedAt()))
@@ -241,7 +207,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
                 .orElse(null);
         if (sessionMap == null) return Collections.emptyMap();
-        // 清理过期条目
         sessionMap.entrySet().removeIf(e -> e.getValue().isExpired());
         if (sessionMap.isEmpty()) {
             suspendedAgentStore.remove(SUSPENDED_NS + ":" + logTag, sessionId);
@@ -278,10 +243,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         return true;
     }
 
-    /** 定时清理过期的挂起记录和activeAgent, 每分钟执行一次 */
     @Scheduled(fixedRate = 60_000)
     public void cleanupExpiredSuspended() {
-        // 清理过期的suspended entries
         String ns = SUSPENDED_NS + ":" + logTag;
         Map<String, Map<String, SuspendedInfo>> all = suspendedAgentStore.getAll(ns);
         for (var entry : all.entrySet()) {
@@ -300,13 +263,12 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 suspendedAgentStore.put(ns, sessionId, sessionMap);
             }
         }
-        // 同时清理过期的activeAgent
         cleanupExpiredActiveAgents();
     }
 
     // ==================== 消歧管理 ====================
 
-    private static final String DISAMBIG_NS = "disambig"; // namespace后缀
+    private static final String DISAMBIG_NS = "disambig";
 
     private boolean isInDisambiguation(String sessionId) {
         return disambiguationStore.containsKey(DISAMBIG_NS + ":" + logTag, sessionId);
@@ -324,9 +286,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         disambiguationStore.remove(DISAMBIG_NS + ":" + logTag, sessionId);
     }
 
-    // ==================== 状态描述(供外部调用) ====================
-
-    /** 获取挂起意图列表描述(供ContextRouter prompt用) */
     public String getPendingAgentsDescription(String sessionId) {
         Map<String, SuspendedInfo> suspended = getAllOwnSuspended(sessionId);
         if (suspended.isEmpty()) return "无";
@@ -336,23 +295,22 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     // ==================== 主入口 ====================
 
     @Override
-    public Flux<StreamChunk> handle(String sessionId, String userInput, String globalChatHistory) {
+    public Flux<StreamChunk> handle(String sessionId, String userInput) {
         log.info("[{}] Handling: sessionId={}, input={}", logTag, sessionId, userInput);
 
         try {
             String currentAgent = buildCurrentAgent(sessionId);
             String pendingAgents = getPendingAgentsDescription(sessionId);
 
-            // ========== Phase 1: ContextRouter (FOLLOW/SWITCH/RESUME) ==========
             ActiveAgentInfo activeAgentForRouting = getOwnActiveAgent(sessionId);
             String lastQuestion = (activeAgentForRouting != null) ? activeAgentForRouting.getLastQuestion() : null;
+            String chatHistory = getFormattedChatHistory(sessionId);
 
-            RoutingResult phase1 = contextRouter.route(domainSessionId(sessionId), userInput,
+            RoutingResult phase1 = contextRouter.route(sessionId, userInput,
                     currentAgent, pendingAgents,
-                    routingTemplatePath, domainName, chatMemory, lastQuestion);
+                    routingTemplatePath, domainName, chatHistory, lastQuestion);
             log.info("[{}] Phase1: routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
 
-            // ========== FOLLOW + activeAgent → 直接resume (消歧中除外) ==========
             if (phase1.isFollow() && !isInDisambiguation(sessionId)) {
                 ActiveAgentInfo activeAgent = getOwnActiveAgent(sessionId);
                 if (activeAgent != null) {
@@ -367,7 +325,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 }
             }
 
-            // ========== RESUME但无suspendedAgents → 降级为SWITCH ==========
             if ("RESUME".equals(phase1.getRouteType()) && !hasOwnSuspendedAgents(sessionId)) {
                 log.info("[{}] RESUME but no suspended agents → fallback to SWITCH", logTag);
                 phase1 = RoutingResult.builder()
@@ -375,33 +332,28 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                         .reasoning("RESUME但无挂起线程,降级为新意图").build();
             }
 
-            // ========== 路由决策 (Phase2 + 消歧) ==========
             DisambiguationState disambigState = getDisambiguationState(sessionId);
             String disambigGroupId = disambigState != null ? disambigState.getGroupId() : null;
             String domainIntentScopeList = intentRegistry.getDomainIntentScopeDescription(
                     handledIntents.stream().map(IntentInfo::getIntentName).toList());
 
-            RoutingResolution resolution = intentResolver.resolve(domainSessionId(sessionId), userInput, phase1, chatMemory,
+            RoutingResolution resolution = intentResolver.resolve(sessionId, userInput, phase1, chatHistory,
                     isInDisambiguation(sessionId), disambigGroupId,
                     hasOwnSuspendedAgents(sessionId), getAllOwnSuspended(sessionId),
-                    intentionTemplatePath, globalChatHistory, domainIntentScopeList);
+                    intentionTemplatePath, domainIntentScopeList);
 
-            log.info("[{}] Routing resolution: status={}, intent={}, outOfDomain={}, globalChatHistory=[{}]",
-                    logTag, resolution.getStatus(), resolution.getIntentName(), resolution.isOutOfDomain(),
-                    globalChatHistory != null && !globalChatHistory.isBlank() ? globalChatHistory.substring(0, Math.min(200, globalChatHistory.length())) + "..." : "(空)");
+            log.info("[{}] Routing resolution: status={}, intent={}, outOfDomain={}",
+                    logTag, resolution.getStatus(), resolution.getIntentName(), resolution.isOutOfDomain());
 
-            // ========== REROUTE判断: 识别的意图不属于本域 ==========
             if (resolution.isResolved()) {
                 String effectiveIntent = resolution.getIntentName();
 
-                // 跨域意图: 意图不在本域handledIntents中
                 if (!isOwnIntent(effectiveIntent)) {
                     log.info("[{}] Cross-domain intent detected: intent={} not in handledIntents, → REROUTE",
                             logTag, effectiveIntent);
                     return Flux.just(StreamChunk.reroute(effectiveIntent, null));
                 }
 
-                // outOfDomain: IntentRouter判断不属于本域scope
                 if (resolution.isOutOfDomain()) {
                     log.info("[{}] Out-of-domain intent detected: intent={}, → REROUTE",
                             logTag, effectiveIntent);
@@ -409,21 +361,16 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 }
             }
 
-            // ========== Auto-upgrade保护: SWITCH但意图与activeAgent一致 → 降级FOLLOW ==========
             if (resolution.isResolved() && activeAgentForRouting != null
                     && !"RESUME".equals(resolution.getRouteType())) {
                 String identifiedIntent = resolution.getIntentName();
                 if (identifiedIntent != null && identifiedIntent.equals(activeAgentForRouting.getIntent())) {
                     log.info("[{}] Auto-upgrade SWITCH→FOLLOW: identifiedIntent={} matches activeAgent.intent={}",
                             logTag, identifiedIntent, activeAgentForRouting.getIntent());
-                    addUserMessage(sessionId, userInput);
                     return resumeActiveAgent(sessionId, userInput, activeAgentForRouting);
                 }
             }
 
-            addUserMessage(sessionId, userInput);
-
-            // ========== 根据决议执行 ==========
             return switch (resolution.getStatus()) {
                 case RESOLVED -> executeRoute(sessionId, resolution);
                 case DISAMBIGUATION -> {
@@ -455,7 +402,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     // ==================== 路由执行 ====================
 
     private Flux<StreamChunk> executeRoute(String sessionId, RoutingResolution resolution) {
-        // 防御: 如果意图已suspended但路由判了SWITCH，自动升级为RESUME
         if (!"RESUME".equals(resolution.getRouteType())
                 && getOwnSuspendedAgent(sessionId, resolution.getIntentName()) != null) {
             log.info("[{}] Auto-upgrade {}→RESUME for suspended intent={}",
@@ -477,9 +423,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         return executeNewAgent(sessionId, intent, rewrittenInput);
     }
 
-    /**
-     * 恢复挂起的意图 — 用SuspendedInfo中存储的threadId恢复，注入全局OverAllState数据
-     */
     private Flux<StreamChunk> handleResume(String sessionId, String intent, String userInput) {
         SuspendedInfo suspendedInfo = getOwnSuspendedAgent(sessionId, intent);
         if (suspendedInfo == null) {
@@ -497,7 +440,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         String threadId = suspendedInfo.getThreadId();
         log.info("[{}] RESUME with checkpoint: intent={}, threadId={}", logTag, intent, threadId);
 
-        // 获取graph并设置activeAgent（保留原threadId）
         var graph = intentRegistry.getGraph(intent);
         if (graph == null) {
             return Flux.just(StreamChunk.error("Graph not found for intent: " + intent));
@@ -505,19 +447,10 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
         setOwnActiveAgent(sessionId, intent, threadId);
 
-        // 注入当前Session的全局OverAllState数据
         Map<String, Object> globalStateData = globalSessionStore.getOrCreate(sessionId).data();
 
-        // per-request独立的ChatMemory写入器
-        StreamingChatMemoryWriter.AssistantWriter assistantWriter =
-                new StreamingChatMemoryWriter.AssistantWriter(chatMemory, domainSessionId(sessionId));
-
-        // 用存储的threadId恢复，注入全局数据
         return graphExecutionEngine.resumeGraph(graph, intent, userInput, threadId, globalStateData)
-                .doOnNext(chunk -> {
-                    assistantWriter.onChunk(chunk);
-                    handleActiveAgentState(sessionId, chunk);
-                });
+                .doOnNext(chunk -> handleActiveAgentState(sessionId, chunk));
     }
 
     // ==================== 工具方法 ====================
@@ -573,7 +506,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         return handledIntents;
     }
 
-    /** 判断意图是否属于本域处理范围 */
     private boolean isOwnIntent(String intentName) {
         if (intentName == null || "UNKNOWN".equalsIgnoreCase(intentName)) return false;
         return handledIntents.stream()

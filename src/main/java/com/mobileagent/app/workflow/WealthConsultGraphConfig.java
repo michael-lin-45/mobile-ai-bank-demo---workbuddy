@@ -191,10 +191,13 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
                 result.put("wealthConsult.focusArea", focusArea);
                 log.info("[WealthConsultGraph.askFocusArea] Extracted focusArea={}", focusArea);
             }
-            // LLM返回null: 用户确实没指定,不猜测,让paramRouter继续追问
+            String riskLevel = (String) extracted.get("wealthConsult.riskLevel");
+            if (riskLevel != null && !riskLevel.isEmpty()) {
+                result.put("wealthConsult.riskLevel", riskLevel);
+                log.info("[WealthConsultGraph.askFocusArea] Also extracted riskLevel={}", riskLevel);
+            }
         } catch (Exception e) {
             log.error("[WealthConsultGraph.askFocusArea] Extraction failed", e);
-            // LLM调用失败: 同样不设置,让paramRouter继续追问
         }
         result.put("_latestUserInput", "");
         return result;

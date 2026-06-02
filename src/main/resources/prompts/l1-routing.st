@@ -10,7 +10,7 @@
 挂起的意图: {pending_agents}
 {last_question_context}
 
-===对话历史(用户之前的对话，用于理解上下文)===
+===对话历史===
 {chat_history}
 ===对话历史结束===
 

@@ -1,22 +1,15 @@
 package com.mobileagent.app.router;
 
 import com.mobileagent.app.config.RoutingProperties;
-import com.mobileagent.app.memory.SessionStateStore;
-import com.mobileagent.app.memory.SessionStateStoreConfig;
-import com.mobileagent.app.util.ChatHistoryUtils;
+import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * L0领域路由器 - 确定性优先 + 模型兜底
@@ -34,44 +27,27 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class DomainRouter {
 
-    // ==================== 领域关键词(从配置加载) ====================
-
-    /** 领域 → 关键词集合，从 routing.domains 初始化 */
     private final Map<String, Set<String>> domainKeywords;
 
-    /** UNSUPPORTED领域名(特殊处理: 提取具体功能名) */
     private static final String UNSUPPORTED_DOMAIN = "UNSUPPORTED";
 
-    /** lastActiveDomain命名空间 */
-    private static final String LAST_DOMAIN_NS = "last-domains";
-
-    // ==================== 实例字段 ====================
-
     private final ChatClient domainChatClient;
-    private final ChatMemory chatMemory;
+    private final GlobalSessionStore globalSessionStore;
     private final ObjectMapper objectMapper;
-    private final int judgmentMaxPairs;
+    private final int l0MaxPairs;
     private final long lastDomainExpireMinutes;
 
-    /** L0自有状态: 最近活跃领域 (sessionId → LastDomainEntry) — 通过SessionStateStore抽象 */
-    private final SessionStateStore<LastDomainEntry> lastDomainStore;
-
-    // ==================== 构造 ====================
-
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
-                        ChatMemory chatMemory,
+                        GlobalSessionStore globalSessionStore,
                         RoutingProperties routingProperties,
-                        SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
-                        @org.springframework.beans.factory.annotation.Value("${routing.history.global-context-max-pairs:10}") int judgmentMaxPairs,
+                        @org.springframework.beans.factory.annotation.Value("${routing.history.l0-max-pairs:10}") int l0MaxPairs,
                         @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes) {
         this.domainChatClient = domainChatClient;
-        this.chatMemory = chatMemory;
+        this.globalSessionStore = globalSessionStore;
         this.objectMapper = new ObjectMapper();
-        this.judgmentMaxPairs = judgmentMaxPairs;
+        this.l0MaxPairs = l0MaxPairs;
         this.lastDomainExpireMinutes = lastDomainExpireMinutes;
-        this.lastDomainStore = storeFactory.create(LAST_DOMAIN_NS, new TypeReference<LastDomainEntry>() {});
 
-        // 从配置加载领域关键词
         Map<String, Set<String>> keywords = new LinkedHashMap<>();
         for (var entry : routingProperties.getDomains().entrySet()) {
             keywords.put(entry.getKey(), new HashSet<>(entry.getValue().getKeywords()));
@@ -88,21 +64,8 @@ public class DomainRouter {
         }
     }
 
-    /** lastActiveDomain条目 — public用于Jackson序列化(Redis模式) */
-    public record LastDomainEntry(String domain, Instant setAt) {
-        /** 是否已过期 */
-        public boolean isExpired(long expireMinutes) {
-            return setAt.plusSeconds(expireMinutes * 60).isBefore(Instant.now());
-        }
-    }
-
     // ==================== 主入口 ====================
 
-    /**
-     * L0领域路由 - 确定性优先，模型兜底
-     *
-     * @param excludedDomains 已排除的领域集合(REROUTE时使用)，正常路由传Collections.emptySet()
-     */
     public DomainResult route(String sessionId, String userInput, Set<String> excludedDomains) {
         // 1. 确定性路由: 关键词匹配
         DomainResult deterministic = routeDeterministic(userInput);
@@ -111,9 +74,8 @@ public class DomainRouter {
             log.info("[DomainRouter] Deterministic: domain={} for input='{}'", deterministic.domain(), userInput);
             return deterministic;
         }
-        // 确定性命中但被排除 → 跳过，走LLM重新判断
 
-        // 2. 模型路由: chatHistory + lastActiveDomain + excludedDomains
+        // 2. 模型路由
         try {
             String chatHistory = formatChatHistory(sessionId);
             String lastDomainContext = formatLastDomainContext(sessionId);
@@ -134,7 +96,6 @@ public class DomainRouter {
             DomainResult result = parseDomainResponse(content);
             log.info("[DomainRouter] Model resolved: domain={} (feature={}) for input='{}'", result.domain(), result.unsupportedFeature(), userInput);
 
-            // 路由到非CHAT/UNSUPPORTED领域时更新lastDomain
             if (!"CHAT".equals(result.domain()) && !result.isUnsupported()) {
                 updateLastDomain(sessionId, result.domain());
             }
@@ -148,67 +109,33 @@ public class DomainRouter {
 
     // ==================== 确定性路由 ====================
 
-    /**
-     * 确定性路由 - 关键词匹配，意图明确时直接返回
-     *
-     * 后续可扩展: 接入传统小模型、正则匹配等
-     * @return 非null表示确定性命中，null表示需要模型判断
-     */
     private DomainResult routeDeterministic(String userInput) {
         if (userInput == null || userInput.isBlank()) return null;
 
         String input = userInput.trim();
 
-        // 关键词匹配(按优先级: 先匹配UNSUPPORTED，避免被其他规则截胡)
         String keywordDomain = matchDomainKeywords(input);
         if (keywordDomain != null) {
             String unsupportedFeature = "UNSUPPORTED".equals(keywordDomain) ? extractUnsupportedFeature(input) : null;
             return new DomainResult(keywordDomain, unsupportedFeature, 1.0, "DETERMINISTIC:keyword");
         }
 
-        // TODO: 规则/小模型判断短回答路由 (当前为空函数，后续接入)
-        // 场景: 用户回答"稳健"/"娱乐"/"500"等短输入，无领域关键词
-        // 应结合chatHistory判断: 历史问"风险偏好？"→当前"稳健"→WEALTH
-        // 或结合lastActiveDomain兜底: 最近领域=WEALTH→当前"能源的"→WEALTH
         DomainResult ruleResult = routeByRules(input);
         if (ruleResult != null) {
             return ruleResult;
         }
 
-        return null; // 需要模型判断
-    }
-
-    /**
-     * 规则/小模型路由 - 结合chatHistory和lastActiveDomain判断短回答
-     * 当前为空函数，后续接入小模型或规则引擎
-     *
-     * @return 非null表示规则命中，null表示需要模型判断
-     */
-    private DomainResult routeByRules(String input) {
-        // TODO: 接入小模型或规则引擎
-        // 输入: sessionId(用于读chatHistory/lastActiveDomain), input(用户当前消息)
-        // 逻辑:
-        //   1. 读取chatHistory最后一条assistant消息，提取系统提问的领域
-        //   2. 如果用户输入是在回答系统提问 → 路由到对应领域
-        //   3. 否则检查lastActiveDomain兜底
-        // 输出: DomainResult 或 null(无法判断)
         return null;
     }
 
-    /**
-     * 关键词匹配 - 检查输入是否包含领域关键词
-     *
-     * 优先检查UNSUPPORTED(避免"贷款"等被其他规则截胡),
-     * 多领域同时命中时降级到LLM判断。
-     *
-     * @return 命中的领域名，null表示无匹配
-     */
+    private DomainResult routeByRules(String input) {
+        return null;
+    }
+
     private String matchDomainKeywords(String input) {
-        // UNSUPPORTED优先检查
         Set<String> unsupportedKw = domainKeywords.get(UNSUPPORTED_DOMAIN);
         if (unsupportedKw != null && containsAny(input, unsupportedKw)) return UNSUPPORTED_DOMAIN;
 
-        // 统计各业务领域命中情况(排除UNSUPPORTED)
         List<String> hitDomains = new ArrayList<>();
         for (var entry : domainKeywords.entrySet()) {
             if (UNSUPPORTED_DOMAIN.equals(entry.getKey())) continue;
@@ -217,7 +144,6 @@ public class DomainRouter {
             }
         }
 
-        // 多领域关键词同时命中时，降级到LLM判断
         if (hitDomains.size() > 1) {
             log.info("[DomainRouter] Multi-domain keywords hit {}, delegating to LLM for input='{}'", hitDomains, input);
             return null;
@@ -227,7 +153,6 @@ public class DomainRouter {
         return null;
     }
 
-    /** 检查input是否包含keywords中任一关键词 */
     private boolean containsAny(String input, Set<String> keywords) {
         for (String keyword : keywords) {
             if (input.contains(keyword)) return true;
@@ -235,7 +160,6 @@ public class DomainRouter {
         return false;
     }
 
-    /** 从UNSUPPORTED关键词中提取具体功能名 */
     private String extractUnsupportedFeature(String input) {
         Set<String> unsupportedKw = domainKeywords.get(UNSUPPORTED_DOMAIN);
         if (unsupportedKw != null) {
@@ -246,51 +170,33 @@ public class DomainRouter {
         return "该";
     }
 
-    // ==================== lastActiveDomain管理 ====================
+    // ==================== lastDomain管理 ====================
 
     private void updateLastDomain(String sessionId, String domain) {
-        lastDomainStore.put(LAST_DOMAIN_NS, sessionId, new LastDomainEntry(domain, Instant.now()));
+        long expireAt = System.currentTimeMillis() + lastDomainExpireMinutes * 60 * 1000;
+        globalSessionStore.getOrCreate(sessionId).setLastDomain(domain, expireAt);
         log.debug("[DomainRouter] Updated lastDomain: session={}, domain={}", sessionId, domain);
     }
 
-    private String getLastDomain(String sessionId) {
-        LastDomainEntry entry = lastDomainStore.get(LAST_DOMAIN_NS, sessionId).orElse(null);
-        if (entry == null) return null;
-        if (entry.isExpired(lastDomainExpireMinutes)) {
-            lastDomainStore.remove(LAST_DOMAIN_NS, sessionId);
-            return null;
-        }
-        return entry.domain();
-    }
-
-    /** 格式化lastActiveDomain为prompt文本 */
     private String formatLastDomainContext(String sessionId) {
-        String domain = getLastDomain(sessionId);
+        String domain = globalSessionStore.getOrCreate(sessionId).getLastDomain();
         if (domain == null) return "(无)";
         return "最近活跃领域: " + domain;
     }
 
-    /** 格式化排除领域为prompt文本 */
+    public void clearLastDomain(String sessionId) {
+        globalSessionStore.getOrCreate(sessionId).clearLastDomain();
+    }
+
     private String formatExcludedDomainsContext(Set<String> excludedDomains) {
         if (excludedDomains == null || excludedDomains.isEmpty()) return "(无)";
         return "以下领域已被排除，不要路由到: " + String.join(", ", excludedDomains);
     }
 
-    /** 定时清理过期的lastActiveDomain，每分钟执行一次 */
-    @Scheduled(fixedRate = 60_000)
-    public void cleanupExpiredLastDomains() {
-        lastDomainStore.cleanExpired(LAST_DOMAIN_NS, entry -> entry.isExpired(lastDomainExpireMinutes));
-    }
-
-    /** 清除会话的lastDomain (供clearSession时调用) */
-    public void clearLastDomain(String sessionId) {
-        lastDomainStore.remove(LAST_DOMAIN_NS, sessionId);
-    }
-
     // ==================== Prompt构建 ====================
 
     private String formatChatHistory(String sessionId) {
-        return ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs);
+        return globalSessionStore.getOrCreate(sessionId).formatRecentMessages(l0MaxPairs);
     }
 
     private String buildDomainPrompt(String userInput, String chatHistory, String lastDomainContext,
@@ -330,9 +236,7 @@ public class DomainRouter {
     private String normalizeDomain(String domain) {
         if (domain == null) return "CHAT";
         String upper = domain.toUpperCase();
-        // 已配置的领域直接通过
         if (domainKeywords.containsKey(upper)) return upper;
-        // CHAT是兜底领域
         return "CHAT";
     }
 
@@ -354,9 +258,12 @@ public class DomainRouter {
             排除领域:
             {excluded_domains_context}
 
-            ===对话历史===
+            ===对话历史(每条消息带领域标签)===
             {chat_history}
             ===对话历史结束===
+
+            注意: 对话历史中每条消息前的[转账]/[理财]/[账单]/[闲聊]标签表示该消息所属的领域，
+            帮助你在跨域对话中准确判断当前消息的领域归属。
 
             ===用户当前消息===
             {message}

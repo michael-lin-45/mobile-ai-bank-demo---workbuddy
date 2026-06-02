@@ -11,14 +11,13 @@ import java.util.List;
  * 流式传输单元 — L0/L1/GES之间的唯一数据载体
  *
  * 两类chunk:
- * - 中间态: CHUNK — 流式文本增量，前端追加显示，ChatMemory累积但不写入
+ * - 中间态: CHUNK — 流式文本增量，前端追加显示
  * - 终结态: COMPLETE/INTERRUPTED/DISAMBIGUATION/ERROR/REROUTE
  *   一个Flux<StreamChunk>有且仅有1个终结chunk（最后一个元素）
  *
- * ChatMemory写入（由StreamingChatMemoryWriter统一处理）:
+ * messages写入（由BankController.AssistantAccumulator统一处理）:
  * - 流式Graph: 终结chunk不带content，完整文本从累积的CHUNK拼接
  * - 非流式Graph: 终结chunk带content，直接使用
- * - 判断逻辑: 累积器有内容用累积器，没有就用终结chunk.getReplyContent()
  */
 @Data
 @Builder
@@ -102,7 +101,7 @@ public class StreamChunk {
         return type == ChunkType.COMPLETE && content == null;
     }
 
-    /** 提取回复内容 — 供ChatMemory写入（只用终结chunk），不序列化给前端 */
+    /** 提取回复内容 — 供messages写入（只用终结chunk），不序列化给前端 */
     @JsonIgnore
     public String getReplyContent() {
         return switch (type) {

@@ -85,7 +85,7 @@ public class WorkflowOutput {
                 .build();
     }
 
-    /** 根据状态提取回复内容 — 仅内部使用（ChatMemory写入），不序列化给前端 */
+    /** 根据状态提取回复内容 — 仅内部使用（messages写入），不序列化给前端 */
     @JsonIgnore
     public String getReplyContent() {
         return switch (status) {

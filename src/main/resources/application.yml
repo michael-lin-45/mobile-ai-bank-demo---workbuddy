@@ -44,12 +44,12 @@ routing:
     # 高置信度豁免 - confidence高于此值时,即使LLM标ambiguous也信任首选意图
     high-confidence-bypass: 0.85
   history:
-    # 对话历史存储对数(1对=1条用户+1条助手),默认10对=20条消息,ChatMemory存储上限
-    max-pairs: 10
-    # L1领域内意图判断和改写节点使用的历史对数,默认6对=12条消息
-    judgment-max-pairs: 6
-    # L0传给L1的全局跨域历史对数,默认10对=20条消息,用于跨域指代消解
-    global-context-max-pairs: 10
+    # L0 域路由使用的历史对数
+    l0-max-pairs: 10
+    # L1 意图路由使用的历史对数
+    l1-max-pairs: 6
+    # ChatService 使用的历史对数
+    chat-max-pairs: 10
   verification:
     max-retries: 1
 

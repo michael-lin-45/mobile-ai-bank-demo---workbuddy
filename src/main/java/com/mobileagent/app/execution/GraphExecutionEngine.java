@@ -230,7 +230,7 @@ public class GraphExecutionEngine {
      * 构建流式路径的终结chunk
      *
      * 流式COMPLETE不带content（前端已通过CHUNK获得所有文本）
-     * ChatMemory的完整文本由StreamingChatMemoryWriter从累积器获取
+     * ChatHistory的完整文本由BankController.AssistantAccumulator从累积器获取
      */
     private StreamChunk buildStreamingTerminalChunk(CompiledGraph graph, RunnableConfig config,
                                                      String intent) {

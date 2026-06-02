@@ -1,62 +1,53 @@
 package com.mobileagent.app.domain;
 
 import com.mobileagent.app.data.StreamChunk;
+import com.mobileagent.app.execution.GlobalSessionStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 /**
  * 闲聊L1 Service - 直接使用大模型与用户聊天
  *
- * 设计:
  * - 无ContextRouter, 无IntentRouter, 无RoutingService
  * - 无activeThread, 无suspendedAgents
  * - 直接用ChatClient与用户对话
- * - 使用全局ChatMemory(L0注入的历史),不创建独立ChatMemory
- * - 不需要记录到领域ChatMemory(闲聊没有独立的领域ChatMemory)
- * - 实现 DomainHandler 接口, 可被 DomainServiceRegistry 统一分发
- * - 增强 system prompt 支持银行知识FAQ, 接住 REROUTE 过来的问题
- *
- * ChatMemory由advisor自动管理，不需要AssistantWriter
+ * - 从 GlobalSessionContext.messages 读取对话历史
  */
 @Slf4j
 @Service
 public class ChatService implements DomainHandler {
 
     private final ChatClient chatChatClient;
+    private final GlobalSessionStore globalSessionStore;
+    private final int chatMaxPairs;
 
-    public ChatService(@Qualifier("chatChatClient") ChatClient chatChatClient) {
+    public ChatService(@Qualifier("chatChatClient") ChatClient chatChatClient,
+                       GlobalSessionStore globalSessionStore,
+                       @Value("${routing.history.chat-max-pairs:10}") int chatMaxPairs) {
         this.chatChatClient = chatChatClient;
+        this.globalSessionStore = globalSessionStore;
+        this.chatMaxPairs = chatMaxPairs;
     }
 
-    /**
-     * 处理闲聊消息
-     *
-     * ChatService用advisor自动管理ChatMemory，不需要AssistantWriter
-     *
-     * @param sessionId 会话ID
-     * @param userInput 用户输入
-     * @param globalChatHistory 全局跨域对话历史(可能为null)
-     * @return Flux<StreamChunk>
-     */
     @Override
-    public Flux<StreamChunk> handle(String sessionId, String userInput, String globalChatHistory) {
+    public Flux<StreamChunk> handle(String sessionId, String userInput) {
         log.info("[ChatService] Handling: sessionId={}, input={}", sessionId, userInput);
 
         try {
             long startMs = System.currentTimeMillis();
 
-            var promptBuilder = chatChatClient.prompt()
-                    .system(SYSTEM_PROMPT)
-                    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId));
+            String chatHistory = globalSessionStore.getOrCreate(sessionId).formatRecentMessages(chatMaxPairs);
 
-            // 注入全局跨域历史作为额外上下文
-            if (globalChatHistory != null && !globalChatHistory.isBlank()) {
+            var promptBuilder = chatChatClient.prompt()
+                    .system(SYSTEM_PROMPT);
+
+            if (!chatHistory.equals("(无历史对话)")) {
                 promptBuilder = promptBuilder.user(
-                        "===跨域对话历史(参考)===\n" + globalChatHistory + "\n===历史结束===\n\n用户当前消息: " + userInput);
+                        "===对话历史(参考)===\n" + chatHistory + "\n===历史结束===\n\n用户当前消息: " + userInput);
             } else {
                 promptBuilder = promptBuilder.user(userInput);
             }
@@ -65,7 +56,6 @@ public class ChatService implements DomainHandler {
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[ChatService] LLM call completed in {}ms", elapsedMs);
 
-            // ChatService用advisor自动管理ChatMemory，不需要AssistantWriter
             return Flux.just(StreamChunk.complete("CHAT", content));
 
         } catch (Exception e) {

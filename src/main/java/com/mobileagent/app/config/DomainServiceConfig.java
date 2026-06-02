@@ -14,8 +14,7 @@ import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
 import com.mobileagent.app.router.IntentRouter;
 import com.fasterxml.jackson.core.type.TypeReference;
-import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -44,21 +43,22 @@ public class DomainServiceConfig {
             GlobalSessionStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
-            @Qualifier("transferChatMemory") ChatMemory transferChatMemory) {
+            @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
         SessionStateStore<AbstractDomainService.ActiveAgentInfo> activeAgentStore =
                 storeFactory.create("active-agents:TransferService", new TypeReference<>() {});
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
                 .domainName("转账")
                 .logTag("TransferService")
+                .domainKey("TRANSFER")
                 .intent("TRANSFER")
                 .intentDescription("转账操作")
-                .chatMemory(transferChatMemory)
                 .contextRouter(contextRouter)
                 .intentRouter(intentRouter)
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .globalSessionStore(globalSessionStore)
                 .activeAgentStore(activeAgentStore)
+                .l1DomainPairs(l1MaxPairs)
                 .build();
         domainServiceRegistry.register("TRANSFER", service);
         return service;
@@ -75,21 +75,22 @@ public class DomainServiceConfig {
             GlobalSessionStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
-            @Qualifier("billChatMemory") ChatMemory billChatMemory) {
+            @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
         SessionStateStore<AbstractDomainService.ActiveAgentInfo> activeAgentStore =
                 storeFactory.create("active-agents:BillService", new TypeReference<>() {});
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
                 .domainName("账单")
                 .logTag("BillService")
+                .domainKey("BILL")
                 .intent("BILL_QUERY")
                 .intentDescription("账单查询")
-                .chatMemory(billChatMemory)
                 .contextRouter(contextRouter)
                 .intentRouter(intentRouter)
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .globalSessionStore(globalSessionStore)
                 .activeAgentStore(activeAgentStore)
+                .l1DomainPairs(l1MaxPairs)
                 .build();
         domainServiceRegistry.register("BILL", service);
         return service;
@@ -106,7 +107,7 @@ public class DomainServiceConfig {
             GlobalSessionStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
-            @Qualifier("wealthChatMemory") ChatMemory wealthChatMemory) {
+            @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
         SessionStateStore<AbstractDomainService.ActiveAgentInfo> activeAgentStore =
                 storeFactory.create("active-agents:WealthService", new TypeReference<>() {});
         SessionStateStore<Map<String, MultiSubAgentDomainService.SuspendedInfo>> suspendedAgentStore =
@@ -116,7 +117,7 @@ public class DomainServiceConfig {
         MultiSubAgentDomainService service = MultiSubAgentDomainService.builder()
                 .domainName("理财")
                 .logTag("WealthService")
-                .chatMemory(wealthChatMemory)
+                .domainKey("WEALTH")
                 .contextRouter(contextRouter)
                 .intentResolver(intentResolver)
                 .graphExecutionEngine(graphExecutionEngine)
@@ -134,6 +135,7 @@ public class DomainServiceConfig {
                 ))
                 .maxSuspendedDepth(3)
                 .suspendedExpireMinutes(20)
+                .l1DomainPairs(l1MaxPairs)
                 .build();
         domainServiceRegistry.register("WEALTH", service);
         return service;
@@ -141,15 +143,11 @@ public class DomainServiceConfig {
 
     // ==================== CHAT ====================
 
-    /**
-     * ChatService由Spring自动扫描@Service创建，这里注册到DomainServiceRegistry
-     */
     @Bean
     public ChatServiceRegistration chatServiceRegistration(ChatService chatService, DomainServiceRegistry domainServiceRegistry) {
         domainServiceRegistry.register("CHAT", chatService);
         return new ChatServiceRegistration();
     }
 
-    /** 标记Bean，仅用于触发ChatService注册 */
     private static class ChatServiceRegistration {}
 }
