@@ -3,22 +3,21 @@ package com.mobileagent.app.domain;
 import com.mobileagent.app.data.RoutingResolution;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.StreamChunk;
-import com.mobileagent.app.memory.SessionStateStore;
+import com.mobileagent.app.memory.model.ActiveAgentInfo;
+import com.mobileagent.app.memory.model.DisambiguationState;
+import com.mobileagent.app.memory.model.DomainState;
+import com.mobileagent.app.memory.GlobalSessionContext;
+import com.mobileagent.app.memory.GlobalSessionStateStore;
+import com.mobileagent.app.memory.model.SuspendedInfo;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
-import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.util.TemplateUtils;
-import com.fasterxml.jackson.core.type.TypeReference;
-import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import reactor.core.publisher.Flux;
 
-import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 多子智能体领域服务 - 1-N关系 (1个L1对应N个L2)
@@ -38,46 +37,15 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private final String rejectedMessage;
     private final List<IntentInfo> handledIntents;
 
-    private final SessionStateStore<Map<String, SuspendedInfo>> suspendedAgentStore;
-    private final SessionStateStore<DisambiguationState> disambiguationStore;
-
     private final int maxSuspendedDepth;
     private final long suspendedExpireMinutes;
-
-    @Data
-    public static class SuspendedInfo {
-        private final String intent;
-        private final String threadId;
-        private final Instant suspendedAt;
-        private final Instant expiresAt;
-
-        public SuspendedInfo(String intent, String threadId, Instant suspendedAt, Instant expiresAt) {
-            this.intent = intent;
-            this.threadId = threadId;
-            this.suspendedAt = suspendedAt;
-            this.expiresAt = expiresAt;
-        }
-
-        public boolean isExpired() {
-            return expiresAt.isBefore(Instant.now());
-        }
-    }
-
-    @Data
-    public static class DisambiguationState {
-        private final String groupId;
-
-        public DisambiguationState(String groupId) {
-            this.groupId = groupId;
-        }
-    }
 
     // ==================== 构造(Builder) ====================
 
     private MultiSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.domainKey,
                 builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
-                builder.globalSessionStore, builder.activeAgentStore, builder.activeAgentExpireMinutes,
+                builder.globalSessionStore, builder.activeAgentExpireMinutes,
                 builder.l1DomainPairs);
         this.intentResolver = builder.intentResolver;
         this.routingTemplatePath = builder.routingTemplatePath != null
@@ -90,8 +58,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 ? List.copyOf(builder.handledIntents) : List.of();
         this.maxSuspendedDepth = builder.maxSuspendedDepth;
         this.suspendedExpireMinutes = builder.suspendedExpireMinutes;
-        this.suspendedAgentStore = builder.suspendedAgentStore;
-        this.disambiguationStore = builder.disambiguationStore;
     }
 
     public static Builder builder() {
@@ -106,10 +72,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         private IntentResolver intentResolver;
         private GraphExecutionEngine graphExecutionEngine;
         private IntentRegistry intentRegistry;
-        private GlobalSessionStore globalSessionStore;
-        private SessionStateStore<ActiveAgentInfo> activeAgentStore;
-        private SessionStateStore<Map<String, SuspendedInfo>> suspendedAgentStore;
-        private SessionStateStore<DisambiguationState> disambiguationStore;
+        private GlobalSessionStateStore globalSessionStore;
         private String routingTemplatePath;
         private String intentionTemplatePath;
         private String rejectedMessage;
@@ -126,10 +89,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         public Builder intentResolver(IntentResolver intentResolver) { this.intentResolver = intentResolver; return this; }
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
-        public Builder globalSessionStore(GlobalSessionStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
-        public Builder activeAgentStore(SessionStateStore<ActiveAgentInfo> activeAgentStore) { this.activeAgentStore = activeAgentStore; return this; }
-        public Builder suspendedAgentStore(SessionStateStore<Map<String, SuspendedInfo>> suspendedAgentStore) { this.suspendedAgentStore = suspendedAgentStore; return this; }
-        public Builder disambiguationStore(SessionStateStore<DisambiguationState> disambiguationStore) { this.disambiguationStore = disambiguationStore; return this; }
+        public Builder globalSessionStore(GlobalSessionStateStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
         public Builder routingTemplatePath(String routingTemplatePath) { this.routingTemplatePath = routingTemplatePath; return this; }
         public Builder intentionTemplatePath(String intentionTemplatePath) { this.intentionTemplatePath = intentionTemplatePath; return this; }
         public Builder rejectedMessage(String rejectedMessage) { this.rejectedMessage = rejectedMessage; return this; }
@@ -148,9 +108,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
             Objects.requireNonNull(intentRegistry, "intentRegistry is required");
             Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
-            Objects.requireNonNull(activeAgentStore, "activeAgentStore is required");
-            Objects.requireNonNull(suspendedAgentStore, "suspendedAgentStore is required");
-            Objects.requireNonNull(disambiguationStore, "disambiguationStore is required");
             String routingPath = routingTemplatePath != null ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
             String intentionPath = intentionTemplatePath != null ? intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
             TemplateUtils.warmUp(routingPath, () -> "");
@@ -161,129 +118,121 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     // ==================== suspendedAgents管理 ====================
 
-    private static final String SUSPENDED_NS = "suspended";
-
     private void suspendOwnAgent(String sessionId, String intent, String threadId) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
-                .orElseGet(HashMap::new);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        ctx.updateDomainState(getStateKey(), ds -> {
+            Map<String, SuspendedInfo> suspended = ds.getSuspendedAgents();
 
-        if (sessionMap.containsKey(intent)) {
-            log.debug("[{}] Suspended agent already exists: session={}, intent={}", logTag, sessionId, intent);
-            return;
-        }
-
-        if (sessionMap.size() >= maxSuspendedDepth) {
-            String oldestKey = sessionMap.entrySet().stream()
-                    .min(Comparator.comparing(e -> e.getValue().getSuspendedAt()))
-                    .map(Map.Entry::getKey)
-                    .orElse(null);
-            if (oldestKey != null) {
-                sessionMap.remove(oldestKey);
-                log.warn("[{}] Exceeded max suspended depth, evicted oldest: {}", logTag, oldestKey);
+            if (suspended.containsKey(intent)) {
+                log.debug("[{}] Suspended agent already exists: session={}, intent={}", logTag, sessionId, intent);
+                return;
             }
-        }
 
-        SuspendedInfo info = new SuspendedInfo(intent, threadId, Instant.now(),
-                Instant.now().plusSeconds(suspendedExpireMinutes * 60));
-        sessionMap.put(intent, info);
-        suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
-        log.debug("[{}] Suspended agent: session={}, intent={}, threadId={}", logTag, sessionId, intent, threadId);
+            if (suspended.size() >= maxSuspendedDepth) {
+                suspended.entrySet().stream()
+                        .min(Comparator.comparing(e -> e.getValue().getSuspendedAt()))
+                        .map(Map.Entry::getKey)
+                        .ifPresent(key -> {
+                            suspended.remove(key);
+                            log.warn("[{}] Exceeded max suspended depth, evicted oldest: {}", logTag, key);
+                        });
+            }
+
+            long now = System.currentTimeMillis();
+            suspended.put(intent, new SuspendedInfo(intent, threadId, now,
+                    now + suspendedExpireMinutes * 60 * 1000));
+            log.debug("[{}] Suspended agent: session={}, intent={}, threadId={}", logTag, sessionId, intent, threadId);
+        });
     }
 
     private SuspendedInfo getOwnSuspendedAgent(String sessionId, String intent) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
-                .orElse(null);
-        if (sessionMap == null) return null;
-        SuspendedInfo info = sessionMap.get(intent);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        DomainState ds = ctx.getDomainState(getStateKey());
+        if (ds == null || ds.getSuspendedAgents() == null) return null;
+
+        SuspendedInfo info = ds.getSuspendedAgents().get(intent);
         if (info != null && info.isExpired()) {
-            sessionMap.remove(intent);
-            suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
+            ctx.updateDomainState(getStateKey(), d -> {
+                if (d.getSuspendedAgents() != null) {
+                    d.getSuspendedAgents().remove(intent);
+                    if (d.getSuspendedAgents().isEmpty()) {
+                        d.setSuspendedAgents(null);
+                    }
+                }
+            });
             return null;
         }
         return info;
     }
 
     private Map<String, SuspendedInfo> getAllOwnSuspended(String sessionId) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
-                .orElse(null);
-        if (sessionMap == null) return Collections.emptyMap();
-        sessionMap.entrySet().removeIf(e -> e.getValue().isExpired());
-        if (sessionMap.isEmpty()) {
-            suspendedAgentStore.remove(SUSPENDED_NS + ":" + logTag, sessionId);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        DomainState ds = ctx.getDomainState(getStateKey());
+        if (ds == null || ds.getSuspendedAgents() == null || ds.getSuspendedAgents().isEmpty()) {
             return Collections.emptyMap();
         }
-        suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
-        return Collections.unmodifiableMap(new HashMap<>(sessionMap));
+
+        // 惰性清理过期项
+        ds.getSuspendedAgents().entrySet().removeIf(e -> e.getValue().isExpired());
+        if (ds.getSuspendedAgents().isEmpty()) {
+            ctx.updateDomainState(getStateKey(), d -> d.setSuspendedAgents(null));
+            return Collections.emptyMap();
+        }
+        return Collections.unmodifiableMap(new HashMap<>(ds.getSuspendedAgents()));
     }
 
     private void resumeOwnAgent(String sessionId, String intent) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
-                .orElse(null);
-        if (sessionMap != null) {
-            sessionMap.remove(intent);
-            if (sessionMap.isEmpty()) {
-                suspendedAgentStore.remove(SUSPENDED_NS + ":" + logTag, sessionId);
-            } else {
-                suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        ctx.updateDomainState(getStateKey(), ds -> {
+            Map<String, SuspendedInfo> suspended = ds.getSuspendedAgents();
+            if (suspended != null) {
+                suspended.remove(intent);
+                if (suspended.isEmpty()) {
+                    ds.setSuspendedAgents(null);
+                }
             }
-            log.debug("[{}] Resumed agent: session={}, intent={}", logTag, sessionId, intent);
-        }
+        });
+        log.debug("[{}] Resumed agent: session={}, intent={}", logTag, sessionId, intent);
     }
 
     private boolean hasOwnSuspendedAgents(String sessionId) {
-        Map<String, SuspendedInfo> sessionMap = suspendedAgentStore.get(SUSPENDED_NS + ":" + logTag, sessionId)
-                .orElse(null);
-        if (sessionMap == null || sessionMap.isEmpty()) return false;
-        sessionMap.entrySet().removeIf(e -> e.getValue().isExpired());
-        if (sessionMap.isEmpty()) {
-            suspendedAgentStore.remove(SUSPENDED_NS + ":" + logTag, sessionId);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        DomainState ds = ctx.getDomainState(getStateKey());
+        if (ds == null || ds.getSuspendedAgents() == null || ds.getSuspendedAgents().isEmpty()) {
             return false;
         }
-        suspendedAgentStore.put(SUSPENDED_NS + ":" + logTag, sessionId, sessionMap);
-        return true;
-    }
 
-    @Scheduled(fixedRate = 60_000)
-    public void cleanupExpiredSuspended() {
-        String ns = SUSPENDED_NS + ":" + logTag;
-        Map<String, Map<String, SuspendedInfo>> all = suspendedAgentStore.getAll(ns);
-        for (var entry : all.entrySet()) {
-            String sessionId = entry.getKey();
-            Map<String, SuspendedInfo> sessionMap = entry.getValue();
-            sessionMap.entrySet().removeIf(e -> {
-                if (e.getValue().isExpired()) {
-                    log.debug("[{}] Auto cleaned expired: session={}, intent={}", logTag, sessionId, e.getKey());
-                    return true;
-                }
-                return false;
-            });
-            if (sessionMap.isEmpty()) {
-                suspendedAgentStore.remove(ns, sessionId);
-            } else {
-                suspendedAgentStore.put(ns, sessionId, sessionMap);
-            }
+        // 惰性清理过期项
+        ds.getSuspendedAgents().entrySet().removeIf(e -> e.getValue().isExpired());
+        if (ds.getSuspendedAgents().isEmpty()) {
+            ctx.updateDomainState(getStateKey(), d -> d.setSuspendedAgents(null));
+            return false;
         }
-        cleanupExpiredActiveAgents();
+        return true;
     }
 
     // ==================== 消歧管理 ====================
 
-    private static final String DISAMBIG_NS = "disambig";
-
     private boolean isInDisambiguation(String sessionId) {
-        return disambiguationStore.containsKey(DISAMBIG_NS + ":" + logTag, sessionId);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        DomainState ds = ctx.getDomainState(getStateKey());
+        return ds != null && ds.getDisambiguation() != null;
     }
 
     private void setDisambiguationState(String sessionId, DisambiguationState state) {
-        disambiguationStore.put(DISAMBIG_NS + ":" + logTag, sessionId, state);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        ctx.updateDomainState(getStateKey(), ds -> ds.setDisambiguation(state));
     }
 
     private DisambiguationState getDisambiguationState(String sessionId) {
-        return disambiguationStore.get(DISAMBIG_NS + ":" + logTag, sessionId).orElse(null);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        DomainState ds = ctx.getDomainState(getStateKey());
+        return ds != null ? ds.getDisambiguation() : null;
     }
 
     private void clearDisambiguationState(String sessionId) {
-        disambiguationStore.remove(DISAMBIG_NS + ":" + logTag, sessionId);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        ctx.updateDomainState(getStateKey(), ds -> ds.setDisambiguation(null));
     }
 
     public String getPendingAgentsDescription(String sessionId) {
@@ -471,9 +420,12 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     @Override
     public void clearSession(String sessionId) {
-        clearOwnActiveAgent(sessionId);
-        suspendedAgentStore.remove(SUSPENDED_NS + ":" + logTag, sessionId);
-        disambiguationStore.remove(DISAMBIG_NS + ":" + logTag, sessionId);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        ctx.updateDomainState(getStateKey(), ds -> {
+            ds.setActiveAgent(null);
+            ds.setSuspendedAgents(null);
+            ds.setDisambiguation(null);
+        });
     }
 
     @Override

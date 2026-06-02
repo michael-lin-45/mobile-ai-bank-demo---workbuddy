@@ -1,7 +1,7 @@
 package com.mobileagent.app.router;
 
 import com.mobileagent.app.config.RoutingProperties;
-import com.mobileagent.app.execution.GlobalSessionStore;
+import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,13 +32,13 @@ public class DomainRouter {
     private static final String UNSUPPORTED_DOMAIN = "UNSUPPORTED";
 
     private final ChatClient domainChatClient;
-    private final GlobalSessionStore globalSessionStore;
+    private final GlobalSessionStateStore globalSessionStore;
     private final ObjectMapper objectMapper;
     private final int l0MaxPairs;
     private final long lastDomainExpireMinutes;
 
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
-                        GlobalSessionStore globalSessionStore,
+                        GlobalSessionStateStore globalSessionStore,
                         RoutingProperties routingProperties,
                         @org.springframework.beans.factory.annotation.Value("${routing.history.l0-max-pairs:10}") int l0MaxPairs,
                         @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes) {

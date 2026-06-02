@@ -2,15 +2,15 @@ package com.mobileagent.app.domain;
 
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.StreamChunk;
-import com.mobileagent.app.memory.SessionStateStore;
+import com.mobileagent.app.memory.model.ActiveAgentInfo;
+import com.mobileagent.app.memory.GlobalSessionContext;
+import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentRouter;
-import com.mobileagent.app.execution.GlobalSessionStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
@@ -21,13 +21,6 @@ import java.util.Objects;
  *
  * 适用场景: 转账(TRANSFER), 账单(BILL_QUERY) 等
  * 特点: 只有一个子意图，无需suspendedAgents、无需消歧
- *
- * 控制流:
- * 1. activeAgent在 + lastQuestion在 → ContextRouter(含lastQuestion) → FOLLOW/SWITCH
- *    - FOLLOW → resumeActiveAgent
- *    - SWITCH → IntentRouter → auto-upgrade检查 → REROUTE检查 → executeNewAgent
- * 2. activeAgent在 + lastQuestion为空 → 直接resumeActiveAgent
- * 3. 无activeAgent → ContextRouter → IntentRouter → REROUTE检查 → executeNewAgent
  */
 @Slf4j
 public class SingleSubAgentDomainService extends AbstractDomainService {
@@ -46,7 +39,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     private SingleSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.domainKey,
                 builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
-                builder.globalSessionStore, builder.activeAgentStore, builder.activeAgentExpireMinutes,
+                builder.globalSessionStore, builder.activeAgentExpireMinutes,
                 builder.l1DomainPairs);
         this.intent = builder.intent;
         this.intentDescription = builder.intentDescription;
@@ -73,8 +66,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         private IntentRouter intentRouter;
         private GraphExecutionEngine graphExecutionEngine;
         private IntentRegistry intentRegistry;
-        private GlobalSessionStore globalSessionStore;
-        private SessionStateStore<ActiveAgentInfo> activeAgentStore;
+        private GlobalSessionStateStore globalSessionStore;
         private long activeAgentExpireMinutes = 20;
         private int l1DomainPairs = 6;
 
@@ -89,8 +81,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         public Builder intentRouter(IntentRouter intentRouter) { this.intentRouter = intentRouter; return this; }
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
-        public Builder globalSessionStore(GlobalSessionStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
-        public Builder activeAgentStore(SessionStateStore<ActiveAgentInfo> activeAgentStore) { this.activeAgentStore = activeAgentStore; return this; }
+        public Builder globalSessionStore(GlobalSessionStateStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
         public Builder activeAgentExpireMinutes(long activeAgentExpireMinutes) { this.activeAgentExpireMinutes = activeAgentExpireMinutes; return this; }
         public Builder l1DomainPairs(int l1DomainPairs) { this.l1DomainPairs = l1DomainPairs; return this; }
 
@@ -104,7 +95,6 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
             Objects.requireNonNull(intentRegistry, "intentRegistry is required");
             Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
-            Objects.requireNonNull(activeAgentStore, "activeAgentStore is required");
             String resolvedRoutingPath = routingTemplatePath != null ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
             String resolvedIntentionPath = intentionTemplatePath != null ? intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
             TemplateUtils.warmUp(resolvedRoutingPath, () -> "");
@@ -213,18 +203,16 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         return executeNewAgent(sessionId, intent, rewrittenInput);
     }
 
-    // ==================== 定时清理 ====================
-
-    @Scheduled(fixedRate = 60_000)
-    public void scheduledCleanup() {
-        cleanupExpiredActiveAgents();
-    }
-
     // ==================== 状态管理 ====================
 
     @Override
     public void clearSession(String sessionId) {
-        clearOwnActiveAgent(sessionId);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        ctx.updateDomainState(getStateKey(), ds -> {
+            ds.setActiveAgent(null);
+            ds.setSuspendedAgents(null);
+            ds.setDisambiguation(null);
+        });
     }
 
     @Override

@@ -1,4 +1,4 @@
-package com.mobileagent.app.memory;
+package com.mobileagent.app.memory.impl;
 
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
@@ -58,7 +58,7 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
         String threadId = config.threadId().orElse(null);
         if (threadId == null) return Optional.empty();
         String key = KEY_PREFIX + threadId;
-        String json = redisTemplate.opsForList().index(key, -1); // 最新checkpoint
+        String json = redisTemplate.opsForList().index(key, -1);
         if (json == null) return Optional.empty();
         try {
             return Optional.of(deserializeCheckpoint(json));
@@ -85,7 +85,6 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
         if (threadId == null) return new Tag(null, List.of());
         String key = KEY_PREFIX + threadId;
 
-        // 读取所有checkpoint用于返回
         Collection<Checkpoint> checkpoints = list(config);
         redisTemplate.delete(key);
 

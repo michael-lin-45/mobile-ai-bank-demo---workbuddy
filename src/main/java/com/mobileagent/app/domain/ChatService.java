@@ -1,7 +1,7 @@
 package com.mobileagent.app.domain;
 
 import com.mobileagent.app.data.StreamChunk;
-import com.mobileagent.app.execution.GlobalSessionStore;
+import com.mobileagent.app.memory.GlobalSessionStateStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -22,11 +22,11 @@ import reactor.core.publisher.Flux;
 public class ChatService implements DomainHandler {
 
     private final ChatClient chatChatClient;
-    private final GlobalSessionStore globalSessionStore;
+    private final GlobalSessionStateStore globalSessionStore;
     private final int chatMaxPairs;
 
     public ChatService(@Qualifier("chatChatClient") ChatClient chatChatClient,
-                       GlobalSessionStore globalSessionStore,
+                       GlobalSessionStateStore globalSessionStore,
                        @Value("${routing.history.chat-max-pairs:10}") int chatMaxPairs) {
         this.chatChatClient = chatChatClient;
         this.globalSessionStore = globalSessionStore;

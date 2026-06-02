@@ -1,25 +1,24 @@
 package com.mobileagent.app.config;
 
+import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.mobileagent.app.domain.AbstractDomainService;
 import com.mobileagent.app.domain.ChatService;
 import com.mobileagent.app.domain.MultiSubAgentDomainService;
 import com.mobileagent.app.domain.SingleSubAgentDomainService;
-import com.mobileagent.app.execution.GlobalSessionStore;
+import com.mobileagent.app.memory.DomainStateAware;
+import com.mobileagent.app.memory.model.DomainState;
+import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
-import com.mobileagent.app.memory.SessionStateStore;
-import com.mobileagent.app.memory.SessionStateStoreConfig;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.DomainServiceRegistry;
 import com.mobileagent.app.router.IntentRegistry;
 import com.mobileagent.app.router.IntentResolver;
 import com.mobileagent.app.router.IntentRouter;
-import com.fasterxml.jackson.core.type.TypeReference;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * L1领域服务配置 - 用Builder构建SingleSubAgentDomainService/MultiSubAgentDomainService实例
@@ -28,9 +27,42 @@ import java.util.Map;
  * 所有调用逻辑由基类提供，这里只做配置（意图、领域名、模板路径等）。
  *
  * 每个Bean构建后注册到DomainServiceRegistry，供BankController统一分发。
+ *
+ * DomainStateAware 注册 Bean 是轻量级的无依赖对象,
+ * 仅声明 OverAllState 中的 key/strategy/initialState, 与 domain service 本身解耦,
+ * 避免 domain service → GlobalSessionStateStore → KeyStrategyFactory → domain service 的循环依赖。
  */
 @Configuration
 public class DomainServiceConfig {
+
+    // ==================== 域状态注册 (零依赖, 供 KeyStrategyFactory 自动收集) ====================
+
+    @Bean
+    public DomainStateAware transferDomainStateAware() {
+        return new DomainStateAware() {
+            @Override public String getStateKey() { return "_transferState"; }
+            @Override public com.alibaba.cloud.ai.graph.KeyStrategy getStateStrategy() { return new ReplaceStrategy(); }
+            @Override public DomainState initialState() { return new DomainState("TRANSFER"); }
+        };
+    }
+
+    @Bean
+    public DomainStateAware billDomainStateAware() {
+        return new DomainStateAware() {
+            @Override public String getStateKey() { return "_billState"; }
+            @Override public com.alibaba.cloud.ai.graph.KeyStrategy getStateStrategy() { return new ReplaceStrategy(); }
+            @Override public DomainState initialState() { return new DomainState("BILL"); }
+        };
+    }
+
+    @Bean
+    public DomainStateAware wealthDomainStateAware() {
+        return new DomainStateAware() {
+            @Override public String getStateKey() { return "_wealthState"; }
+            @Override public com.alibaba.cloud.ai.graph.KeyStrategy getStateStrategy() { return new ReplaceStrategy(); }
+            @Override public DomainState initialState() { return new DomainState("WEALTH"); }
+        };
+    }
 
     // ==================== 转账 (1-1: TRANSFER) ====================
 
@@ -40,12 +72,9 @@ public class DomainServiceConfig {
             IntentRouter intentRouter,
             GraphExecutionEngine graphExecutionEngine,
             IntentRegistry intentRegistry,
-            GlobalSessionStore globalSessionStore,
+            GlobalSessionStateStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
-            SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
-        SessionStateStore<AbstractDomainService.ActiveAgentInfo> activeAgentStore =
-                storeFactory.create("active-agents:TransferService", new TypeReference<>() {});
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
                 .domainName("转账")
                 .logTag("TransferService")
@@ -57,7 +86,6 @@ public class DomainServiceConfig {
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .globalSessionStore(globalSessionStore)
-                .activeAgentStore(activeAgentStore)
                 .l1DomainPairs(l1MaxPairs)
                 .build();
         domainServiceRegistry.register("TRANSFER", service);
@@ -72,12 +100,9 @@ public class DomainServiceConfig {
             IntentRouter intentRouter,
             GraphExecutionEngine graphExecutionEngine,
             IntentRegistry intentRegistry,
-            GlobalSessionStore globalSessionStore,
+            GlobalSessionStateStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
-            SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
-        SessionStateStore<AbstractDomainService.ActiveAgentInfo> activeAgentStore =
-                storeFactory.create("active-agents:BillService", new TypeReference<>() {});
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
                 .domainName("账单")
                 .logTag("BillService")
@@ -89,7 +114,6 @@ public class DomainServiceConfig {
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .globalSessionStore(globalSessionStore)
-                .activeAgentStore(activeAgentStore)
                 .l1DomainPairs(l1MaxPairs)
                 .build();
         domainServiceRegistry.register("BILL", service);
@@ -104,16 +128,9 @@ public class DomainServiceConfig {
             IntentResolver intentResolver,
             GraphExecutionEngine graphExecutionEngine,
             IntentRegistry intentRegistry,
-            GlobalSessionStore globalSessionStore,
+            GlobalSessionStateStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
-            SessionStateStoreConfig.SessionStateStoreFactory storeFactory,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
-        SessionStateStore<AbstractDomainService.ActiveAgentInfo> activeAgentStore =
-                storeFactory.create("active-agents:WealthService", new TypeReference<>() {});
-        SessionStateStore<Map<String, MultiSubAgentDomainService.SuspendedInfo>> suspendedAgentStore =
-                storeFactory.create("suspended-agents:WealthService", new TypeReference<>() {});
-        SessionStateStore<MultiSubAgentDomainService.DisambiguationState> disambiguationStore =
-                storeFactory.create("disambiguation:WealthService", new TypeReference<>() {});
         MultiSubAgentDomainService service = MultiSubAgentDomainService.builder()
                 .domainName("理财")
                 .logTag("WealthService")
@@ -123,9 +140,6 @@ public class DomainServiceConfig {
                 .graphExecutionEngine(graphExecutionEngine)
                 .intentRegistry(intentRegistry)
                 .globalSessionStore(globalSessionStore)
-                .activeAgentStore(activeAgentStore)
-                .suspendedAgentStore(suspendedAgentStore)
-                .disambiguationStore(disambiguationStore)
                 .routingTemplatePath("prompts/l1-routing.st")
                 .intentionTemplatePath("prompts/l1-intention.st")
                 .rejectedMessage("该理财功能暂不支持，目前仅支持理财咨询和理财产品解读")

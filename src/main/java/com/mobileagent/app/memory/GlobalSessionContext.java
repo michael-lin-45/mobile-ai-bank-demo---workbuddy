@@ -1,7 +1,7 @@
-package com.mobileagent.app.execution;
+package com.mobileagent.app.memory;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
-import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
+import com.mobileagent.app.memory.model.DomainState;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -9,6 +9,7 @@ import java.io.Serializable;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /**
  * 全局会话上下文 - 所有会话状态统一存储在 OverAllState 中
@@ -16,7 +17,7 @@ import java.util.Optional;
  * 设计:
  * - messages key (AppendStrategy): 存储用户/助手的一问一答
  * - _lastDomain key (ReplaceStrategy): 存储最近一次路由的领域信息
- * - 不按域区分, LLM从内容自身推断上下文
+ * - _xxxState key (ReplaceStrategy): 每个域一个 key, 存储该域的 DomainState
  *
  * OverAllState 层级:
  * - GlobalSessionContext.state: Session级别, 跨L2子图共享
@@ -36,15 +37,13 @@ public class GlobalSessionContext {
 
     private final String sessionId;
     private final OverAllState state;
-    private final BaseCheckpointSaver checkpointSaver;
 
-    public GlobalSessionContext(String sessionId, OverAllState state, BaseCheckpointSaver checkpointSaver) {
+    public GlobalSessionContext(String sessionId, OverAllState state) {
         this.sessionId = sessionId;
         this.state = state;
-        this.checkpointSaver = checkpointSaver;
     }
 
-    // ==================== 读取 ====================
+    // ==================== 通用读取 ====================
 
     public <T> Optional<T> value(String key) {
         return state.value(key);
@@ -104,6 +103,39 @@ public class GlobalSessionContext {
 
     public void clearLastDomain() {
         state.data().remove("_lastDomain");
+    }
+
+    // ==================== DomainState 读写 (每个域一个 OverAllState key, ReplaceStrategy) ====================
+
+    /** 读取 DomainState */
+    public DomainState getDomainState(String stateKey) {
+        return state.value(stateKey)
+                .filter(DomainState.class::isInstance)
+                .map(DomainState.class::cast)
+                .orElse(null);
+    }
+
+    /**
+     * 更新 DomainState (read-modify-write 封装)
+     *
+     * @param stateKey OverAllState 中的 key, 如 "_transferState"
+     * @param modifier 修改函数, 如 ds -> ds.setActiveAgent(...)
+     */
+    public void updateDomainState(String stateKey, Consumer<DomainState> modifier) {
+        DomainState ds = state.value(stateKey)
+                .filter(DomainState.class::isInstance)
+                .map(DomainState.class::cast)
+                .orElseGet(() -> new DomainState(domainKeyFromStateKey(stateKey)));
+        modifier.accept(ds);
+        state.updateState(Map.of(stateKey, ds));
+    }
+
+    /** 从 stateKey 反推 domain 名: "_transferState" → "TRANSFER" */
+    private String domainKeyFromStateKey(String stateKey) {
+        if (stateKey.startsWith("_") && stateKey.endsWith("State")) {
+            return stateKey.substring(1, stateKey.length() - 5).toUpperCase();
+        }
+        return stateKey;
     }
 
     // ==================== 清理 ====================

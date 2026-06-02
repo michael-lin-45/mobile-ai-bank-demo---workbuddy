@@ -3,6 +3,7 @@ package com.mobileagent.app.memory;
 import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
 import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mobileagent.app.memory.impl.RedisCheckpointSaver;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;

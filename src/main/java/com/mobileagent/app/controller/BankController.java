@@ -3,8 +3,8 @@ package com.mobileagent.app.controller;
 import com.mobileagent.app.data.ChunkType;
 import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.domain.DomainHandler;
-import com.mobileagent.app.execution.GlobalSessionContext;
-import com.mobileagent.app.execution.GlobalSessionStore;
+import com.mobileagent.app.memory.GlobalSessionContext;
+import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.infrastructure.SseOutputAdapter;
 import com.mobileagent.app.router.DomainServiceRegistry;
 import com.mobileagent.app.router.DomainRouter;
@@ -49,12 +49,12 @@ public class BankController {
 
     private final DomainRouter domainRouter;
     private final DomainServiceRegistry domainServiceRegistry;
-    private final GlobalSessionStore globalSessionStore;
+    private final GlobalSessionStateStore globalSessionStore;
     private final SseOutputAdapter sseAdapter;
 
     public BankController(DomainRouter domainRouter,
                           DomainServiceRegistry domainServiceRegistry,
-                          GlobalSessionStore globalSessionStore,
+                          GlobalSessionStateStore globalSessionStore,
                           SseOutputAdapter sseAdapter) {
         this.domainRouter = domainRouter;
         this.domainServiceRegistry = domainServiceRegistry;

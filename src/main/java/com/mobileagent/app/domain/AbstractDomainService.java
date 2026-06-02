@@ -4,28 +4,28 @@ import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.mobileagent.app.data.ChunkType;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.StreamChunk;
-import com.mobileagent.app.execution.GlobalSessionStore;
+import com.mobileagent.app.memory.model.ActiveAgentInfo;
+import com.mobileagent.app.memory.model.DomainState;
+import com.mobileagent.app.memory.GlobalSessionContext;
+import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
-import com.mobileagent.app.memory.SessionStateStore;
 import com.mobileagent.app.router.ContextRouter;
 import com.mobileagent.app.router.IntentRegistry;
-import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 
-import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * L1领域服务抽象基类 - 提取Single/Multi共性的状态管理和工具方法
+ * L1领域服务抽象基类 — 提取Single/Multi共性的状态管理和工具方法
  *
  * 核心设计（threadId独立架构 + 全局OverAllState注入）:
  * - 每次新执行(SWITCH/首次)生成独立threadId: sessionId + "-" + intent + "-" + hexSuffix
- * - ActiveAgentInfo/SuspendedInfo存储各自的threadId，resume时从存储中取出
+ * - ActiveAgentInfo/SuspendedInfo存储在GlobalSessionContext.state的DomainState中
  * - L1每次调用L2时(execute/resume)，将当前Session的GlobalSessionContext.data()注入L2
  * - L2图的KeyStrategyFactory作为白名单，"想用就用，不想用不用"
  *
@@ -42,35 +42,11 @@ public abstract class AbstractDomainService implements DomainHandler {
     protected final ContextRouter contextRouter;
     protected final GraphExecutionEngine graphExecutionEngine;
     protected final IntentRegistry intentRegistry;
-    protected final GlobalSessionStore globalSessionStore;
+    protected final GlobalSessionStateStore globalSessionStore;
+    protected final long activeAgentExpireMinutes;
     protected final int l1DomainPairs;
 
-    // ==================== 共享状态 ====================
-
-    private final SessionStateStore<ActiveAgentInfo> activeAgentStore;
-    private final long activeAgentExpireMinutes;
-
     // ==================== 共享数据类 ====================
-
-    @Data
-    public static class ActiveAgentInfo {
-        private final String intent;
-        private final String threadId;
-        private final Instant createdAt;
-        private final Instant expiresAt;
-        private String lastQuestion;
-
-        public ActiveAgentInfo(String intent, String threadId, Instant createdAt, Instant expiresAt) {
-            this.intent = intent;
-            this.threadId = threadId;
-            this.createdAt = createdAt;
-            this.expiresAt = expiresAt;
-        }
-
-        public boolean isExpired() {
-            return expiresAt.isBefore(Instant.now());
-        }
-    }
 
     @Data
     public static class IntentInfo {
@@ -89,8 +65,7 @@ public abstract class AbstractDomainService implements DomainHandler {
                                     ContextRouter contextRouter,
                                     GraphExecutionEngine graphExecutionEngine,
                                     IntentRegistry intentRegistry,
-                                    GlobalSessionStore globalSessionStore,
-                                    SessionStateStore<ActiveAgentInfo> activeAgentStore,
+                                    GlobalSessionStateStore globalSessionStore,
                                     long activeAgentExpireMinutes,
                                     int l1DomainPairs) {
         this.domainName = domainName;
@@ -100,49 +75,53 @@ public abstract class AbstractDomainService implements DomainHandler {
         this.graphExecutionEngine = graphExecutionEngine;
         this.intentRegistry = intentRegistry;
         this.globalSessionStore = globalSessionStore;
-        this.activeAgentStore = activeAgentStore;
         this.activeAgentExpireMinutes = activeAgentExpireMinutes;
         this.l1DomainPairs = l1DomainPairs;
     }
 
-    // ==================== activeAgent管理 ====================
+    // ==================== DomainState key ====================
+
+    /** OverAllState 中的 DomainState key, 如 "_transferState", "_billState", "_wealthState" */
+    protected String getStateKey() {
+        return "_" + domainKey.toLowerCase() + "State";
+    }
+
+    // ==================== activeAgent管理 (通过 GlobalSessionContext.updateDomainState) ====================
 
     protected ActiveAgentInfo getOwnActiveAgent(String sessionId) {
-        ActiveAgentInfo info = activeAgentStore.get(logTag, sessionId).orElse(null);
-        if (info != null && info.getExpiresAt().isBefore(Instant.now())) {
-            activeAgentStore.remove(logTag, sessionId);
-            log.info("[{}] ActiveAgent expired: session={}, intent={}, createdAt={}",
-                    logTag, sessionId, info.getIntent(), info.getCreatedAt());
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        DomainState ds = ctx.getDomainState(getStateKey());
+        if (ds == null || ds.getActiveAgent() == null) return null;
+
+        ActiveAgentInfo active = ds.getActiveAgent();
+        if (active.isExpired()) {
+            ctx.updateDomainState(getStateKey(), d -> d.setActiveAgent(null));
+            log.info("[{}] ActiveAgent expired: session={}, intent={}", logTag, sessionId, active.getIntent());
             return null;
         }
-        return info;
+        return active;
     }
 
     protected void setOwnActiveAgent(String sessionId, String intent, String threadId) {
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
         if (intent == null) {
-            activeAgentStore.remove(logTag, sessionId);
+            ctx.updateDomainState(getStateKey(), ds -> ds.setActiveAgent(null));
         } else {
-            Instant now = Instant.now();
-            Instant expiresAt = now.plusSeconds(activeAgentExpireMinutes * 60);
-            activeAgentStore.put(logTag, sessionId, new ActiveAgentInfo(intent, threadId, now, expiresAt));
+            long now = System.currentTimeMillis();
+            long expiresAt = now + activeAgentExpireMinutes * 60 * 1000;
+            ctx.updateDomainState(getStateKey(), ds ->
+                    ds.setActiveAgent(new ActiveAgentInfo(intent, threadId, now, expiresAt)));
         }
     }
 
     protected void clearOwnActiveAgent(String sessionId) {
-        activeAgentStore.remove(logTag, sessionId);
-    }
-
-    protected void cleanupExpiredActiveAgents() {
-        activeAgentStore.cleanExpired(logTag, ActiveAgentInfo::isExpired);
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        ctx.updateDomainState(getStateKey(), ds -> ds.setActiveAgent(null));
     }
 
     // ==================== 对话历史 ====================
 
-    /**
-     * 从 GlobalSessionContext.messages 获取最近X对消息
-     *
-     * 不按域区分, LLM从内容自身推断上下文
-     */
+    /** 从 GlobalSessionContext.messages 获取最近X对消息 */
     protected String getFormattedChatHistory(String sessionId) {
         return globalSessionStore.getOrCreate(sessionId).formatRecentMessages(l1DomainPairs);
     }
@@ -155,11 +134,20 @@ public abstract class AbstractDomainService implements DomainHandler {
         ActiveAgentInfo active = getOwnActiveAgent(sessionId);
         if (active == null) return;
 
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
         if (chunk.getType() == ChunkType.INTERRUPTED && chunk.getQuestion() != null) {
-            active.setLastQuestion(chunk.getQuestion());
+            ctx.updateDomainState(getStateKey(), ds -> {
+                if (ds.getActiveAgent() != null) {
+                    ds.getActiveAgent().setLastQuestion(chunk.getQuestion());
+                }
+            });
         } else if (chunk.getType() == ChunkType.COMPLETE) {
-            active.setLastQuestion(null);
-            clearOwnActiveAgent(sessionId);
+            ctx.updateDomainState(getStateKey(), ds -> {
+                if (ds.getActiveAgent() != null) {
+                    ds.getActiveAgent().setLastQuestion(null);
+                }
+                ds.setActiveAgent(null);
+            });
         }
     }
 
