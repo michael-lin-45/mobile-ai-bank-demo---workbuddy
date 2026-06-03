@@ -47,7 +47,7 @@ routing:
     # L0 域路由使用的历史对数
     l0-max-pairs: 10
     # L1 意图路由使用的历史对数
-    l1-max-pairs: 6
+    l1-max-pairs: 10
     # ChatService 使用的历史对数
     chat-max-pairs: 10
   verification:
