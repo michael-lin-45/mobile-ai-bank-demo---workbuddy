@@ -4,7 +4,7 @@ import com.alibaba.cloud.ai.graph.*;
 import com.alibaba.cloud.ai.graph.exception.GraphStateException;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mobileagent.app.memory.CheckpointSaverConfig;
+import com.mobileagent.app.memory.SubGraphCheckpointSaverConfig;
 import com.mobileagent.app.mock.MockBankingService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -39,10 +39,10 @@ public class TransferGraphConfig extends AbstractGraphConfig {
     private final MockBankingService mockBankingService;
 
     public TransferGraphConfig(@Qualifier("paramExtractChatModel") ChatModel chatModel,
-                                CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory,
-                                MockBankingService mockBankingService,
-                                ObjectMapper objectMapper) {
-        super(chatModel, objectMapper, checkpointSaverFactory);
+                                 SubGraphCheckpointSaverConfig.SubGraphCheckpointSaverFactory subGraphCheckpointSaverFactory,
+                                 MockBankingService mockBankingService,
+                                 ObjectMapper objectMapper) {
+        super(chatModel, objectMapper, subGraphCheckpointSaverFactory);
         this.mockBankingService = mockBankingService;
     }
 

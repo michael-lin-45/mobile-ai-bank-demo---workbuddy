@@ -4,7 +4,7 @@ import com.alibaba.cloud.ai.graph.*;
 import com.alibaba.cloud.ai.graph.checkpoint.BaseCheckpointSaver;
 import com.alibaba.cloud.ai.graph.checkpoint.config.SaverConfig;
 import com.alibaba.cloud.ai.graph.CompileConfig;
-import com.mobileagent.app.memory.CheckpointSaverConfig;
+import com.mobileagent.app.memory.SubGraphCheckpointSaverConfig;
 import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
 import com.alibaba.cloud.ai.graph.exception.GraphStateException;
@@ -65,7 +65,7 @@ public abstract class AbstractGraphConfig {
 
     protected final ChatModel chatModel;
     protected final ObjectMapper objectMapper;
-    protected final CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory;
+    protected final SubGraphCheckpointSaverConfig.SubGraphCheckpointSaverFactory subGraphCheckpointSaverFactory;
 
     /**
      * 自动收集的interrupt节点列表 - 由askNode()自动填充, 无需手写interruptBefore数组
@@ -76,11 +76,11 @@ public abstract class AbstractGraphConfig {
     private final List<String> interruptNodes = new ArrayList<>();
 
     protected AbstractGraphConfig(ChatModel chatModel,
-                                  ObjectMapper objectMapper,
-                                  CheckpointSaverConfig.CheckpointSaverFactory checkpointSaverFactory) {
+                                   ObjectMapper objectMapper,
+                                   SubGraphCheckpointSaverConfig.SubGraphCheckpointSaverFactory subGraphCheckpointSaverFactory) {
         this.chatModel = chatModel;
         this.objectMapper = objectMapper;
-        this.checkpointSaverFactory = checkpointSaverFactory;
+        this.subGraphCheckpointSaverFactory = subGraphCheckpointSaverFactory;
     }
 
     // ==================== 子类必须实现 ====================
@@ -499,7 +499,7 @@ public abstract class AbstractGraphConfig {
 
     /** 构建带CheckpointSaver的SaverConfig — 每次编译Graph创建独立的saver实例 */
     protected SaverConfig createSaverConfig() {
-        BaseCheckpointSaver saver = checkpointSaverFactory.create();
+        BaseCheckpointSaver saver = subGraphCheckpointSaverFactory.create();
         return SaverConfig.builder()
                 .register(saver)
                 .build();
