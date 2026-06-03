@@ -796,7 +796,7 @@ protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
 | `memory/GlobalSessionStorageConfig.java` | 存储后端配置 (InMemory/Redis切换) |
 | `memory/impl/InMemoryGlobalSessionStorage.java` | InMemory 存储实现 |
 | `memory/impl/RedisGlobalSessionStorage.java` | Redis 存储实现 |
-| `memory/impl/RedisCheckpointSaver.java` | Redis CheckpointSaver (移至impl/) |
+| `memory/impl/RedisSubGraphCheckpointSaver.java` | Redis SubGraphCheckpointSaver (移至impl/) |
 
 ### 8.2 删除文件
 
@@ -821,7 +821,7 @@ protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
 | 组件 | 受 `storage.type` 控制 | 说明 |
 |---|---|---|
 | ~~SessionStateStore~~ | ~~是~~ | **删除** |
-| `CheckpointSaverConfig` | 是（不变） | L2 子图 checkpoint，保持 InMemory/Redis 切换 |
+| `SubGraphCheckpointSaverConfig` | 是（不变） | L2 子图 checkpoint，保持 InMemory/Redis 切换 |
 | **`GlobalSessionStateStore`** | **是（新增）** | Session 级状态存储，新增 InMemory/Redis 切换 |
 
 #### 8.4.1 抽象存储后端
@@ -928,7 +928,7 @@ public class GlobalSessionStateStore {
     private final GlobalSessionStorage storage;
 
     public GlobalSessionStateStore(
-            CheckpointSaverFactory checkpointSaverFactory,
+            SubGraphCheckpointSaverFactory subGraphCheckpointSaverFactory,
             List<DomainStateAware> domainStateProviders,
             @Autowired(required = false) GlobalSessionStorage storage) {
         this.keyStrategyFactory = createKeyStrategyFactory(domainStateProviders);
@@ -1001,7 +1001,7 @@ public void addUserMessage(String content) {
 
 或者由 `GlobalSessionStateStore` 提供包装方法统一处理同步。
 
-CheckpointSaverConfig 不受影响，继续为 L2 子图提供 InMemory/Redis 的 CheckpointSaver。
+SubGraphCheckpointSaverConfig 不受影响，继续为 L2 子图提供 InMemory/Redis 的 SubGraphCheckpointSaver。
 
 ### 8.5 修改文件
 
@@ -1016,7 +1016,7 @@ CheckpointSaverConfig 不受影响，继续为 L2 子图提供 InMemory/Redis �
 | `config/DomainServiceConfig.java` | 删除 `SessionStateStoreFactory` 依赖; 增加 3 个轻量级 `DomainStateAware` Bean (匿名类, 零依赖) |
 | `controller/BankController.java` | 更新 import; `clearSession` 改为 `globalSessionStore.clearSession()` |
 | `router/DomainRouter.java` | 更新 import; `setLastDomain(domain, expireAt)` |
-| `memory/CheckpointSaverConfig.java` | 增加 RedisCheckpointSaver import 路径 (移至 `impl/`) |
+| `memory/SubGraphCheckpointSaverConfig.java` | 重命名自 CheckpointSaverConfig; RedisSubGraphCheckpointSaver import 路径 (移至 `impl/`) |
 | `workflow/AbstractGraphConfig.java` | 增加 `extractSubAgentDataSnapshot()` 模板方法 (默认返回空Map) |
 | `workflow/TransferGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` — 提取 receiver/amount/purpose |
 | `workflow/BillQueryGraphConfig.java` | 实现 `extractSubAgentDataSnapshot()` — 提取 timePeriod/expenseType |

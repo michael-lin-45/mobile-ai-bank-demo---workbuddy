@@ -660,10 +660,10 @@ CheckpointSaver 负责**持久化图的执行状态**。当图被 `interruptBefo
 ### 11.2 MemorySaver（InMemory 实现）
 
 ```java
-// CheckpointSaverConfig.java
-@Bean("inMemoryCheckpointSaverFactory")
+// SubGraphCheckpointSaverConfig.java
+@Bean("inMemorySubGraphCheckpointSaverFactory")
 @ConditionalOnProperty(name = "storage.type", havingValue = "in-memory", matchIfMissing = true)
-public CheckpointSaverFactory inMemoryCheckpointSaverFactory() {
+public SubGraphCheckpointSaverFactory inMemorySubGraphCheckpointSaverFactory() {
     return MemorySaver::new;  // 每次调用创建新的 MemorySaver 实例
 }
 ```
@@ -677,7 +677,7 @@ public CheckpointSaverFactory inMemoryCheckpointSaverFactory() {
 ```java
 // AbstractGraphConfig.createSaverConfig()
 protected SaverConfig createSaverConfig() {
-    BaseCheckpointSaver saver = checkpointSaverFactory.create();  // 每次创建新实例
+    BaseCheckpointSaver saver = subGraphCheckpointSaverFactory.create();  // 每次创建新实例
     return SaverConfig.builder()
             .register(saver)
             .build();
@@ -1065,7 +1065,7 @@ clearCheckpoint → 释放该threadId的checkpoint
 | 实现 | 说明 |
 |------|------|
 | `MemorySaver` | InMemory，开发环境用 |
-| `RedisCheckpointSaver` | Redis持久化，生产环境用 |
+| `RedisSubGraphCheckpointSaver` | Redis持久化，生产环境用 |
 | `saver.release(config)` | 清理指定 threadId 的所有 checkpoint |
 
 ### OverAllState
