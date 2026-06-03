@@ -6,7 +6,7 @@ import lombok.Data;
 import java.util.List;
 
 /**
- * 路由决议 - IntentResolver的返回类型
+ * 路由决议 - SubGraphResolver的返回类型
  *
  * 三种状态:
  * - RESOLVED:      意图明确，可以执行Phase3
@@ -15,7 +15,7 @@ import java.util.List;
  *
  * 设计原则:
  * - Controller只看status，不需要知道消歧细节
- * - 未来IntentResolver内部实现可以替换为Graph，接口不变
+ * - 未来SubGraphResolver内部实现可以替换为Graph，接口不变
  */
 @Data
 @Builder
@@ -33,7 +33,7 @@ public class RoutingResolution {
     /** 路由类型 SWITCH/RESUME (RESOLVED时非null) */
     private String routeType;
 
-    /** IntentRouter判断不属于本域 (REROUTE依据) */
+    /** SubGraphRouter判断不属于本域 (REROUTE依据) */
     private boolean outOfDomain;
 
     /** 追问内容 (DISAMBIGUATION时非null) */

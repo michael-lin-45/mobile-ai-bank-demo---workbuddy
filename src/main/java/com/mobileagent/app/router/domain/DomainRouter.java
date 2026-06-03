@@ -1,7 +1,7 @@
-package com.mobileagent.app.router;
+package com.mobileagent.app.router.domain;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mobileagent.app.config.RoutingProperties;
+import com.mobileagent.app.data.SubGraphProperties;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
@@ -39,7 +39,7 @@ public class DomainRouter {
 
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
                         GlobalSessionStateStore globalSessionStore,
-                        RoutingProperties routingProperties,
+                        SubGraphProperties routingProperties,
                         ObjectMapper objectMapper,
                         @org.springframework.beans.factory.annotation.Value("${routing.history.l0-max-pairs:10}") int l0MaxPairs,
                         @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes) {

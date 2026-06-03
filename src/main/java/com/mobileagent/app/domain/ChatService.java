@@ -12,7 +12,7 @@ import reactor.core.publisher.Flux;
 /**
  * 闲聊L1 Service - 直接使用大模型与用户聊天
  *
- * - 无ContextRouter, 无IntentRouter, 无RoutingService
+ * - 无ContextRouter, 无SubGraphRouter, 无RoutingService
  * - 无activeThread, 无suspendedAgents
  * - 直接用ChatClient与用户对话
  * - 从 GlobalSessionContext.messages 读取对话历史

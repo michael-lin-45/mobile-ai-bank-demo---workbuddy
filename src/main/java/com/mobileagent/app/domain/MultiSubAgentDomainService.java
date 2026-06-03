@@ -9,9 +9,9 @@ import com.mobileagent.app.memory.model.DomainState;
 import com.mobileagent.app.memory.GlobalSessionContext;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.memory.model.SuspendedInfo;
-import com.mobileagent.app.router.ContextRouter;
-import com.mobileagent.app.router.IntentRegistry;
-import com.mobileagent.app.router.IntentResolver;
+import com.mobileagent.app.router.subgraph.ContextRouter;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
+import com.mobileagent.app.router.subgraph.SubGraphResolver;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -28,12 +28,12 @@ import java.util.*;
 @Slf4j
 public class MultiSubAgentDomainService extends AbstractDomainService {
 
-    private static final String DEFAULT_ROUTING_TEMPLATE = "prompts/l1-routing.st";
+    private static final String DEFAULT_ROUTING_TEMPLATE = "prompts/l1-context.st";
     private static final String DEFAULT_INTENTION_TEMPLATE = "prompts/l1-intention.st";
 
-    private final IntentResolver intentResolver;
-    private final String routingTemplatePath;
-    private final String intentionTemplatePath;
+    private final SubGraphResolver intentResolver;
+    private final String contextRoutingTemplatePath;
+    private final String intentRoutingTemplatePath;
     private final String rejectedMessage;
     private final List<IntentInfo> handledIntents;
 
@@ -44,14 +44,14 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
     private MultiSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.domainKey,
-                builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
+                builder.contextRouter, builder.graphExecutionEngine, builder.subGraphRegistry,
                 builder.globalSessionStore, builder.activeAgentExpireMinutes,
                 builder.l1DomainPairs);
         this.intentResolver = builder.intentResolver;
-        this.routingTemplatePath = builder.routingTemplatePath != null
-                ? builder.routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
-        this.intentionTemplatePath = builder.intentionTemplatePath != null
-                ? builder.intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
+        this.contextRoutingTemplatePath = builder.contextRoutingTemplatePath != null
+                ? builder.contextRoutingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
+        this.intentRoutingTemplatePath = builder.intentRoutingTemplatePath != null
+                ? builder.intentRoutingTemplatePath : DEFAULT_INTENTION_TEMPLATE;
         this.rejectedMessage = builder.rejectedMessage != null
                 ? builder.rejectedMessage : "该功能暂不支持";
         this.handledIntents = builder.handledIntents != null
@@ -69,12 +69,12 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         private String logTag;
         private String domainKey;
         private ContextRouter contextRouter;
-        private IntentResolver intentResolver;
+        private SubGraphResolver intentResolver;
         private GraphExecutionEngine graphExecutionEngine;
-        private IntentRegistry intentRegistry;
+        private SubGraphRegistry subGraphRegistry;
         private GlobalSessionStateStore globalSessionStore;
-        private String routingTemplatePath;
-        private String intentionTemplatePath;
+        private String contextRoutingTemplatePath;
+        private String intentRoutingTemplatePath;
         private String rejectedMessage;
         private List<IntentInfo> handledIntents;
         private int maxSuspendedDepth = 3;
@@ -86,12 +86,12 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         public Builder logTag(String logTag) { this.logTag = logTag; return this; }
         public Builder domainKey(String domainKey) { this.domainKey = domainKey; return this; }
         public Builder contextRouter(ContextRouter contextRouter) { this.contextRouter = contextRouter; return this; }
-        public Builder intentResolver(IntentResolver intentResolver) { this.intentResolver = intentResolver; return this; }
+        public Builder intentResolver(SubGraphResolver intentResolver) { this.intentResolver = intentResolver; return this; }
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
-        public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
+        public Builder subGraphRegistry(SubGraphRegistry subGraphRegistry) { this.subGraphRegistry = subGraphRegistry; return this; }
         public Builder globalSessionStore(GlobalSessionStateStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
-        public Builder routingTemplatePath(String routingTemplatePath) { this.routingTemplatePath = routingTemplatePath; return this; }
-        public Builder intentionTemplatePath(String intentionTemplatePath) { this.intentionTemplatePath = intentionTemplatePath; return this; }
+        public Builder contextRoutingTemplatePath(String contextRoutingTemplatePath) { this.contextRoutingTemplatePath = contextRoutingTemplatePath; return this; }
+        public Builder intentRoutingTemplatePath(String intentRoutingTemplatePath) { this.intentRoutingTemplatePath = intentRoutingTemplatePath; return this; }
         public Builder rejectedMessage(String rejectedMessage) { this.rejectedMessage = rejectedMessage; return this; }
         public Builder handledIntents(List<IntentInfo> handledIntents) { this.handledIntents = handledIntents; return this; }
         public Builder maxSuspendedDepth(int maxSuspendedDepth) { this.maxSuspendedDepth = maxSuspendedDepth; return this; }
@@ -106,10 +106,10 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(contextRouter, "contextRouter is required");
             Objects.requireNonNull(intentResolver, "intentResolver is required");
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
-            Objects.requireNonNull(intentRegistry, "intentRegistry is required");
+            Objects.requireNonNull(subGraphRegistry, "subGraphRegistry is required");
             Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
-            String routingPath = routingTemplatePath != null ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
-            String intentionPath = intentionTemplatePath != null ? intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
+            String routingPath = contextRoutingTemplatePath != null ? contextRoutingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
+            String intentionPath = intentRoutingTemplatePath != null ? intentRoutingTemplatePath : DEFAULT_INTENTION_TEMPLATE;
             TemplateUtils.warmUp(routingPath);
             TemplateUtils.warmUp(intentionPath);
             return new MultiSubAgentDomainService(this);
@@ -257,7 +257,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
             RoutingResult phase1 = contextRouter.route(sessionId, userInput,
                     currentAgent, pendingAgents,
-                    routingTemplatePath, domainName, chatHistory, lastQuestion);
+                    contextRoutingTemplatePath, domainName, chatHistory, lastQuestion);
             log.info("[{}] Phase1: routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
 
             if (phase1.isFollow() && !isInDisambiguation(sessionId)) {
@@ -283,13 +283,13 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
             DisambiguationState disambigState = getDisambiguationState(sessionId);
             String disambigGroupId = disambigState != null ? disambigState.getGroupId() : null;
-            String domainIntentScopeList = intentRegistry.getDomainIntentScopeDescription(
+            String domainIntentScopeList = subGraphRegistry.getDomainIntentScopeDescription(
                     handledIntents.stream().map(IntentInfo::getIntentName).toList());
 
             RoutingResolution resolution = intentResolver.resolve(sessionId, userInput, phase1, chatHistory,
                     isInDisambiguation(sessionId), disambigGroupId,
                     hasOwnSuspendedAgents(sessionId), getAllOwnSuspended(sessionId),
-                    intentionTemplatePath, domainIntentScopeList);
+                    intentRoutingTemplatePath, domainIntentScopeList);
 
             log.info("[{}] Routing resolution: status={}, intent={}, outOfDomain={}",
                     logTag, resolution.getStatus(), resolution.getIntentName(), resolution.isOutOfDomain());
@@ -389,7 +389,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         String threadId = suspendedInfo.getThreadId();
         log.info("[{}] RESUME with checkpoint: intent={}, threadId={}", logTag, intent, threadId);
 
-        var graph = intentRegistry.getGraph(intent);
+        var graph = subGraphRegistry.getGraph(intent);
         if (graph == null) {
             return Flux.just(StreamChunk.error("Graph not found for intent: " + intent));
         }
@@ -407,7 +407,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private String resolveGroupId(RoutingResolution resolution) {
         if (resolution.getCandidateIntents() != null && !resolution.getCandidateIntents().isEmpty()) {
             for (String candidate : resolution.getCandidateIntents()) {
-                IntentRegistry.IntentGroup group = intentRegistry.findGroupByIntent(candidate);
+                SubGraphRegistry.IntentGroup group = subGraphRegistry.findGroupByIntent(candidate);
                 if (group != null) {
                     return group.getGroupId();
                 }

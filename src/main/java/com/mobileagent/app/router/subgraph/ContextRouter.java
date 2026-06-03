@@ -1,7 +1,8 @@
-package com.mobileagent.app.router;
+package com.mobileagent.app.router.subgraph;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -18,22 +19,22 @@ import org.springframework.stereotype.Service;
  * - 不依赖AgentStateManager，由L1 Service传入状态字符串(currentAgent, pendingAgents, sessionState)
  *
  * 支持两种模板:
- * - 默认(l1-routing.st): 理财L1使用,包含FOLLOW/SWITCH/RESUME三种
- * - 简化(l1-routing-simple.st): 转账/账单L1使用,只有FOLLOW/SWITCH两种
+ * - 默认(l1-context.st): 理财L1使用,包含FOLLOW/SWITCH/RESUME三种
+ * - 简化(l1-context-simple.st): 转账/账单L1使用,只有FOLLOW/SWITCH两种
  */
 @Slf4j
 @Service
 public class ContextRouter {
 
     private final ChatClient chatClient;
-    private final IntentRegistry intentRegistry;
+    private final SubGraphRegistry subGraphRegistry;
     private final ObjectMapper objectMapper;
 
     public ContextRouter(@Qualifier("contextChatClient") ChatClient chatClient,
-                        IntentRegistry intentRegistry,
+                        SubGraphRegistry subGraphRegistry,
                         ObjectMapper objectMapper) {
         this.chatClient = chatClient;
-        this.intentRegistry = intentRegistry;
+        this.subGraphRegistry = subGraphRegistry;
         this.objectMapper = objectMapper;
     }
 
@@ -103,7 +104,7 @@ public class ContextRouter {
                                              String templatePath, String domainName,
                                              String chatHistory, String lastQuestion) {
         String template = loadTemplate(templatePath);
-        String intentList = intentRegistry.getIntentListDescription();
+        String intentList = subGraphRegistry.getIntentListDescription();
 
         String lastQuestionContext;
         if (lastQuestion != null && !lastQuestion.isBlank()) {

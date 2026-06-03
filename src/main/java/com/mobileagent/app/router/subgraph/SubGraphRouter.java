@@ -1,7 +1,8 @@
-package com.mobileagent.app.router;
+package com.mobileagent.app.router.subgraph;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -20,17 +21,17 @@ import org.springframework.stereotype.Service;
  */
 @Slf4j
 @Service
-public class IntentRouter {
+public class SubGraphRouter {
 
     private final ChatClient chatClient;
-    private final IntentRegistry intentRegistry;
+    private final SubGraphRegistry subGraphRegistry;
     private final ObjectMapper objectMapper;
 
-    public IntentRouter(@Qualifier("intentChatClient") ChatClient chatClient,
-                           IntentRegistry intentRegistry,
+    public SubGraphRouter(@Qualifier("intentChatClient") ChatClient chatClient,
+                           SubGraphRegistry subGraphRegistry,
                            ObjectMapper objectMapper) {
         this.chatClient = chatClient;
-        this.intentRegistry = intentRegistry;
+        this.subGraphRegistry = subGraphRegistry;
         this.objectMapper = objectMapper;
     }
 
@@ -71,17 +72,17 @@ public class IntentRouter {
                     .call()
                     .content();
             long elapsedMs = System.currentTimeMillis() - startMs;
-            log.info("[IntentRouter] LLM call completed in {}ms | sessionId={}, userInput={}", elapsedMs, sessionId, userInput);
-            log.debug("[IntentRouter] LLM raw response: {}", content);
+            log.info("[SubGraphRouter] LLM call completed in {}ms | sessionId={}, userInput={}", elapsedMs, sessionId, userInput);
+            log.debug("[SubGraphRouter] LLM raw response: {}", content);
 
             RoutingResult result = parseRewriteResponse(content, phase1Result);
-            log.info("[IntentRouter] Result: intent={}, routeType={}, rewritten={}, confidence={}",
+            log.info("[SubGraphRouter] Result: intent={}, routeType={}, rewritten={}, confidence={}",
                     result.getIntentName(), result.getRefinedRouteType(),
                     result.getRewrittenInput(), result.getConfidence());
             return result;
 
         } catch (Exception e) {
-            log.error("[IntentRouter] LLM call failed", e);
+            log.error("[SubGraphRouter] LLM call failed", e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
                     .refinedRouteType("SWITCH")
@@ -101,7 +102,7 @@ public class IntentRouter {
                                                String templatePath,
                                                String domainIntentScopeList) {
         String template = loadTemplate(templatePath);
-        String allIntentList = intentRegistry.getIntentListDescription();
+        String allIntentList = subGraphRegistry.getIntentListDescription();
         String scopeList = domainIntentScopeList != null ? domainIntentScopeList : allIntentList;
 
         String mode = phase1Result.isResume() ? "RESUME" : "SWITCH";
@@ -166,7 +167,7 @@ public class IntentRouter {
                     .belongsToDomain(!node.has("belongs_to_domain") || node.get("belongs_to_domain").asBoolean(true))
                     .build();
         } catch (Exception e) {
-            log.warn("[IntentRouter] Failed to parse rewrite response: {}", content, e);
+            log.warn("[SubGraphRouter] Failed to parse rewrite response: {}", content, e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
                     .refinedRouteType("SWITCH")

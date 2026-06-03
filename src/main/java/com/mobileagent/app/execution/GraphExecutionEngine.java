@@ -5,7 +5,7 @@ import com.alibaba.cloud.ai.graph.streaming.OutputType;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.data.WorkflowOutput;
-import com.mobileagent.app.router.IntentRegistry;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -21,7 +21,7 @@ import java.util.Objects;
  * - 统一返回 Flux<StreamChunk>，流式/非流式差异对上层透明
  * - 非流式Graph走已验证的 stream().blockLast() 路径，不冒险迁移
  * - 流式Graph走 graphResponseStream() 路径（Phase 2启用）
- * - GES是唯一读取 IntentRegistry.isStreamable() 的层
+ * - GES是唯一读取 SubGraphRegistry.isStreamable() 的层
  *
  * 关键注意事项:
  * - getState() 必须用原始config（只有threadId），不能用updateState返回的updatedConfig
@@ -32,10 +32,10 @@ import java.util.Objects;
 @Service
 public class GraphExecutionEngine {
 
-    private final IntentRegistry intentRegistry;
+    private final SubGraphRegistry subGraphRegistry;
 
-    public GraphExecutionEngine(IntentRegistry intentRegistry) {
-        this.intentRegistry = intentRegistry;
+    public GraphExecutionEngine(SubGraphRegistry subGraphRegistry) {
+        this.subGraphRegistry = subGraphRegistry;
     }
 
     /** 生成包含 threadId 的 config */
@@ -46,13 +46,13 @@ public class GraphExecutionEngine {
     /**
      * 首次执行Graph — 统一返回 Flux<StreamChunk>
      *
-     * GES闭环: 根据IntentRegistry.isStreamable()分流
+     * GES闭环: 根据SubGraphRegistry.isStreamable()分流
      * - false → executeBlocking (已验证路径)
      * - true  → executeStreaming (Phase 2启用)
      */
     public Flux<StreamChunk> executeGraph(CompiledGraph graph, String intent,
                                            Map<String, Object> input, String threadId) {
-        boolean streamable = intentRegistry.isStreamable(intent);
+        boolean streamable = subGraphRegistry.isStreamable(intent);
         if (!streamable) {
             return executeBlocking(graph, intent, input, threadId);
         }
@@ -65,7 +65,7 @@ public class GraphExecutionEngine {
     public Flux<StreamChunk> resumeGraph(CompiledGraph graph, String intent,
                                           String userInput, String threadId,
                                           Map<String, Object> globalStateData) {
-        boolean streamable = intentRegistry.isStreamable(intent);
+        boolean streamable = subGraphRegistry.isStreamable(intent);
         if (!streamable) {
             return resumeBlocking(graph, intent, userInput, threadId, globalStateData);
         }

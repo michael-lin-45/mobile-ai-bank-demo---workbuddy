@@ -20,7 +20,7 @@ import org.springframework.context.annotation.Configuration;
  * 用途:
  *   domain        - L0 领域路由 (DomainRouter)
  *   context       - L1 上下文路由判断 (ContextRouter, FOLLOW/SWITCH/RESUME)
- *   intent        - L1 意图识别+上下文改写 (IntentRouter)
+ *   intent        - L1 意图识别+上下文改写 (SubGraphRouter)
  *   paramExtract  - L2 子Graph参数提取+取消意图判断
  *   chat          - L1 闲聊 (ChatService)
  *   wealthInterpret - L2 理财产品解读(流式)

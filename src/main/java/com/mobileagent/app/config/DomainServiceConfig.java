@@ -7,11 +7,11 @@ import com.mobileagent.app.domain.SingleSubAgentDomainService;
 import com.mobileagent.app.memory.DomainStateAware;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
-import com.mobileagent.app.router.ContextRouter;
-import com.mobileagent.app.router.DomainServiceRegistry;
-import com.mobileagent.app.router.IntentRegistry;
-import com.mobileagent.app.router.IntentResolver;
-import com.mobileagent.app.router.IntentRouter;
+import com.mobileagent.app.router.subgraph.ContextRouter;
+import com.mobileagent.app.router.registry.DomainServiceRegistry;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
+import com.mobileagent.app.router.subgraph.SubGraphResolver;
+import com.mobileagent.app.router.subgraph.SubGraphRouter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -55,9 +55,9 @@ public class DomainServiceConfig {
     @Bean("transferDomainService")
     public SingleSubAgentDomainService transferDomainService(
             ContextRouter contextRouter,
-            IntentRouter intentRouter,
+            SubGraphRouter subGraphRouter,
             GraphExecutionEngine graphExecutionEngine,
-            IntentRegistry intentRegistry,
+            SubGraphRegistry subGraphRegistry,
             GlobalSessionStateStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
@@ -68,9 +68,9 @@ public class DomainServiceConfig {
                 .intent("TRANSFER")
                 .intentDescription("转账操作")
                 .contextRouter(contextRouter)
-                .intentRouter(intentRouter)
+                .subGraphRouter(subGraphRouter)
                 .graphExecutionEngine(graphExecutionEngine)
-                .intentRegistry(intentRegistry)
+                .subGraphRegistry(subGraphRegistry)
                 .globalSessionStore(globalSessionStore)
                 .l1DomainPairs(l1MaxPairs)
                 .build();
@@ -83,9 +83,9 @@ public class DomainServiceConfig {
     @Bean("billDomainService")
     public SingleSubAgentDomainService billDomainService(
             ContextRouter contextRouter,
-            IntentRouter intentRouter,
+            SubGraphRouter subGraphRouter,
             GraphExecutionEngine graphExecutionEngine,
-            IntentRegistry intentRegistry,
+            SubGraphRegistry subGraphRegistry,
             GlobalSessionStateStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
@@ -96,9 +96,9 @@ public class DomainServiceConfig {
                 .intent("BILL_QUERY")
                 .intentDescription("账单查询")
                 .contextRouter(contextRouter)
-                .intentRouter(intentRouter)
+                .subGraphRouter(subGraphRouter)
                 .graphExecutionEngine(graphExecutionEngine)
-                .intentRegistry(intentRegistry)
+                .subGraphRegistry(subGraphRegistry)
                 .globalSessionStore(globalSessionStore)
                 .l1DomainPairs(l1MaxPairs)
                 .build();
@@ -111,9 +111,9 @@ public class DomainServiceConfig {
     @Bean("wealthDomainService")
     public MultiSubAgentDomainService wealthDomainService(
             ContextRouter contextRouter,
-            IntentResolver intentResolver,
+            SubGraphResolver intentResolver,
             GraphExecutionEngine graphExecutionEngine,
-            IntentRegistry intentRegistry,
+            SubGraphRegistry subGraphRegistry,
             GlobalSessionStateStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
@@ -124,10 +124,10 @@ public class DomainServiceConfig {
                 .contextRouter(contextRouter)
                 .intentResolver(intentResolver)
                 .graphExecutionEngine(graphExecutionEngine)
-                .intentRegistry(intentRegistry)
+                .subGraphRegistry(subGraphRegistry)
                 .globalSessionStore(globalSessionStore)
-                .routingTemplatePath("prompts/l1-routing.st")
-                .intentionTemplatePath("prompts/l1-intention.st")
+                .contextRoutingTemplatePath("prompts/l1-context.st")
+                .intentRoutingTemplatePath("prompts/l1-intention.st")
                 .rejectedMessage("该理财功能暂不支持，目前仅支持理财咨询和理财产品解读")
                 .handledIntents(List.of(
                         new AbstractDomainService.IntentInfo("WEALTH_CONSULT", "理财咨询与推荐"),

@@ -1,7 +1,8 @@
-package com.mobileagent.app.router;
+package com.mobileagent.app.router.subgraph;
 
 import com.mobileagent.app.data.RoutingResolution;
 import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -26,10 +27,10 @@ import java.util.Map;
  */
 @Slf4j
 @Service
-public class IntentResolver {
+public class SubGraphResolver {
 
-    private final IntentRouter intentRouter;
-    private final IntentRegistry intentRegistry;
+    private final SubGraphRouter subGraphRouter;
+    private final SubGraphRegistry subGraphRegistry;
 
     @Value("${routing.confidence.disambiguation-threshold:0.7}")
     private double disambiguationThreshold;
@@ -37,10 +38,10 @@ public class IntentResolver {
     @Value("${routing.confidence.high-confidence-bypass:0.85}")
     private double highConfidenceBypass;
 
-    public IntentResolver(IntentRouter intentRouter,
-                               IntentRegistry intentRegistry) {
-        this.intentRouter = intentRouter;
-        this.intentRegistry = intentRegistry;
+    public SubGraphResolver(SubGraphRouter subGraphRouter,
+                               SubGraphRegistry subGraphRegistry) {
+        this.subGraphRouter = subGraphRouter;
+        this.subGraphRegistry = subGraphRegistry;
     }
 
     private static final String DEFAULT_INTENTION_TEMPLATE = "prompts/l1-intention.st";
@@ -56,19 +57,19 @@ public class IntentResolver {
                                       boolean inDisambiguation, String disambiguationGroupId,
                                       boolean hasSuspendedAgents,
                                       Map<String, ?> suspendedAgents,
-                                      String intentionTemplatePath,
+                                      String intentRoutingTemplatePath,
                                       String domainIntentScopeList) {
         if (inDisambiguation) {
             if (isCancelExpression(userInput)) {
-                log.info("[IntentResolver] Cancel detected during disambiguation");
+                log.info("[SubGraphResolver] Cancel detected during disambiguation");
                 return RoutingResolution.cancelled();
             }
             return handleDisambiguationAnswer(sessionId, userInput, phase1Result, chatHistory,
-                    disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentionTemplatePath,
+                    disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentRoutingTemplatePath,
                     domainIntentScopeList);
         }
         return resolveNewIntention(sessionId, userInput, phase1Result, chatHistory,
-                hasSuspendedAgents, suspendedAgents, intentionTemplatePath,
+                hasSuspendedAgents, suspendedAgents, intentRoutingTemplatePath,
                 domainIntentScopeList);
     }
 
@@ -76,7 +77,7 @@ public class IntentResolver {
                                                     String chatHistory,
                                                     boolean hasSuspendedAgents,
                                                     Map<String, ?> suspendedAgents,
-                                                    String intentionTemplatePath,
+                                                    String intentRoutingTemplatePath,
                                                     String domainIntentScopeList) {
         String currentAgent = phase1Result.getRouteType() != null ? phase1Result.getRouteType() : "无";
         String pendingAgents = hasSuspendedAgents
@@ -85,30 +86,30 @@ public class IntentResolver {
         String sessionState = "Phase1路由: " + phase1Result.getRouteType();
         String disambigContext = "无";
 
-        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, phase1Result,
+        RoutingResult phase2 = subGraphRouter.rewriteAndIdentify(sessionId, userInput, phase1Result,
                 currentAgent, pendingAgents, sessionState, disambigContext,
-                intentionTemplatePath, chatHistory, domainIntentScopeList);
-        log.info("[IntentResolver] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
+                intentRoutingTemplatePath, chatHistory, domainIntentScopeList);
+        log.info("[SubGraphResolver] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence(), phase2.getCandidateIntents());
 
         if (phase2.isAmbiguous() && phase2.getCandidateIntents() != null && !phase2.getCandidateIntents().isEmpty()) {
             if (phase2.getConfidence() < highConfidenceBypass) {
                 String groupId = resolveGroupId(phase2.getGroupId(), phase2.getCandidateIntents());
-                if (groupId != null && intentRegistry.getGroup(groupId) != null) {
-                    log.info("[IntentResolver] Disambiguation: ambiguous + low confidence ({}) < bypass ({})",
+                if (groupId != null && subGraphRegistry.getGroup(groupId) != null) {
+                    log.info("[SubGraphResolver] Disambiguation: ambiguous + low confidence ({}) < bypass ({})",
                             phase2.getConfidence(), highConfidenceBypass);
                     return triggerDisambiguation(groupId, phase2);
                 }
             }
-            log.info("[IntentResolver] Ambiguous but high confidence ({}) >= bypass ({}), trusting top intent: {}",
+            log.info("[SubGraphResolver] Ambiguous but high confidence ({}) >= bypass ({}), trusting top intent: {}",
                     phase2.getConfidence(), highConfidenceBypass, phase2.getIntentName());
         }
 
         String effectiveIntent = phase2.getIntentName();
         if (!phase2.isAmbiguous() && effectiveIntent != null && phase2.getConfidence() < disambiguationThreshold) {
-            IntentRegistry.IntentGroup group = intentRegistry.findGroupByIntent(effectiveIntent);
+            SubGraphRegistry.IntentGroup group = subGraphRegistry.findGroupByIntent(effectiveIntent);
             if (group != null) {
-                log.info("[IntentResolver] Supplemental disambiguation: low confidence ({}) < threshold ({}), intent={} belongs to group={}",
+                log.info("[SubGraphResolver] Supplemental disambiguation: low confidence ({}) < threshold ({}), intent={} belongs to group={}",
                         phase2.getConfidence(), disambiguationThreshold, effectiveIntent, group.getGroupId());
                 return triggerDisambiguation(group.getGroupId(), phase2);
             }
@@ -116,36 +117,36 @@ public class IntentResolver {
 
         String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
         if (!phase2.isBelongsToDomain()) {
-            log.info("[IntentResolver] Out-of-domain detected by IntentRouter: intent={}, belongsToDomain=false → REROUTE",
+            log.info("[SubGraphResolver] Out-of-domain detected by SubGraphRouter: intent={}, belongsToDomain=false → REROUTE",
                     effectiveIntent);
             return RoutingResolution.outOfDomain(effectiveIntent, rewrittenInput);
         }
 
         if (effectiveIntent == null || "UNKNOWN".equalsIgnoreCase(effectiveIntent)) {
-            log.info("[IntentResolver] Intent completely unidentifiable");
+            log.info("[SubGraphResolver] Intent completely unidentifiable");
             return RoutingResolution.rejected();
         }
 
-        if (intentRegistry.isGroupName(effectiveIntent)) {
-            IntentRegistry.IntentGroup group = intentRegistry.getGroup(effectiveIntent);
+        if (subGraphRegistry.isGroupName(effectiveIntent)) {
+            SubGraphRegistry.IntentGroup group = subGraphRegistry.getGroup(effectiveIntent);
             if (group != null) {
                 return triggerDisambiguation(effectiveIntent, phase2);
             }
         }
 
-        if (!intentRegistry.hasIntent(effectiveIntent)) {
-            log.warn("[IntentResolver] Unknown intent: {}, attempting fuzzy match", effectiveIntent);
-            effectiveIntent = intentRegistry.fuzzyMatchIntent(effectiveIntent, userInput);
+        if (!subGraphRegistry.hasIntent(effectiveIntent)) {
+            log.warn("[SubGraphResolver] Unknown intent: {}, attempting fuzzy match", effectiveIntent);
+            effectiveIntent = subGraphRegistry.fuzzyMatchIntent(effectiveIntent, userInput);
             if (effectiveIntent == null) {
                 return RoutingResolution.rejected();
             }
-            if (intentRegistry.isGroupName(effectiveIntent)) {
-                IntentRegistry.IntentGroup group = intentRegistry.getGroup(effectiveIntent);
+            if (subGraphRegistry.isGroupName(effectiveIntent)) {
+                SubGraphRegistry.IntentGroup group = subGraphRegistry.getGroup(effectiveIntent);
                 if (group != null) {
                     return triggerDisambiguation(effectiveIntent, phase2);
                 }
             }
-            log.info("[IntentResolver] Fuzzy matched to: {}", effectiveIntent);
+            log.info("[SubGraphResolver] Fuzzy matched to: {}", effectiveIntent);
         }
 
         String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
@@ -153,13 +154,13 @@ public class IntentResolver {
     }
 
     private RoutingResolution triggerDisambiguation(String groupId, RoutingResult phase2) {
-        IntentRegistry.IntentGroup group = intentRegistry.getGroup(groupId);
+        SubGraphRegistry.IntentGroup group = subGraphRegistry.getGroup(groupId);
         if (group == null) {
-            log.warn("[IntentResolver] Disambiguation failed: no group found for groupId={}", groupId);
+            log.warn("[SubGraphResolver] Disambiguation failed: no group found for groupId={}", groupId);
             return RoutingResolution.rejected();
         }
 
-        log.info("[IntentResolver] Entering disambiguation: groupId={}", groupId);
+        log.info("[SubGraphResolver] Entering disambiguation: groupId={}", groupId);
 
         return RoutingResolution.disambiguation(group.getDisambiguationQuestion(), group.getIntentNames());
     }
@@ -170,13 +171,13 @@ public class IntentResolver {
                                                               String disambiguationGroupId,
                                                               boolean hasSuspendedAgents,
                                                               Map<String, ?> suspendedAgents,
-                                                              String intentionTemplatePath,
+                                                              String intentRoutingTemplatePath,
                                                               String domainIntentScopeList) {
         if (disambiguationGroupId == null) {
             return RoutingResolution.rejected();
         }
 
-        IntentRegistry.IntentGroup group = intentRegistry.getGroup(disambiguationGroupId);
+        SubGraphRegistry.IntentGroup group = subGraphRegistry.getGroup(disambiguationGroupId);
         if (group == null) {
             return RoutingResolution.rejected();
         }
@@ -191,7 +192,7 @@ public class IntentResolver {
         sb.append("系统追问: \"").append(group.getDisambiguationQuestion()).append("\"\n");
         sb.append("候选意图:\n");
         for (String candidateName : group.getIntentNames()) {
-            IntentRegistry.IntentConfig config = intentRegistry.getConfig(candidateName);
+            SubGraphRegistry.IntentConfig config = subGraphRegistry.getConfig(candidateName);
             sb.append("  · ").append(candidateName);
             if (config != null) {
                 sb.append(" (").append(config.getDescription()).append(")");
@@ -203,21 +204,21 @@ public class IntentResolver {
 
         RoutingResult rePhase1 = RoutingResult.builder()
                 .routeType("SWITCH").confidence(0.8).reasoning("消歧回答重新识别").build();
-        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, rePhase1,
+        RoutingResult phase2 = subGraphRouter.rewriteAndIdentify(sessionId, userInput, rePhase1,
                 currentAgent, pendingAgents, sessionState, disambigContext,
-                intentionTemplatePath, chatHistory, domainIntentScopeList);
-        log.info("[IntentResolver] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
+                intentRoutingTemplatePath, chatHistory, domainIntentScopeList);
+        log.info("[SubGraphResolver] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence());
 
         String identifiedIntent = phase2.getIntentName();
         boolean isInGroupIntent = identifiedIntent != null
                 && !"UNKNOWN".equalsIgnoreCase(identifiedIntent)
-                && intentRegistry.hasIntent(identifiedIntent)
-                && !intentRegistry.isGroupName(identifiedIntent)
+                && subGraphRegistry.hasIntent(identifiedIntent)
+                && !subGraphRegistry.isGroupName(identifiedIntent)
                 && group.getIntentNames().contains(identifiedIntent);
 
         if (isInGroupIntent) {
-            log.info("[IntentResolver] Disambiguation resolved (in-group intent): intent={}, confidence={}",
+            log.info("[SubGraphResolver] Disambiguation resolved (in-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
             String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
@@ -227,9 +228,9 @@ public class IntentResolver {
 
         if (identifiedIntent != null
                 && !"UNKNOWN".equalsIgnoreCase(identifiedIntent)
-                && intentRegistry.hasIntent(identifiedIntent)
-                && !intentRegistry.isGroupName(identifiedIntent)) {
-            log.info("[IntentResolver] Disambiguation resolved (out-group intent): intent={}, confidence={}",
+                && subGraphRegistry.hasIntent(identifiedIntent)
+                && !subGraphRegistry.isGroupName(identifiedIntent)) {
+            log.info("[SubGraphResolver] Disambiguation resolved (out-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
             String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
@@ -238,10 +239,10 @@ public class IntentResolver {
         }
 
         if (identifiedIntent != null
-                && intentRegistry.isGroupName(identifiedIntent)
+                && subGraphRegistry.isGroupName(identifiedIntent)
                 && identifiedIntent.equals(disambiguationGroupId)) {
             String defaultIntent = group.getIntentNames().get(0);
-            log.info("[IntentResolver] Disambiguation resolved (group name, using first candidate): group={}, default={}",
+            log.info("[SubGraphResolver] Disambiguation resolved (group name, using first candidate): group={}, default={}",
                     identifiedIntent, defaultIntent);
 
             String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
@@ -249,7 +250,7 @@ public class IntentResolver {
             return RoutingResolution.resolved(defaultIntent, rewrittenInput, routeType);
         }
 
-        log.info("[IntentResolver] Disambiguation answer still ambiguous → rejected");
+        log.info("[SubGraphResolver] Disambiguation answer still ambiguous → rejected");
         return RoutingResolution.rejected();
     }
 
@@ -264,7 +265,7 @@ public class IntentResolver {
         String effectiveIntent = phase2.getIntentName();
         if (effectiveIntent != null && !"UNKNOWN".equalsIgnoreCase(effectiveIntent) && hasSuspendedAgents) {
             if (suspendedAgents.containsKey(effectiveIntent)) {
-                log.info("[IntentResolver] State-based RESUME override: intent={} is in suspendedAgents (phase1 was {})",
+                log.info("[SubGraphResolver] State-based RESUME override: intent={} is in suspendedAgents (phase1 was {})",
                         effectiveIntent, phase1Result.getRouteType());
                 return "RESUME";
             }
@@ -281,7 +282,7 @@ public class IntentResolver {
         }
         if (candidateIntents != null && !candidateIntents.isEmpty()) {
             for (String candidate : candidateIntents) {
-                IntentRegistry.IntentGroup group = intentRegistry.findGroupByIntent(candidate);
+                SubGraphRegistry.IntentGroup group = subGraphRegistry.findGroupByIntent(candidate);
                 if (group != null) {
                     return group.getGroupId();
                 }

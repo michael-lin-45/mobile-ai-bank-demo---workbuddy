@@ -157,7 +157,7 @@ class IntegrationFlowTest {
         System.out.println("[#5c] 200元 ✓ → " + r3.get("status").asText());
     }
 
-    /** #6 接续: 无activeThread时FOLLOW → IntentRouter → SWITCH */
+    /** #6 接续: 无activeThread时FOLLOW → SubGraphRouter → SWITCH */
     @Test
     @Order(6)
     void test06_followUpNoActiveThread() {
@@ -167,7 +167,7 @@ class IntegrationFlowTest {
         System.out.println("[#6a] 查收入 → " + s1);
 
         // 如果已经COMPLETED，activeThread为空
-        // 再说"那支出呢" → FOLLOW但无activeThread → IntentRouter改写 → SWITCH
+        // 再说"那支出呢" → FOLLOW但无activeThread → SubGraphRouter改写 → SWITCH
         JsonNode r2 = chat("那支出呢");
         assertThat(r2.get("status").asText()).isIn("COMPLETED", "INTERRUPTED");
         System.out.println("[#6b] 那支出呢 (FOLLOW no active) ✓ → " + r2.get("status").asText());
@@ -406,7 +406,7 @@ class IntegrationFlowTest {
 
     /** #21 REROUTE: 转账域追问时，用户反问"什么是风险等级" → REROUTE → CHAT域回答
      *  流程: 转账INTERRUPTED(有lastQuestion) → ContextRouter判SWITCH →
-     *  IntentRouter判belongsToDomain=false → REROUTE → L0重新路由到CHAT
+     *  SubGraphRouter判belongsToDomain=false → REROUTE → L0重新路由到CHAT
      */
     @Test
     @Order(21)
@@ -427,7 +427,7 @@ class IntegrationFlowTest {
     }
 
     /** #22 REROUTE: L0误路由"转账5000到朝朝盈"到WEALTH → Multi判TRANSFER不属于本域 → REROUTE → TRANSFER
-     *  流程: L0路由到WEALTH(误) → IntentRouter识别intent=TRANSFER, belongsToDomain=false →
+     *  流程: L0路由到WEALTH(误) → SubGraphRouter识别intent=TRANSFER, belongsToDomain=false →
      *  REROUTE → L0排除WEALTH重新路由 → TRANSFER
      */
     @Test
@@ -443,9 +443,9 @@ class IntegrationFlowTest {
     }
 
     /** #23 Auto-upgrade保护: 理财域追问"风险偏好"时用户答"稳健" — ContextRouter可能误判SWITCH，
-     *  但IntentRouter识别WEALTH_CONSULT == activeThread.intent → 自动降级回FOLLOW
+     *  但SubGraphRouter识别WEALTH_CONSULT == activeThread.intent → 自动降级回FOLLOW
      *  流程: WEALTH_CONSULT INTERRUPTED → ContextRouter误判SWITCH(不该判) →
-     *  IntentRouter识别WEALTH_CONSULT → auto-upgrade → FOLLOW → resumeActiveThread
+     *  SubGraphRouter识别WEALTH_CONSULT → auto-upgrade → FOLLOW → resumeActiveThread
      */
     @Test
     @Order(23)

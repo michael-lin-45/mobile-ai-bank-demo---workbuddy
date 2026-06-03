@@ -9,8 +9,8 @@ import com.mobileagent.app.memory.model.DomainState;
 import com.mobileagent.app.memory.GlobalSessionContext;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
-import com.mobileagent.app.router.ContextRouter;
-import com.mobileagent.app.router.IntentRegistry;
+import com.mobileagent.app.router.subgraph.ContextRouter;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
@@ -41,7 +41,7 @@ public abstract class AbstractDomainService implements DomainHandler {
     protected final String domainKey;
     protected final ContextRouter contextRouter;
     protected final GraphExecutionEngine graphExecutionEngine;
-    protected final IntentRegistry intentRegistry;
+    protected final SubGraphRegistry subGraphRegistry;
     protected final GlobalSessionStateStore globalSessionStore;
     protected final long activeAgentExpireMinutes;
     protected final int l1DomainPairs;
@@ -64,7 +64,7 @@ public abstract class AbstractDomainService implements DomainHandler {
     protected AbstractDomainService(String domainName, String logTag, String domainKey,
                                     ContextRouter contextRouter,
                                     GraphExecutionEngine graphExecutionEngine,
-                                    IntentRegistry intentRegistry,
+                                    SubGraphRegistry subGraphRegistry,
                                     GlobalSessionStateStore globalSessionStore,
                                     long activeAgentExpireMinutes,
                                     int l1DomainPairs) {
@@ -73,7 +73,7 @@ public abstract class AbstractDomainService implements DomainHandler {
         this.domainKey = domainKey;
         this.contextRouter = contextRouter;
         this.graphExecutionEngine = graphExecutionEngine;
-        this.intentRegistry = intentRegistry;
+        this.subGraphRegistry = subGraphRegistry;
         this.globalSessionStore = globalSessionStore;
         this.activeAgentExpireMinutes = activeAgentExpireMinutes;
         this.l1DomainPairs = l1DomainPairs;
@@ -168,7 +168,7 @@ public abstract class AbstractDomainService implements DomainHandler {
     protected Flux<StreamChunk> resumeActiveAgent(String sessionId, String userInput, ActiveAgentInfo active) {
         log.info("[{}] FOLLOW with own activeAgent: intent={}, threadId={}", logTag, active.getIntent(), active.getThreadId());
 
-        var graph = intentRegistry.getGraph(active.getIntent());
+        var graph = subGraphRegistry.getGraph(active.getIntent());
         if (graph == null) {
             return Flux.just(StreamChunk.error("Graph not found for intent: " + active.getIntent()));
         }
@@ -181,7 +181,7 @@ public abstract class AbstractDomainService implements DomainHandler {
     }
 
     protected Flux<StreamChunk> executeNewAgent(String sessionId, String intent, String rewrittenInput) {
-        var graph = intentRegistry.getGraph(intent);
+        var graph = subGraphRegistry.getGraph(intent);
         if (graph == null) {
             return Flux.just(StreamChunk.error("Graph not found for intent: " + intent));
         }

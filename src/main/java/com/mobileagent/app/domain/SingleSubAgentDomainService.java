@@ -5,9 +5,9 @@ import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.memory.model.ActiveAgentInfo;
 import com.mobileagent.app.memory.GlobalSessionContext;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
-import com.mobileagent.app.router.ContextRouter;
-import com.mobileagent.app.router.IntentRegistry;
-import com.mobileagent.app.router.IntentRouter;
+import com.mobileagent.app.router.subgraph.ContextRouter;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
+import com.mobileagent.app.router.subgraph.SubGraphRouter;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -25,29 +25,29 @@ import java.util.Objects;
 @Slf4j
 public class SingleSubAgentDomainService extends AbstractDomainService {
 
-    private static final String DEFAULT_ROUTING_TEMPLATE = "prompts/l1-routing-simple.st";
+    private static final String DEFAULT_ROUTING_TEMPLATE = "prompts/l1-context-simple.st";
     private static final String DEFAULT_INTENTION_TEMPLATE = "prompts/l1-intention.st";
 
     private final String intent;
     private final String intentDescription;
-    private final String routingTemplatePath;
-    private final String intentionTemplatePath;
-    private final IntentRouter intentRouter;
+    private final String contextRoutingTemplatePath;
+    private final String intentRoutingTemplatePath;
+    private final SubGraphRouter subGraphRouter;
 
     // ==================== 构造(Builder) ====================
 
     private SingleSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.domainKey,
-                builder.contextRouter, builder.graphExecutionEngine, builder.intentRegistry,
+                builder.contextRouter, builder.graphExecutionEngine, builder.subGraphRegistry,
                 builder.globalSessionStore, builder.activeAgentExpireMinutes,
                 builder.l1DomainPairs);
         this.intent = builder.intent;
         this.intentDescription = builder.intentDescription;
-        this.routingTemplatePath = builder.routingTemplatePath != null
-                ? builder.routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
-        this.intentionTemplatePath = builder.intentionTemplatePath != null
-                ? builder.intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
-        this.intentRouter = builder.intentRouter;
+        this.contextRoutingTemplatePath = builder.contextRoutingTemplatePath != null
+                ? builder.contextRoutingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
+        this.intentRoutingTemplatePath = builder.intentRoutingTemplatePath != null
+                ? builder.intentRoutingTemplatePath : DEFAULT_INTENTION_TEMPLATE;
+        this.subGraphRouter = builder.subGraphRouter;
     }
 
     public static Builder builder() {
@@ -60,12 +60,12 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         private String domainKey;
         private String intent;
         private String intentDescription;
-        private String routingTemplatePath;
-        private String intentionTemplatePath;
+        private String contextRoutingTemplatePath;
+        private String intentRoutingTemplatePath;
         private ContextRouter contextRouter;
-        private IntentRouter intentRouter;
+        private SubGraphRouter subGraphRouter;
         private GraphExecutionEngine graphExecutionEngine;
-        private IntentRegistry intentRegistry;
+        private SubGraphRegistry subGraphRegistry;
         private GlobalSessionStateStore globalSessionStore;
         private long activeAgentExpireMinutes = 20;
         private int l1DomainPairs = 6;
@@ -75,12 +75,12 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         public Builder domainKey(String domainKey) { this.domainKey = domainKey; return this; }
         public Builder intent(String intent) { this.intent = intent; return this; }
         public Builder intentDescription(String intentDescription) { this.intentDescription = intentDescription; return this; }
-        public Builder routingTemplatePath(String routingTemplatePath) { this.routingTemplatePath = routingTemplatePath; return this; }
-        public Builder intentionTemplatePath(String intentionTemplatePath) { this.intentionTemplatePath = intentionTemplatePath; return this; }
+        public Builder contextRoutingTemplatePath(String contextRoutingTemplatePath) { this.contextRoutingTemplatePath = contextRoutingTemplatePath; return this; }
+        public Builder intentRoutingTemplatePath(String intentRoutingTemplatePath) { this.intentRoutingTemplatePath = intentRoutingTemplatePath; return this; }
         public Builder contextRouter(ContextRouter contextRouter) { this.contextRouter = contextRouter; return this; }
-        public Builder intentRouter(IntentRouter intentRouter) { this.intentRouter = intentRouter; return this; }
+        public Builder subGraphRouter(SubGraphRouter subGraphRouter) { this.subGraphRouter = subGraphRouter; return this; }
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
-        public Builder intentRegistry(IntentRegistry intentRegistry) { this.intentRegistry = intentRegistry; return this; }
+        public Builder subGraphRegistry(SubGraphRegistry subGraphRegistry) { this.subGraphRegistry = subGraphRegistry; return this; }
         public Builder globalSessionStore(GlobalSessionStateStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
         public Builder activeAgentExpireMinutes(long activeAgentExpireMinutes) { this.activeAgentExpireMinutes = activeAgentExpireMinutes; return this; }
         public Builder l1DomainPairs(int l1DomainPairs) { this.l1DomainPairs = l1DomainPairs; return this; }
@@ -91,12 +91,12 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(domainKey, "domainKey is required");
             Objects.requireNonNull(intent, "intent is required");
             Objects.requireNonNull(contextRouter, "contextRouter is required");
-            Objects.requireNonNull(intentRouter, "intentRouter is required");
+            Objects.requireNonNull(subGraphRouter, "subGraphRouter is required");
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
-            Objects.requireNonNull(intentRegistry, "intentRegistry is required");
+            Objects.requireNonNull(subGraphRegistry, "subGraphRegistry is required");
             Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
-            String resolvedRoutingPath = routingTemplatePath != null ? routingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
-            String resolvedIntentionPath = intentionTemplatePath != null ? intentionTemplatePath : DEFAULT_INTENTION_TEMPLATE;
+            String resolvedRoutingPath = contextRoutingTemplatePath != null ? contextRoutingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
+            String resolvedIntentionPath = intentRoutingTemplatePath != null ? intentRoutingTemplatePath : DEFAULT_INTENTION_TEMPLATE;
             TemplateUtils.warmUp(resolvedRoutingPath);
             TemplateUtils.warmUp(resolvedIntentionPath);
             return new SingleSubAgentDomainService(this);
@@ -136,7 +136,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
 
         RoutingResult phase1 = contextRouter.route(sessionId, userInput,
                 currentAgent, pendingAgents,
-                routingTemplatePath, domainName, chatHistory,
+                contextRoutingTemplatePath, domainName, chatHistory,
                 ownActive.getLastQuestion());
         log.info("[{}] Phase1 (activeAgent+lastQuestion): routeType={}, confidence={}",
                 logTag, phase1.getRouteType(), phase1.getConfidence());
@@ -145,7 +145,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             return resumeActiveAgent(sessionId, userInput, ownActive);
         }
 
-        RoutingResult phase2 = runIntentRouter(sessionId, userInput, phase1,
+        RoutingResult phase2 = runSubGraphRouter(sessionId, userInput, phase1,
                 currentAgent, pendingAgents);
 
         if (!phase2.isBelongsToDomain()) {
@@ -166,11 +166,11 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
 
         RoutingResult phase1 = contextRouter.route(sessionId, userInput,
                 currentAgent, pendingAgents,
-                routingTemplatePath, domainName, chatHistory, null);
+                contextRoutingTemplatePath, domainName, chatHistory, null);
         log.info("[{}] Phase1 (no activeAgent): routeType={}, confidence={}",
                 logTag, phase1.getRouteType(), phase1.getConfidence());
 
-        RoutingResult phase2 = runIntentRouter(sessionId, userInput, phase1,
+        RoutingResult phase2 = runSubGraphRouter(sessionId, userInput, phase1,
                 currentAgent, pendingAgents);
 
         if (!phase2.isBelongsToDomain()) {
@@ -182,17 +182,17 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         return handleSwitchNew(sessionId, rewrittenInput);
     }
 
-    private RoutingResult runIntentRouter(String sessionId, String userInput, RoutingResult phase1,
+    private RoutingResult runSubGraphRouter(String sessionId, String userInput, RoutingResult phase1,
                                            String currentAgent, String pendingAgents) {
         String sessionState = "Phase1路由: " + phase1.getRouteType();
         String disambigContext = "无";
-        String domainIntentScopeList = intentRegistry.getDomainIntentScopeDescription(List.of(intent));
+        String domainIntentScopeList = subGraphRegistry.getDomainIntentScopeDescription(List.of(intent));
         String chatHistory = getFormattedChatHistory(sessionId);
 
-        RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, phase1,
+        RoutingResult phase2 = subGraphRouter.rewriteAndIdentify(sessionId, userInput, phase1,
                 currentAgent, pendingAgents, sessionState, disambigContext,
-                intentionTemplatePath, chatHistory, domainIntentScopeList);
-        log.info("[{}] Phase2 IntentRouter: intent={}, belongsToDomain={}, rewritten=[{}]",
+                intentRoutingTemplatePath, chatHistory, domainIntentScopeList);
+        log.info("[{}] Phase2 SubGraphRouter: intent={}, belongsToDomain={}, rewritten=[{}]",
                 logTag, phase2.getIntentName(), phase2.isBelongsToDomain(), phase2.getRewrittenInput());
         return phase2;
     }
