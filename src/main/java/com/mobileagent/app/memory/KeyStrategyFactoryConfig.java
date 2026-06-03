@@ -15,7 +15,7 @@ import java.util.Map;
 /**
  * KeyStrategyFactory 配置 — 将 factory 作为独立 Bean
  *
- * GlobalSessionStateStore 和 RedisGlobalSessionStorage 都可以注入此 Bean。
+ * GlobalSessionStateStore 和 RedisGlobalSessionRepository 都可以注入此 Bean。
  * DomainStateAware 实现来自 DomainServiceConfig 中的轻量注册 Bean (零依赖), 无循环依赖。
  */
 @Slf4j

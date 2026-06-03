@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  * 核心设计:
  * - GlobalSessionContext 包含一个全局 OverAllState, 类似"全局版"的 L2 子图 OverAllState
  * - KeyStrategyFactory 由 KeyStrategyFactoryConfig 创建, 包含公共 key + 每个 DomainStateAware 域的 key
- * - 存储后端通过 GlobalSessionStorage 接口抽象, 支持 InMemory / Redis 切换
+ * - 存储后端通过 GlobalSessionRepository 接口抽象, 支持 InMemory / Redis 切换
  *
  * 数据流:
  * - 注入(进): L1 executeGraph/resumeGraph 前 → 从 GlobalSessionContext.data() 读取 → 注入 L2 input/extStateData
@@ -23,20 +23,20 @@ import org.springframework.stereotype.Component;
 public class GlobalSessionStateStore {
 
     private final KeyStrategyFactory keyStrategyFactory;
-    private final GlobalSessionStorage storage;
+    private final GlobalSessionRepository repository;
 
     public GlobalSessionStateStore(@Qualifier("globalKeyStrategyFactory") KeyStrategyFactory keyStrategyFactory,
-                                    GlobalSessionStorage storage) {
+                                    GlobalSessionRepository repository) {
         this.keyStrategyFactory = keyStrategyFactory;
-        this.storage = storage;
-        log.info("[GlobalSessionStateStore] Initialized, storage={}", storage.getClass().getSimpleName());
+        this.repository = repository;
+        log.info("[GlobalSessionStateStore] Initialized, repository={}", repository.getClass().getSimpleName());
     }
 
     // ==================== GlobalSessionContext 管理 ====================
 
     /** 获取或创建 session 的 GlobalSessionContext */
     public GlobalSessionContext getOrCreate(String sessionId) {
-        GlobalSessionContext ctx = storage.get(sessionId);
+        GlobalSessionContext ctx = repository.get(sessionId);
         if (ctx != null) return ctx;
         return createAndStore(sessionId);
     }
@@ -48,7 +48,7 @@ public class GlobalSessionStateStore {
         state.registerKeyAndStrategy(keyStrategyFactory.apply());
 
         GlobalSessionContext ctx = new GlobalSessionContext(sessionId, state);
-        storage.put(sessionId, ctx);
+        repository.put(sessionId, ctx);
         return ctx;
     }
 
@@ -56,7 +56,7 @@ public class GlobalSessionStateStore {
 
     /** 清理 session (BankController.clearSession 时调用) */
     public void clearSession(String sessionId) {
-        storage.remove(sessionId);
+        repository.remove(sessionId);
         log.info("[GlobalSessionStateStore] Cleared session: sessionId={}", sessionId);
     }
 }

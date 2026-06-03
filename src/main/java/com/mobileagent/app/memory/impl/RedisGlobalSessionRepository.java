@@ -3,7 +3,7 @@ package com.mobileagent.app.memory.impl;
 import com.alibaba.cloud.ai.graph.KeyStrategyFactory;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.mobileagent.app.memory.GlobalSessionContext;
-import com.mobileagent.app.memory.GlobalSessionStorage;
+import com.mobileagent.app.memory.GlobalSessionRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -13,10 +13,10 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Redis 实现的 GlobalSessionStorage — 将 state.data() 序列化到 Redis
+ * Redis 实现的 GlobalSessionRepository — 将 state.data() 序列化到 Redis
  */
 @Slf4j
-public class RedisGlobalSessionStorage implements GlobalSessionStorage {
+public class RedisGlobalSessionRepository implements GlobalSessionRepository {
 
     private static final String KEY_PREFIX = "global-session:";
     private static final long DEFAULT_TTL_HOURS = 24;
@@ -25,9 +25,9 @@ public class RedisGlobalSessionStorage implements GlobalSessionStorage {
     private final ObjectMapper objectMapper;
     private final KeyStrategyFactory keyStrategyFactory;
 
-    public RedisGlobalSessionStorage(StringRedisTemplate redisTemplate,
-                                      ObjectMapper objectMapper,
-                                      KeyStrategyFactory keyStrategyFactory) {
+    public RedisGlobalSessionRepository(StringRedisTemplate redisTemplate,
+                                         ObjectMapper objectMapper,
+                                         KeyStrategyFactory keyStrategyFactory) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.keyStrategyFactory = keyStrategyFactory;
@@ -44,7 +44,7 @@ public class RedisGlobalSessionStorage implements GlobalSessionStorage {
             state.updateState(data);
             return new GlobalSessionContext(sessionId, state);
         } catch (Exception e) {
-            log.warn("[RedisGlobalSessionStorage] Failed to deserialize: sessionId={}", sessionId, e);
+            log.warn("[RedisGlobalSessionRepository] Failed to deserialize: sessionId={}", sessionId, e);
             return null;
         }
     }
@@ -55,7 +55,7 @@ public class RedisGlobalSessionStorage implements GlobalSessionStorage {
             String json = objectMapper.writeValueAsString(ctx.data());
             redisTemplate.opsForValue().set(KEY_PREFIX + sessionId, json, DEFAULT_TTL_HOURS, TimeUnit.HOURS);
         } catch (Exception e) {
-            log.warn("[RedisGlobalSessionStorage] Failed to serialize: sessionId={}", sessionId, e);
+            log.warn("[RedisGlobalSessionRepository] Failed to serialize: sessionId={}", sessionId, e);
         }
     }
 

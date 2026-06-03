@@ -7,7 +7,7 @@ package com.mobileagent.app.memory;
  * - in-memory: ConcurrentHashMap (默认, 单实例开发)
  * - redis:     StringRedisTemplate (多实例/持久化)
  */
-public interface GlobalSessionStorage {
+public interface GlobalSessionRepository {
 
     /** 获取 GlobalSessionContext, 不存在返回 null */
     GlobalSessionContext get(String sessionId);
