@@ -13,7 +13,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Redis实现的CheckpointSaver — 将Graph的Checkpoint存储到Redis
+ * Redis实现的SubGraphCheckpointSaver — 将L2子图的Checkpoint存储到Redis
  *
  * Redis key: checkpoint:{threadId} → List<Checkpoint JSON>
  * 每个threadId下维护一个有序的checkpoint列表(最新在尾部)
@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit;
  * 与MemorySaver接口完全一致，改 storage.type=redis 即可切换
  */
 @Slf4j
-public class RedisCheckpointSaver implements BaseCheckpointSaver {
+public class RedisSubGraphCheckpointSaver implements BaseCheckpointSaver {
 
     private static final String KEY_PREFIX = "checkpoint:";
     private static final long DEFAULT_TTL_HOURS = 24;
@@ -29,7 +29,7 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
-    public RedisCheckpointSaver(StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
+    public RedisSubGraphCheckpointSaver(StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
     }
@@ -47,7 +47,7 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
             try {
                 checkpoints.add(deserializeCheckpoint(json));
             } catch (JsonProcessingException e) {
-                log.warn("[RedisCheckpoint] Failed to deserialize checkpoint for threadId={}, skipping", threadId, e);
+                log.warn("[RedisSubGraphCheckpoint] Failed to deserialize checkpoint for threadId={}, skipping", threadId, e);
             }
         }
         return checkpoints;
@@ -63,7 +63,7 @@ public class RedisCheckpointSaver implements BaseCheckpointSaver {
         try {
             return Optional.of(deserializeCheckpoint(json));
         } catch (JsonProcessingException e) {
-            log.warn("[RedisCheckpoint] Failed to deserialize checkpoint for threadId={}", threadId, e);
+            log.warn("[RedisSubGraphCheckpoint] Failed to deserialize checkpoint for threadId={}", threadId, e);
             return Optional.empty();
         }
     }
