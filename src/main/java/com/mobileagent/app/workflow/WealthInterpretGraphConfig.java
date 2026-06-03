@@ -6,6 +6,7 @@ import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.memory.SubGraphCheckpointSaverConfig;
 import com.mobileagent.app.mock.MockBankingService;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -46,15 +47,18 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
 
     private final MockBankingService mockBankingService;
     private final ChatClient wealthInterpretChatClient;
+    private final SubGraphRegistry subGraphRegistry;
 
     public WealthInterpretGraphConfig(@Qualifier("paramExtractChatModel") ChatModel chatModel,
                                          SubGraphCheckpointSaverConfig.SubGraphCheckpointSaverFactory subGraphCheckpointSaverFactory,
                                          MockBankingService mockBankingService,
                                          @Qualifier("wealthInterpretChatClient") ChatClient wealthInterpretChatClient,
-                                         ObjectMapper objectMapper) {
+                                         ObjectMapper objectMapper,
+                                         SubGraphRegistry subGraphRegistry) {
         super(chatModel, objectMapper, subGraphCheckpointSaverFactory);
         this.mockBankingService = mockBankingService;
         this.wealthInterpretChatClient = wealthInterpretChatClient;
+        this.subGraphRegistry = subGraphRegistry;
     }
 
     @Override
@@ -103,6 +107,7 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
         addAskConditionalEdges(graph, "askProductName");
 
         CompiledGraph compiled = graph.compile(createInterruptCompileConfig());
+        subGraphRegistry.bindGraph("WEALTH_INTERPRET", compiled, true);  // 流式Graph
 
         log.info("[WealthInterpretGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;

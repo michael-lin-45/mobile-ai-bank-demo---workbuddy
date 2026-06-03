@@ -1,7 +1,7 @@
-package com.mobileagent.app.router;
+package com.mobileagent.app.router.registry;
 
 import com.alibaba.cloud.ai.graph.CompiledGraph;
-import com.mobileagent.app.config.RoutingProperties;
+import com.mobileagent.app.data.SubGraphProperties;
 import jakarta.annotation.PostConstruct;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -10,23 +10,27 @@ import org.springframework.stereotype.Component;
 import java.util.*;
 
 /**
- * 意图注册表 - 管理所有已注册意图及其对应的Graph Bean
+ * 子图注册中心 - 管理所有L2子Graph的意图元数据与Graph Bean绑定
  *
- * 支持意图组(IntentGroup): 共享前缀关键词的意图集合,用于消歧。
- * 当Phase2无法区分组内意图时,进入消歧模式追问用户。
+ * 核心职责:
+ * - 从 application.yml 加载意图配置 (名称/描述/scope/intentType)
+ * - 为每个意图绑定 CompiledGraph Bean (由各 GraphConfig 自注册)
+ * - 支持意图组(IntentGroup): 共享前缀关键词的意图集合,用于消歧
+ * - 提供模糊匹配与关键词推断
  *
- * 意图和意图组从 application.yml 的 routing.intents / routing.intent-groups 读取，
- * 新增意图只需改yml，无需改Java代码。
+ * 注册流程:
+ * 1. @PostConstruct: 从 routing.intents / routing.intent-groups 读取元数据
+ * 2. 各 GraphConfig 的 @Bean 方法中调用 bindGraph() 完成Graph绑定 (自注册模式)
  */
 @Slf4j
 @Component
-public class IntentRegistry {
+public class SubGraphRegistry {
 
-    private final RoutingProperties routingProperties;
+    private final SubGraphProperties routingProperties;
     private final Map<String, IntentConfig> registry = new LinkedHashMap<>();
     private final Map<String, IntentGroup> groups = new LinkedHashMap<>();
 
-    public IntentRegistry(RoutingProperties routingProperties) {
+    public SubGraphRegistry(SubGraphProperties routingProperties) {
         this.routingProperties = routingProperties;
     }
 
@@ -38,7 +42,7 @@ public class IntentRegistry {
         private final boolean writeOp;
         /** 意图类型: OPERATION / QUERY / CONSULTATION */
         private final String intentType;
-        /** 本意图的处理范围描述，供IntentRouter判断belongs_to_domain */
+        /** 本意图的处理范围描述，供SubGraphRouter判断belongs_to_domain */
         private final String scope;
         private CompiledGraph graph;
         /** 是否为流式Graph — 由GES读取，L0/L1不关心 */
@@ -69,20 +73,20 @@ public class IntentRegistry {
 
     @PostConstruct
     public void init() {
-        // 从 application.yml 读取意图配置并注册(不含graph,graph在Bean初始化后由AppInitConfig注入)
-        for (RoutingProperties.IntentConfigProps props : routingProperties.getIntents()) {
+        // 从 application.yml 读取意图配置并注册(不含graph,graph由各GraphConfig自注册)
+        for (SubGraphProperties.SubGraphConfigProps props : routingProperties.getIntents()) {
             register(props.getName(), props.getDescription(), props.getParamSchema(),
                     props.isWriteOp(), props.getIntentType(), props.getScope());
         }
 
         // 从 application.yml 读取意图组配置并注册
-        for (RoutingProperties.IntentGroupProps groupProps : routingProperties.getIntentGroups()) {
+        for (SubGraphProperties.SubGraphGroupProps groupProps : routingProperties.getIntentGroups()) {
             registerGroup(groupProps.getGroupId(), groupProps.getDisplayName(),
                     groupProps.getIntentNames(), groupProps.getDisambiguationQuestion());
         }
 
-        log.info("IntentRegistry initialized with {} intents: {}", registry.size(), registry.keySet());
-        log.info("IntentGroups: {}", groups.keySet());
+        log.info("[SubGraphRegistry] Initialized with {} intents: {}", registry.size(), registry.keySet());
+        log.info("[SubGraphRegistry] IntentGroups: {}", groups.keySet());
     }
 
     public void register(String name, String description, String paramSchema, boolean writeOp,
@@ -90,14 +94,15 @@ public class IntentRegistry {
         registry.put(name, new IntentConfig(name, description, paramSchema, writeOp, intentType, scope));
     }
 
+    /** 绑定Graph到意图 — 由各GraphConfig在@Bean方法中自注册调用 */
     public void bindGraph(String intentName, CompiledGraph graph, boolean streamable) {
         IntentConfig config = registry.get(intentName);
         if (config != null) {
             config.setGraph(graph);
             config.setStreamable(streamable);
-            log.info("Bound graph to intent: {} (streamable={})", intentName, streamable);
+            log.info("[SubGraphRegistry] Bound graph to intent: {} (streamable={})", intentName, streamable);
         } else {
-            log.warn("Attempted to bind graph to unknown intent: {}", intentName);
+            log.warn("[SubGraphRegistry] Attempted to bind graph to unknown intent: {}", intentName);
         }
     }
 
@@ -134,7 +139,7 @@ public class IntentRegistry {
     public void registerGroup(String groupId, String displayName,
                               List<String> intentNames, String disambiguationQuestion) {
         groups.put(groupId, new IntentGroup(groupId, displayName, intentNames, disambiguationQuestion));
-        log.debug("Registered intent group: {} -> {}", groupId, intentNames);
+        log.debug("[SubGraphRegistry] Registered intent group: {} -> {}", groupId, intentNames);
     }
 
     /** 查找意图所属的组(如果该意图属于某个歧义组) */
@@ -161,7 +166,7 @@ public class IntentRegistry {
     // --- 意图模糊匹配 ---
 
     /**
-     * 生成本领域意图的范围描述(含intentType+scope)，供IntentRouter做belongs_to_domain判断
+     * 生成本领域意图的范围描述(含intentType+scope)，供SubGraphRouter做belongs_to_domain判断
      *
      * 格式: - TRANSFER [OPERATION]: 资金转账操作，将钱转给他人或理财产品等
      */

@@ -6,6 +6,7 @@ import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.memory.SubGraphCheckpointSaverConfig;
 import com.mobileagent.app.mock.MockBankingService;
+import com.mobileagent.app.router.registry.SubGraphRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -37,13 +38,16 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
 public class WealthConsultGraphConfig extends AbstractGraphConfig {
 
     private final MockBankingService mockBankingService;
+    private final SubGraphRegistry subGraphRegistry;
 
     public WealthConsultGraphConfig(@Qualifier("paramExtractChatModel") ChatModel chatModel,
                                       SubGraphCheckpointSaverConfig.SubGraphCheckpointSaverFactory subGraphCheckpointSaverFactory,
                                       MockBankingService mockBankingService,
-                                      ObjectMapper objectMapper) {
+                                      ObjectMapper objectMapper,
+                                      SubGraphRegistry subGraphRegistry) {
         super(chatModel, objectMapper, subGraphCheckpointSaverFactory);
         this.mockBankingService = mockBankingService;
+        this.subGraphRegistry = subGraphRegistry;
     }
 
     @Override
@@ -96,6 +100,7 @@ public class WealthConsultGraphConfig extends AbstractGraphConfig {
         addAskConditionalEdges(graph, "askFocusArea");
 
         CompiledGraph compiled = graph.compile(createInterruptCompileConfig());
+        subGraphRegistry.bindGraph("WEALTH_CONSULT", compiled);
 
         log.info("[WealthConsultGraph] Compiled successfully with interruptBefore + ask→END + cancel routing");
         return compiled;
