@@ -67,14 +67,14 @@ ContextRouter
   └── 读: ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs)
            (chatMemory 由 L1 传入 = 域级 ChatMemory)
 
-IntentRouter
+SubGraphRouter
   └── 读: ChatHistoryUtils.formatAndTruncate(chatMemory, sessionId, judgmentMaxPairs)
            (chatMemory 由 L1 传入 = 域级 ChatMemory)
 
 AbstractDomainService
   ├── 写: chatMemory.add(domainSessionId(sessionId), new UserMessage(userInput))
   ├── 写: AssistantWriter(chatMemory, domainSessionId(sessionId)).onChunk(chunk)
-  └── 传: contextRouter.route(..., chatMemory) / intentRouter.rewriteAndIdentify(..., chatMemory)
+  └── 传: contextRouter.route(..., chatMemory) / subGraphRouter.rewriteAndIdentify(..., chatMemory)
 
 ChatService
   ├── 读: ReadOnlyMemoryAdvisor(chatMemory) — advisor 自动注入历史
@@ -87,8 +87,8 @@ ChatService
 BankController.formatAndTruncate(chatMemory) → globalChatHistory 字符串
   → dispatchToDomain(domainResult, ..., globalChatHistory)
     → DomainHandler.handle(sessionId, userInput, globalChatHistory)
-      → SingleSubAgent: 传给 IntentRouter.rewriteAndIdentify(..., globalChatHistory)
-      → MultiSubAgent:   传给 IntentResolver.resolve(..., globalChatHistory)
+      → SingleSubAgent: 传给 SubGraphRouter.rewriteAndIdentify(..., globalChatHistory)
+      → MultiSubAgent:   传给 SubGraphResolver.resolve(..., globalChatHistory)
       → ChatService:     拼到 user prompt 中
 ```
 
@@ -97,8 +97,8 @@ BankController.formatAndTruncate(chatMemory) → globalChatHistory 字符串
 | 模板 | chat_history 来源 | global_chat_history |
 |------|-------------------|---------------------|
 | `l0-domain.st` | 全局 ChatMemory | 无 |
-| `l1-routing.st` | 域级 ChatMemory | 无 |
-| `l1-routing-simple.st` | 域级 ChatMemory | 无 |
+| `l1-context.st` | 域级 ChatMemory | 无 |
+| `l1-context-simple.st` | 域级 ChatMemory | 无 |
 | `l1-intention.st` | 域级 ChatMemory | globalChatHistory 参数 |
 
 ---
@@ -138,7 +138,7 @@ public record ConversationRecord(
 |--------|-----------|---------|
 | L0 DomainRouter | `formatAll(maxPairs)` | `[转账] 用户: 我要转账\n[转账] 助手: 请问转给谁？\n[理财] 用户: 推荐理财` |
 | L1 ContextRouter | `formatByDomain(domain, maxPairs, contextPairs)` | `[本域] 用户: 我要转账\n[本域] 助手: 转给谁？\n[他域] 用户: 查账单\n[他域] 助手: 哪个时段？` |
-| L1 IntentRouter | `formatByDomain(domain, maxPairs, contextPairs)` | 同上（但 contextPairs 可不同） |
+| L1 SubGraphRouter | `formatByDomain(domain, maxPairs, contextPairs)` | 同上（但 contextPairs 可不同） |
 | ChatService | `formatAll(maxPairs)` | 同 L0 |
 
 ### 3.4 域标签降噪策略
@@ -254,7 +254,7 @@ public class ConversationHistory {
     }
 
     /**
-     * 格式化指定域历史 + 上下文 - 供 L1 ContextRouter/IntentRouter 使用
+     * 格式化指定域历史 + 上下文 - 供 L1 ContextRouter/SubGraphRouter 使用
      *
      * 本域消息在前(更相关)，他域消息在后(仅作参考)
      * contextPairs: 额外包含的他域最近 N 对消息(用于跨域指代消解)
@@ -455,25 +455,25 @@ public static class AssistantAccumulator {
 ### 5.4 SingleSubAgentDomainService
 
 **当前**：
-- `handle(sessionId, userInput, globalChatHistory)` 传给 ContextRouter 和 IntentRouter
+- `handle(sessionId, userInput, globalChatHistory)` 传给 ContextRouter 和 SubGraphRouter
 - ContextRouter.route() 传入 chatMemory
-- IntentRouter.rewriteAndIdentify() 传入 chatMemory + globalChatHistory
+- SubGraphRouter.rewriteAndIdentify() 传入 chatMemory + globalChatHistory
 
 **改造后**：
 - `handle(sessionId, userInput)` — 去掉 globalChatHistory
 - ContextRouter.route() 传入格式化后的历史字符串（从 ConversationHistory 读取）
-- IntentRouter.rewriteAndIdentify() 传入格式化后的历史字符串（不再需要 chatMemory 和 globalChatHistory 两个参数）
+- SubGraphRouter.rewriteAndIdentify() 传入格式化后的历史字符串（不再需要 chatMemory 和 globalChatHistory 两个参数）
 - Builder 去掉 `chatMemory` 字段
 
 ### 5.5 MultiSubAgentDomainService
 
 **当前**：
-- 同 SingleSubAgent，额外有 IntentResolver 调用
+- 同 SingleSubAgent，额外有 SubGraphResolver 调用
 - `handleResume()` 中创建 `AssistantWriter(chatMemory, domainSessionId(sessionId))`
 
 **改造后**：
 - 同 SingleSubAgent 的变更
-- IntentResolver.resolve() 不再传入 chatMemory 和 globalChatHistory
+- SubGraphResolver.resolve() 不再传入 chatMemory 和 globalChatHistory
 - `handleResume()` 不再创建 AssistantWriter（BankController 统一写）
 - Builder 去掉 `chatMemory` 字段
 
@@ -504,7 +504,7 @@ public static class AssistantAccumulator {
 - 删除 `judgmentMaxPairs` 字段（格式化由调用方负责）
 - 删除 `ChatHistoryUtils` 依赖
 
-### 5.8 IntentRouter
+### 5.8 SubGraphRouter
 
 **当前**：
 - `rewriteAndIdentify(sessionId, userInput, phase1Result, currentAgent, pendingAgents, sessionState, disambigContext, templatePath, chatMemory, globalChatHistory, domainIntentScopeList)`
@@ -517,16 +517,16 @@ public static class AssistantAccumulator {
 - 删除 `judgmentMaxPairs` 字段
 - 模板替换 `{global_chat_history}` 逻辑删除，只替换 `{chat_history}`
 
-### 5.9 IntentResolver
+### 5.9 SubGraphResolver
 
 **当前**：
-- `resolve(sessionId, userInput, phase1Result, chatMemory, inDisambiguation, disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentionTemplatePath, globalChatHistory, domainIntentScopeList)`
-- 透传 chatMemory 和 globalChatHistory 给 IntentRouter
+- `resolve(sessionId, userInput, phase1Result, chatMemory, inDisambiguation, disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentRoutingTemplatePath, globalChatHistory, domainIntentScopeList)`
+- 透传 chatMemory 和 globalChatHistory 给 SubGraphRouter
 
 **改造后**：
-- `resolve(sessionId, userInput, phase1Result, chatHistory, inDisambiguation, disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentionTemplatePath, domainIntentScopeList)`
+- `resolve(sessionId, userInput, phase1Result, chatHistory, inDisambiguation, disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentRoutingTemplatePath, domainIntentScopeList)`
 - 参数变更：`ChatMemory chatMemory` + `String globalChatHistory` → `String chatHistory`
-- 透传 chatHistory 给 IntentRouter
+- 透传 chatHistory 给 SubGraphRouter
 
 ### 5.10 DomainServiceConfig
 
@@ -587,7 +587,7 @@ RoutingResult route(String sessionId, String userInput,
                     String chatHistory, String lastQuestion);
 ```
 
-### 6.3 IntentRouter.rewriteAndIdentify()
+### 6.3 SubGraphRouter.rewriteAndIdentify()
 
 ```java
 // 改造前
@@ -610,7 +610,7 @@ RoutingResult rewriteAndIdentify(String sessionId, String userInput,
                                   String domainIntentScopeList);
 ```
 
-### 6.4 IntentResolver.resolve()
+### 6.4 SubGraphResolver.resolve()
 
 ```java
 // 改造前
@@ -618,7 +618,7 @@ RoutingResolution resolve(String sessionId, String userInput, RoutingResult phas
                            ChatMemory chatMemory,
                            boolean inDisambiguation, String disambiguationGroupId,
                            boolean hasSuspendedAgents, Map<String, ?> suspendedAgents,
-                           String intentionTemplatePath,
+                           String intentRoutingTemplatePath,
                            String globalChatHistory,
                            String domainIntentScopeList);
 
@@ -627,7 +627,7 @@ RoutingResolution resolve(String sessionId, String userInput, RoutingResult phas
                            String chatHistory,
                            boolean inDisambiguation, String disambiguationGroupId,
                            boolean hasSuspendedAgents, Map<String, ?> suspendedAgents,
-                           String intentionTemplatePath,
+                           String intentRoutingTemplatePath,
                            String domainIntentScopeList);
 ```
 
@@ -637,12 +637,12 @@ RoutingResolution resolve(String sessionId, String userInput, RoutingResult phas
 ```java
 // Phase1: ContextRouter
 RoutingResult phase1 = contextRouter.route(domainSessionId(sessionId), userInput,
-        currentAgent, pendingAgents, routingTemplatePath, domainName, chatMemory, lastQuestion);
+        currentAgent, pendingAgents, contextRoutingTemplatePath, domainName, chatMemory, lastQuestion);
 
-// Phase2: IntentRouter
-RoutingResult phase2 = intentRouter.rewriteAndIdentify(domainSessionId(sessionId), userInput, phase1,
+// Phase2: SubGraphRouter
+RoutingResult phase2 = subGraphRouter.rewriteAndIdentify(domainSessionId(sessionId), userInput, phase1,
         currentAgent, pendingAgents, sessionState, disambigContext,
-        intentionTemplatePath, chatMemory, globalChatHistory, domainIntentScopeList);
+        intentRoutingTemplatePath, chatMemory, globalChatHistory, domainIntentScopeList);
 ```
 
 **改造后**：
@@ -653,15 +653,15 @@ String chatHistory = history.formatByDomain(domainName, domainPairs, contextPair
 
 // Phase1: ContextRouter
 RoutingResult phase1 = contextRouter.route(sessionId, userInput,
-        currentAgent, pendingAgents, routingTemplatePath, domainName, chatHistory, lastQuestion);
+        currentAgent, pendingAgents, contextRoutingTemplatePath, domainName, chatHistory, lastQuestion);
 
-// Phase2: IntentRouter (复用同一个 chatHistory 字符串)
-RoutingResult phase2 = intentRouter.rewriteAndIdentify(sessionId, userInput, phase1,
+// Phase2: SubGraphRouter (复用同一个 chatHistory 字符串)
+RoutingResult phase2 = subGraphRouter.rewriteAndIdentify(sessionId, userInput, phase1,
         currentAgent, pendingAgents, sessionState, disambigContext,
-        intentionTemplatePath, chatHistory, domainIntentScopeList);
+        intentRoutingTemplatePath, chatHistory, domainIntentScopeList);
 ```
 
-**注意**：sessionId 不再需要 `domainSessionId()` 前缀，因为不再有 ChatMemory 的隔离需求。ContextRouter 和 IntentRouter 内部也不再需要 sessionId 读取 ChatMemory（历史字符串由调用方传入）。
+**注意**：sessionId 不再需要 `domainSessionId()` 前缀，因为不再有 ChatMemory 的隔离需求。ContextRouter 和 SubGraphRouter 内部也不再需要 sessionId 读取 ChatMemory（历史字符串由调用方传入）。
 
 ---
 
@@ -712,7 +712,7 @@ routing:
 |------|--------|--------|
 | DomainRouter | `@Value("${routing.history.global-context-max-pairs:10}")` | `@Value("${routing.history.l0-max-pairs:10}")` |
 | ContextRouter | `@Value("${routing.history.judgment-max-pairs:5}")` | 删除（不再自行格式化） |
-| IntentRouter | `@Value("${routing.history.judgment-max-pairs:5}")` | 删除（不再自行格式化） |
+| SubGraphRouter | `@Value("${routing.history.judgment-max-pairs:5}")` | 删除（不再自行格式化） |
 | AbstractDomainService | 无 | `@Value("${routing.history.l1-domain-pairs:6}")` + `@Value("${routing.history.l1-context-pairs:3}")` |
 | ChatService | 无 | `@Value("${routing.history.chat-max-pairs:10}")` |
 | BankController | `@Value("${routing.history.global-context-max-pairs:10}")` | 删除（不再格式化 globalChatHistory） |
@@ -743,7 +743,7 @@ routing:
 
 其余逻辑不变（最高优先级原则、话术类型分析、判断规则等均保留）。
 
-### 8.3 l1-routing.st (Multi域用)
+### 8.3 l1-context.st (Multi域用)
 
 **变更**：
 - `{chat_history}` 内容分本域和他域两个区段
@@ -762,9 +762,9 @@ routing:
 
 其余路由判断逻辑不变。
 
-### 8.4 l1-routing-simple.st (Single域用)
+### 8.4 l1-context-simple.st (Single域用)
 
-**变更**：同 l1-routing.st，增加对域标签分区的说明。
+**变更**：同 l1-context.st，增加对域标签分区的说明。
 
 **关键修改**：
 ```
@@ -810,7 +810,7 @@ routing:
 
 **变更**：在 `===对话历史===` 后增加分区说明。其余不变。
 
-### 8.8 IntentRouter 默认 prompt (getDefaultRewritePrompt)
+### 8.8 SubGraphRouter 默认 prompt (getDefaultRewritePrompt)
 
 **变更**：合并两个历史区段为一个 `{chat_history}`，增加分区说明。其余不变。
 
@@ -855,15 +855,15 @@ routing:
 | MultiSubAgentDomainService.Builder | `chatMemory` 字段 | 不再注入 |
 | ContextRouter | `judgmentMaxPairs` 字段 | 不再自行格式化 |
 | ContextRouter | `formatChatHistory()` 方法 | 历史由调用方传入 |
-| IntentRouter | `judgmentMaxPairs` 字段 | 不再自行格式化 |
-| IntentRouter | `formatChatHistory()` 方法 | 历史由调用方传入 |
+| SubGraphRouter | `judgmentMaxPairs` 字段 | 不再自行格式化 |
+| SubGraphRouter | `formatChatHistory()` 方法 | 历史由调用方传入 |
 | DomainServiceConfig | 所有 `@Qualifier("xxxChatMemory")` 参数 | 不再注入 |
 
 ### 9.5 删除的依赖
 
 | 依赖 | 组件 | 说明 |
 |------|------|------|
-| `ChatMemory` | BankController, DomainRouter, AbstractDomainService, ContextRouter, IntentRouter, IntentResolver, ChatService | 全部移除 |
+| `ChatMemory` | BankController, DomainRouter, AbstractDomainService, ContextRouter, SubGraphRouter, SubGraphResolver, ChatService | 全部移除 |
 | `ChatMemoryRepository` | ModelConfig, ChatMemoryConfig | 全部移除 |
 | `UserMessage` / `AssistantMessage` | BankController, AbstractDomainService | Spring AI message 类型不再用于历史记录 |
 
@@ -1071,8 +1071,8 @@ globalSessionStore.clearSession(sessionId);  // ConversationHistory 在此清理
 ### Wave 4: L1 改造
 
 9. **ContextRouter** — 参数 ChatMemory → String chatHistory，删除 formatChatHistory()
-10. **IntentRouter** — 参数 ChatMemory + globalChatHistory → String chatHistory，删除 formatChatHistory()，删除 {global_chat_history} 替换
-11. **IntentResolver** — 参数 ChatMemory + globalChatHistory → String chatHistory
+10. **SubGraphRouter** — 参数 ChatMemory + globalChatHistory → String chatHistory，删除 formatChatHistory()，删除 {global_chat_history} 替换
+11. **SubGraphResolver** — 参数 ChatMemory + globalChatHistory → String chatHistory
 12. **AbstractDomainService** — 删除 chatMemory/domainSessionId/addUserMessage/AssistantWriter，handle() 去掉 globalChatHistory，新增从 ConversationHistory 格式化历史的方法
 13. **SingleSubAgentDomainService** — 适配新接口，Builder 去掉 chatMemory
 14. **MultiSubAgentDomainService** — 适配新接口，Builder 去掉 chatMemory，handleResume 去掉 AssistantWriter
@@ -1096,12 +1096,12 @@ globalSessionStore.clearSession(sessionId);  // ConversationHistory 在此清理
 ### Wave 7: 提示词优化
 
 25. **l0-domain.st** — 增加域标签说明
-26. **l1-routing.st** — 增加分区说明
-27. **l1-routing-simple.st** — 增加分区说明
+26. **l1-context.st** — 增加分区说明
+27. **l1-context-simple.st** — 增加分区说明
 28. **l1-intention.st** — 合并两个历史区段，增加分区说明
 29. **DomainRouter.getDefaultDomainPrompt()** — 增加域标签说明
 30. **ContextRouter.getDefaultRoutingPrompt()** — 增加分区说明
-31. **IntentRouter.getDefaultRewritePrompt()** — 合并历史区段，增加分区说明
+31. **SubGraphRouter.getDefaultRewritePrompt()** — 合并历史区段，增加分区说明
 
 ### Wave 8: 注释和代码清理
 
@@ -1153,9 +1153,9 @@ mvn compile -f D:\mobile-agent\mobile-ai-demo-enhanced-fix\pom.xml
 ```
 ChatMemoryRepository (InMemory / Redis)
   ├── chatMemory (全局)        ← BankController 写/读, DomainRouter 读, ChatService advisor 读
-  ├── transferChatMemory       ← TransferService 写/读, ContextRouter 读, IntentRouter 读
-  ├── billChatMemory           ← BillService 写/读, ContextRouter 读, IntentRouter 读
-  └── wealthChatMemory         ← WealthService 写/读, ContextRouter 读, IntentRouter 读
+  ├── transferChatMemory       ← TransferService 写/读, ContextRouter 读, SubGraphRouter 读
+  ├── billChatMemory           ← BillService 写/读, ContextRouter 读, SubGraphRouter 读
+  └── wealthChatMemory         ← WealthService 写/读, ContextRouter 读, SubGraphRouter 读
 ```
 
 ## 附录 B: ConversationHistory 依赖图 (改造后)
@@ -1184,7 +1184,7 @@ BankController.buildChatPipeline()
   │    2b. conversationHistory.updateLastUserDomain("TRANSFER")
   │    2c. dispatchToDomain(TRANSFER)
   │        → TransferService.handle(sessionId, "我要转账")
-  │           → ContextRouter / IntentRouter (从 conversationHistory 读取)
+  │           → ContextRouter / SubGraphRouter (从 conversationHistory 读取)
   │           → executeNewAgent() → L2 Graph
   │    2d. AssistantAccumulator.onChunk(terminalChunk)
   │        → conversationHistory.addAssistantMessage("请问转给谁？", "TRANSFER")

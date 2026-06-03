@@ -296,7 +296,7 @@ GlobalSessionStateStore → KeyStrategyFactory → List<DomainStateAware>
 
 ### 5.3 KeyStrategyFactory 独立为 Bean
 
-`KeyStrategyFactoryConfig` 作为独立的 `@Bean` 产出手动注册的 `KeyStrategyFactory`，由 `GlobalSessionStateStore` 和 `RedisGlobalSessionStorage` 共同注入使用。
+`KeyStrategyFactoryConfig` 作为独立的 `@Bean` 产出手动注册的 `KeyStrategyFactory`，由 `GlobalSessionStateStore` 和 `RedisGlobalSessionRepository` 共同注入使用。
 
 ### 5.4 新增域流程
 
@@ -792,10 +792,10 @@ protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
 | `memory/SubAgentState.java` | L2 子图数据快照 |
 | `memory/DomainStateAware.java` | 动态注册接口 (轻量级Bean, 与DomainService解耦) |
 | `memory/KeyStrategyFactoryConfig.java` | KeyStrategyFactory 独立 @Bean |
-| `memory/GlobalSessionStorage.java` | 存储后端抽象接口 |
-| `memory/GlobalSessionStorageConfig.java` | 存储后端配置 (InMemory/Redis切换) |
-| `memory/impl/InMemoryGlobalSessionStorage.java` | InMemory 存储实现 |
-| `memory/impl/RedisGlobalSessionStorage.java` | Redis 存储实现 |
+| `memory/GlobalSessionRepository.java` | 存储后端抽象接口 |
+| `memory/GlobalSessionRepositoryConfig.java` | 存储后端配置 (InMemory/Redis切换) |
+| `memory/impl/InMemoryGlobalSessionRepository.java` | InMemory 存储实现 |
+| `memory/impl/RedisGlobalSessionRepository.java` | Redis 存储实现 |
 | `memory/impl/RedisSubGraphCheckpointSaver.java` | Redis SubGraphCheckpointSaver (移至impl/) |
 
 ### 8.2 删除文件
@@ -834,7 +834,7 @@ protected Map<String, Object> extractSubAgentDataSnapshot(OverAllState state) {
  * - in-memory: ConcurrentHashMap (默认, 单实例开发)
  * - redis:     StringRedisTemplate (多实例/持久化)
  */
-public interface GlobalSessionStorage {
+public interface GlobalSessionRepository {
 
     /** 获取 GlobalSessionContext, 不存在返回 null */
     GlobalSessionContext get(String sessionId);
@@ -850,7 +850,7 @@ public interface GlobalSessionStorage {
 #### 8.4.2 InMemory 实现（默认）
 
 ```java
-public class InMemoryGlobalSessionStorage implements GlobalSessionStorage {
+public class InMemoryGlobalSessionRepository implements GlobalSessionRepository {
     private final Map<String, GlobalSessionContext> store = new ConcurrentHashMap<>();
 
     @Override
@@ -873,7 +873,7 @@ public class InMemoryGlobalSessionStorage implements GlobalSessionStorage {
 #### 8.4.3 Redis 实现
 
 ```java
-public class RedisGlobalSessionStorage implements GlobalSessionStorage {
+public class RedisGlobalSessionRepository implements GlobalSessionRepository {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final KeyStrategyFactory keyStrategyFactory;
@@ -894,7 +894,7 @@ public class RedisGlobalSessionStorage implements GlobalSessionStorage {
             state.updateState(data);
             return new GlobalSessionContext(sessionId, state);
         } catch (Exception e) {
-            log.warn("[RedisGlobalSessionStorage] Failed to deserialize: sessionId={}", sessionId, e);
+            log.warn("[RedisGlobalSessionRepository] Failed to deserialize: sessionId={}", sessionId, e);
             return null;
         }
     }
@@ -906,7 +906,7 @@ public class RedisGlobalSessionStorage implements GlobalSessionStorage {
             String json = objectMapper.writeValueAsString(ctx.data());
             redisTemplate.opsForValue().set(KEY_PREFIX + sessionId, json, DEFAULT_TTL_HOURS, TimeUnit.HOURS);
         } catch (Exception e) {
-            log.warn("[RedisGlobalSessionStorage] Failed to serialize: sessionId={}", sessionId, e);
+            log.warn("[RedisGlobalSessionRepository] Failed to serialize: sessionId={}", sessionId, e);
         }
     }
 
@@ -925,18 +925,18 @@ public class RedisGlobalSessionStorage implements GlobalSessionStorage {
 public class GlobalSessionStateStore {
 
     private final KeyStrategyFactory keyStrategyFactory;
-    private final GlobalSessionStorage storage;
+    private final GlobalSessionRepository repository;
 
     public GlobalSessionStateStore(
             SubGraphCheckpointSaverFactory subGraphCheckpointSaverFactory,
             List<DomainStateAware> domainStateProviders,
-            @Autowired(required = false) GlobalSessionStorage storage) {
+            @Autowired(required = false) GlobalSessionRepository repository) {
         this.keyStrategyFactory = createKeyStrategyFactory(domainStateProviders);
-        this.storage = storage;  // Spring 注入, 由 GlobalSessionStorageConfig 根据 storage.type 决定实现
+        this.repository = repository;  // Spring 注入, 由 GlobalSessionRepositoryConfig 根据 storage.type 决定实现
     }
 
     public GlobalSessionContext getOrCreate(String sessionId) {
-        GlobalSessionContext ctx = storage.get(sessionId);
+        GlobalSessionContext ctx = repository.get(sessionId);
         if (ctx != null) return ctx;
         return createAndStore(sessionId);
     }
@@ -945,12 +945,12 @@ public class GlobalSessionStateStore {
         OverAllState state = new OverAllState();
         state.registerKeyAndStrategy(keyStrategyFactory.apply());
         GlobalSessionContext ctx = new GlobalSessionContext(sessionId, state);
-        storage.put(sessionId, ctx);
+        repository.put(sessionId, ctx);
         return ctx;
     }
 
     public void clearSession(String sessionId) {
-        storage.remove(sessionId);
+        repository.remove(sessionId);
     }
 }
 ```
@@ -959,20 +959,20 @@ public class GlobalSessionStateStore {
 
 ```java
 @Configuration
-public class GlobalSessionStorageConfig {
+public class GlobalSessionRepositoryConfig {
 
-    @Bean("inMemoryGlobalSessionStorage")
+    @Bean("inMemoryGlobalSessionRepository")
     @ConditionalOnProperty(name = "storage.type", havingValue = "in-memory", matchIfMissing = true)
-    public GlobalSessionStorage inMemoryStorage() {
-        return new InMemoryGlobalSessionStorage();
+    public GlobalSessionRepository inMemoryStorage() {
+        return new InMemoryGlobalSessionRepository();
     }
 
-    @Bean("redisGlobalSessionStorage")
+    @Bean("redisGlobalSessionRepository")
     @ConditionalOnProperty(name = "storage.type", havingValue = "redis")
-    public GlobalSessionStorage redisStorage(StringRedisTemplate redisTemplate,
+    public GlobalSessionRepository redisStorage(StringRedisTemplate redisTemplate,
                                                ObjectMapper objectMapper,
                                                KeyStrategyFactory keyStrategyFactory) {
-        return new RedisGlobalSessionStorage(redisTemplate, objectMapper, keyStrategyFactory);
+        return new RedisGlobalSessionRepository(redisTemplate, objectMapper, keyStrategyFactory);
     }
 }
 ```
@@ -983,11 +983,11 @@ public class GlobalSessionStorageConfig {
 |---|---|---|
 | 存储方式 | 直接持有 GlobalSessionContext 引用 | 序列化 `state.data()` → Redis JSON |
 | 读取 | 直接返回引用，零开销 | 反序列化 → 重建 OverAllState → 返回新实例 |
-| 写入 | 直接修改 OverAllState 内存对象 | 修改后需调 `storage.put()` 同步到 Redis |
+| 写入 | 直接修改 OverAllState 内存对象 | 修改后需调 `repository.put()` 同步到 Redis |
 | 数据一致性 | 天然一致（同一对象） | 需显式同步（修改 state 后 put 回 Redis） |
 | 多实例 | ✗（单实例） | ✓（多实例共享） |
 
-**Redis 模式的同步问题**：InMemory 模式下 `ctx.addUserMessage()` 直接修改 OverAllState，不需要额外同步。Redis 模式下，修改 OverAllState 后需要调 `storage.put()` 将最新数据写回 Redis。
+**Redis 模式的同步问题**：InMemory 模式下 `ctx.addUserMessage()` 直接修改 OverAllState，不需要额外同步。Redis 模式下，修改 OverAllState 后需要调 `repository.put()` 将最新数据写回 Redis。
 
 解决方案：在 `GlobalSessionContext` 的写操作方法中增加自动同步：
 
@@ -995,7 +995,7 @@ public class GlobalSessionStorageConfig {
 // GlobalSessionContext 中
 public void addUserMessage(String content) {
     state.updateState(Map.of("messages", "用户: " + content));
-    storage.put(sessionId, this);  // Redis 模式自动同步, InMemory 模式为空操作
+    repository.put(sessionId, this);  // Redis 模式自动同步, InMemory 模式为空操作
 }
 ```
 
@@ -1008,7 +1008,7 @@ SubGraphCheckpointSaverConfig 不受影响，继续为 L2 子图提供 InMemory/
 | 文件 | 改动 |
 |---|---|
 | `memory/GlobalSessionContext.java` | 从 `execution/` 迁移到 `memory/`; 删除 `checkpointSaver` 字段; 增加 `getDomainState()` / `updateDomainState()` helper; 增加 `LastDomainEntry` record |
-| `memory/GlobalSessionStateStore.java` | 重命名自 GlobalSessionStore; 接收 `KeyStrategyFactory` + `GlobalSessionStorage`; 删除 `checkpointSaverFactory` |
+| `memory/GlobalSessionStateStore.java` | 重命名自 GlobalSessionStore; 接收 `KeyStrategyFactory` + `GlobalSessionRepository`; 删除 `checkpointSaverFactory` |
 | `domain/AbstractDomainService.java` | 删除 `SessionStateStore<ActiveAgentInfo>` 依赖; 改用 `ctx.updateDomainState()` |
 | `domain/SingleSubAgentDomainService.java` | 删除 `SessionStateStore` 依赖; **不实现** `DomainStateAware` (解耦) |
 | `domain/MultiSubAgentDomainService.java` | 删除 3 个 `SessionStateStore` 依赖; **不实现** `DomainStateAware` (解耦) |
@@ -1067,7 +1067,7 @@ private KeyStrategyFactory createKeyStrategyFactory(List<DomainStateAware> provi
 
 3. **SuspendedInfo 的定时清理**：已采用惰性清理方案 — 在 `hasOwnSuspendedAgents()` / `getOwnSuspendedAgent()` 读取时检查 `isExpired()` 并移除，无需 `@Scheduled` 定时任务。
 
-4. **Redis 持久化**：InMemory + Redis 两种模式均已实现。`DomainState` 及其嵌套对象已实现 `Serializable`，字段使用 `long` 替代 `Instant`，兼容性已保证。Redis 模式下修改 OverAllState 后需调 `storage.put()` 同步（见 8.4.6）。
+4. **Redis 持久化**：InMemory + Redis 两种模式均已实现。`DomainState` 及其嵌套对象已实现 `Serializable`，字段使用 `long` 替代 `Instant`，兼容性已保证。Redis 模式下修改 OverAllState 后需调 `repository.put()` 同步（见 8.4.6）。
 
 5. **L2 回写接入**：接口已预留（`extractSubAgentDataSnapshot()` + `DomainState.subAgents` + `SubAgentState`），L2 开发团队可自行决定回写时机和策略，无需修改框架层代码。
 
@@ -1080,7 +1080,7 @@ private KeyStrategyFactory createKeyStrategyFactory(List<DomainStateAware> provi
 | 数据模型 (DomainState/SubAgentState等) | ✅ 完成 | `memory/model/` 下 5 个类 |
 | DomainStateAware 解耦 | ✅ 完成 | 轻量级匿名 Bean, 打破循环依赖 |
 | GlobalSessionContext 迁移 | ✅ 完成 | 从 `execution/` 迁到 `memory/`, 增加 helper |
-| GlobalSessionStorage 抽象 | ✅ 完成 | InMemory/Redis 双实现 + Config 切换 |
+| GlobalSessionRepository 抽象 | ✅ 完成 | InMemory/Redis 双实现 + Config 切换 |
 | KeyStrategyFactory 独立 | ✅ 完成 | `KeyStrategyFactoryConfig` @Bean |
 | DomainService 重写 | ✅ 完成 | Abstract/Single/Multi 全部改用 ctx.updateDomainState() |
 | SessionStateStore 删除 | ✅ 完成 | 6 个文件已删除 |

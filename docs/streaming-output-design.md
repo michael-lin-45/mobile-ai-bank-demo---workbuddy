@@ -21,7 +21,7 @@
 ### 1.2 GES闭环原则
 
 ```
-L2注册声明: IntentRegistry.bindGraph(intent, graph, streamable)
+L2注册声明: SubGraphRegistry.bindGraph(intent, graph, streamable)
               ↓ 只有GES读这个标记
 GES内部:
   ├── streamable=false → stream().blockLast() → Flux.just(终结chunk)  ← 已验证路径
@@ -141,7 +141,7 @@ billChatMemory     — L1 BillService用，只记录账单领域消息
 │                                                                 │
 │ Flux<StreamChunk> executeGraph(graph, intent, input, tid)       │
 │                                                                 │
-│ 从IntentRegistry读取isStreamable(intent):                       │
+│ 从SubGraphRegistry读取isStreamable(intent):                       │
 │   false → stream().blockLast() → checkGraphResult()             │
 │           → Flux.just(StreamChunk.complete(intent, content))    │
 │   true  → graphResponseStream() → map/filter                   │
@@ -158,7 +158,7 @@ billChatMemory     — L1 BillService用，只记录账单领域消息
 │ 流式节点:   AgentNode/ChatModel.stream()                        │
 │           → 框架自动发射StreamingOutput chunk                   │
 │                                                                 │
-│ 注册: IntentRegistry.bindGraph(intent, graph, streamable)       │
+│ 注册: SubGraphRegistry.bindGraph(intent, graph, streamable)       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -623,7 +623,7 @@ StreamChunk.toWorkflowOutput() → WorkflowOutput
 
 ### 5.1 L2注册 + GES闭环
 
-#### 5.1.1 IntentRegistry 扩展
+#### 5.1.1 SubGraphRegistry 扩展
 
 ```java
 // IntentConfig — 增加streamable标记
@@ -666,11 +666,11 @@ public boolean isStreamable(String intentName) {
 #### 5.1.2 注册示例
 
 ```java
-// AppInitConfig 或等价的Bean初始化类
-intentRegistry.bindGraph("TRANSFER", transferGraph);                        // 默认false
-intentRegistry.bindGraph("BILL_QUERY", billQueryGraph);                     // 默认false
-intentRegistry.bindGraph("WEALTH_INTERPRET", wealthInterpretGraph, true);   // 显式true
-intentRegistry.bindGraph("WEALTH_CONSULT", wealthConsultGraph, true);       // 显式true
+// GraphConfig 的 @Bean 方法中等价的初始化类
+subGraphRegistry.bindGraph("TRANSFER", transferGraph);                        // 默认false
+subGraphRegistry.bindGraph("BILL_QUERY", billQueryGraph);                     // 默认false
+subGraphRegistry.bindGraph("WEALTH_INTERPRET", wealthInterpretGraph, true);   // 显式true
+subGraphRegistry.bindGraph("WEALTH_CONSULT", wealthConsultGraph, true);       // 显式true
 ```
 
 ---
@@ -684,10 +684,10 @@ intentRegistry.bindGraph("WEALTH_CONSULT", wealthConsultGraph, true);       // �
 @Service
 public class GraphExecutionEngine {
 
-    private final IntentRegistry intentRegistry;
+    private final SubGraphRegistry subGraphRegistry;
 
-    public GraphExecutionEngine(IntentRegistry intentRegistry) {
-        this.intentRegistry = intentRegistry;
+    public GraphExecutionEngine(SubGraphRegistry subGraphRegistry) {
+        this.subGraphRegistry = subGraphRegistry;
     }
 
     /**
@@ -695,7 +695,7 @@ public class GraphExecutionEngine {
      */
     public Flux<StreamChunk> executeGraph(CompiledGraph graph, String intent,
                                            Map<String, Object> input, String threadId) {
-        boolean streamable = intentRegistry.isStreamable(intent);
+        boolean streamable = subGraphRegistry.isStreamable(intent);
         if (!streamable) {
             return executeBlocking(graph, intent, input, threadId);
         }
@@ -708,7 +708,7 @@ public class GraphExecutionEngine {
     public Flux<StreamChunk> resumeGraph(CompiledGraph graph, String intent,
                                           String userInput, String threadId,
                                           Map<String, Object> globalStateData) {
-        boolean streamable = intentRegistry.isStreamable(intent);
+        boolean streamable = subGraphRegistry.isStreamable(intent);
         if (!streamable) {
             return resumeBlocking(graph, intent, userInput, threadId, globalStateData);
         }
@@ -917,7 +917,7 @@ public interface DomainHandler {
 
 ```java
 protected Flux<StreamChunk> executeNewAgent(String sessionId, String intent, String rewrittenInput) {
-    var graph = intentRegistry.getGraph(intent);
+    var graph = subGraphRegistry.getGraph(intent);
     if (graph == null) {
         return Flux.just(StreamChunk.error("Graph not found for intent: " + intent));
     }
@@ -942,7 +942,7 @@ protected Flux<StreamChunk> executeNewAgent(String sessionId, String intent, Str
 protected Flux<StreamChunk> resumeActiveAgent(String sessionId, String userInput, ActiveAgentInfo active) {
     log.info("[{}] FOLLOW: intent={}, threadId={}", logTag, active.getIntent(), active.getThreadId());
 
-    var graph = intentRegistry.getGraph(active.getIntent());
+    var graph = subGraphRegistry.getGraph(active.getIntent());
     if (graph == null) {
         return Flux.just(StreamChunk.error("Graph not found for intent: " + active.getIntent()));
     }
@@ -1349,7 +1349,7 @@ COMPLETE {content:"转账成功"} → 累积器空 → chatMemory.add("转账成
 
 1. 新增 `StreamChunk` + `ChunkType`
 2. 新增 `StreamingChatMemoryWriter`（含 `AssistantWriter` 内部类）
-3. `IntentRegistry` 增加 `streamable` 字段和 `isStreamable()`
+3. `SubGraphRegistry` 增加 `streamable` 字段和 `isStreamable()`
 4. GES: `executeGraph`/`resumeGraph` 返回 `Flux<StreamChunk>`
    - 非流式路径: 包装现有逻辑
    - 流式路径: 骨架（暂无Graph声明streamable=true）
@@ -1396,8 +1396,8 @@ COMPLETE {content:"转账成功"} → 累积器空 → chatMemory.add("转账成
 
 | 文件 | 变更 |
 |------|------|
-| `GraphExecutionEngine.java` | 返回 `Flux<StreamChunk>`，新增流式路径，依赖 `IntentRegistry` |
-| `IntentRegistry.java` | `IntentConfig` 增加 `streamable`，新增 `isStreamable()` |
+| `GraphExecutionEngine.java` | 返回 `Flux<StreamChunk>`，新增流式路径，依赖 `SubGraphRegistry` |
+| `SubGraphRegistry.java` | `IntentConfig` 增加 `streamable`，新增 `isStreamable()` |
 | `DomainHandler.java` | `handle()` 返回 `Flux<StreamChunk>` |
 | `AbstractDomainService.java` | `executeNewAgent`/`resumeActiveAgent` 返回Flux + `AssistantWriter` + `handleActiveAgentState` |
 | `SingleSubAgentDomainService.java` | `handle()` 及内部方法返回Flux，移除 `recordSystemReply` |

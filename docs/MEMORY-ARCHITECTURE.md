@@ -34,7 +34,7 @@
 | **生命周期** | 跨 L2 执行存活，session 级，默认 24h TTL | 单次 L2 图执行，resume 时读取，完成后释放 |
 | **数据结构** | OverAllState (带 KeyStrategy) | 框架定义的 Checkpoint (含 state map) |
 | **隔离粒度** | sessionId | threadId (每次新执行生成唯一 ID) |
-| **存储后端** | GlobalSessionStorage (InMemory / Redis) | BaseCheckpointSaver (MemorySaver / Redis) |
+| **存储后端** | GlobalSessionRepository (InMemory / Redis) | BaseCheckpointSaver (MemorySaver / Redis) |
 
 ### 架构图
 
@@ -47,7 +47,7 @@
 │                         │          │                                  │
 │  ┌──────────────────────┼──────────┼──────────────────────────┐     │
 │  │ Session 级存储        │          │                          │     │
-│  │  GlobalSessionStorage │          │                          │     │
+│  │  GlobalSessionRepository │          │                          │     │
 │  │  ┌────────────────────┴──┐  ┌───┴─────────────────────┐   │     │
 │  │  │ InMemoryGlobalSession │  │ RedisGlobalSession      │   │     │
 │  │  │ Storage               │  │ Storage                 │   │     │
@@ -139,7 +139,7 @@
 | 存储位置 | GlobalSessionContext.state | L0 的 OverAllState 内 | 子图独立的 OverAllState |
 | 绑定键 | sessionId | sessionId + stateKey | threadId |
 | 生命周期 | Session 级, 24h TTL | Session 级, 随 L0 | Thread 级, 图完成后释放 |
-| 存储后端 | GlobalSessionStorage | 同 L0 | BaseCheckpointSaver |
+| 存储后端 | GlobalSessionRepository | 同 L0 | BaseCheckpointSaver |
 | KeyStrategy | 注册在 KeyStrategyFactory | ReplaceStrategy | 注册在子图 KeyStrategyFactory |
 | 主要消费者 | BankController, DomainRouter | DomainService | L2 Graph 节点 |
 
@@ -561,23 +561,23 @@ public record LastDomainEntry(String domain, long expireAt) implements Serializa
 
 ## 6. 存储抽象与切换机制
 
-### 6.1 为什么引入 GlobalSessionStorage
+### 6.1 为什么引入 GlobalSessionRepository
 
 **重构前的问题：** `GlobalSessionStateStore` 内部直接 `new ConcurrentHashMap<>()` 存储所有 GlobalSessionContext，与 InMemory 实现强绑定。如果要在生产环境多实例部署，所有 session 状态需要共享到 Redis，但代码里没有替换点。
 
-**引入 GlobalSessionStorage 的目标：** 将"用什么存"这个决策从 `GlobalSessionStateStore` 中抽离出来，让上层只依赖接口，底层实现通过配置切换：
+**引入 GlobalSessionRepository 的目标：** 将"用什么存"这个决策从 `GlobalSessionStateStore` 中抽离出来，让上层只依赖接口，底层实现通过配置切换：
 
 ```
 重构前:                              重构后:
 GlobalSessionStateStore              GlobalSessionStateStore
   │                                    │
-  └── new ConcurrentHashMap<>()        └── GlobalSessionStorage (接口)
+  └── new ConcurrentHashMap<>()        └── GlobalSessionRepository (接口)
   (写死 InMemory)                            ├── InMemory (ConcurrentHashMap)
                                              └── Redis (StringRedisTemplate)
 ```
 
 **设计约束：**
-- `GlobalSessionStorage` 是纯粹的后端接口，只有 3 个方法：`get` / `put` / `remove`
+- `GlobalSessionRepository` 是纯粹的后端接口，只有 3 个方法：`get` / `put` / `remove`
 - `GlobalSessionStateStore` 不关心底层是 InMemory 还是 Redis，只通过接口操作
 - 切换实现只需改配置，`GlobalSessionStateStore` 的代码完全不动
 
@@ -595,34 +595,34 @@ storage:
 
 | 存储组 | 接口 | in-memory 实现 | redis 实现 | 受影响的组件 |
 |--------|------|---------------|-----------|-------------|
-| Session 级 | `GlobalSessionStorage` | `InMemoryGlobalSessionStorage` | `RedisGlobalSessionStorage` | GlobalSessionStateStore → 所有 L0/L1 状态 |
+| Session 级 | `GlobalSessionRepository` | `InMemoryGlobalSessionRepository` | `RedisGlobalSessionRepository` | GlobalSessionStateStore → 所有 L0/L1 状态 |
 | Thread 级 | `BaseCheckpointSaver` | `MemorySaver` | `RedisSubGraphCheckpointSaver` | 4 个 L2 子图的 interruptBefore |
 
 ### 6.3 完整调用链：从配置到存储实例
 
-#### 路径1: Session 级存储 (GlobalSessionStorage)
+#### 路径1: Session 级存储 (GlobalSessionRepository)
 
 ```
 application.yml
   │  storage.type=in-memory
   │
   ▼
-GlobalSessionStorageConfig (@Configuration)
+GlobalSessionRepositoryConfig (@Configuration)
   │  @ConditionalOnProperty(name="storage.type", havingValue="in-memory", matchIfMissing=true)
   │  → 激活 inMemoryStorage() 方法
   │
   ▼
-new InMemoryGlobalSessionStorage()
+new InMemoryGlobalSessionRepository()
   │  内部: ConcurrentHashMap<String, GlobalSessionContext>
   │
   ▼
 Spring 容器注入到 GlobalSessionStateStore
-  │  GlobalSessionStateStore(GlobalSessionStorage storage)
+  │  GlobalSessionStateStore(GlobalSessionRepository repository)
   │
   ▼
 所有 GlobalSessionStateStore.getOrCreate() 调用
-  └── storage.get(sessionId)   ← 实际走 InMemory / Redis
-  └── storage.put(sessionId, ctx)
+└── repository.get(sessionId)   ← 实际走 InMemory / Redis
+└── repository.put(sessionId, ctx)
 ```
 
 ```
@@ -630,12 +630,12 @@ application.yml
   │  storage.type=redis
   │
   ▼
-GlobalSessionStorageConfig (@Configuration)
+GlobalSessionRepositoryConfig (@Configuration)
   │  @ConditionalOnProperty(name="storage.type", havingValue="redis")
   │  → 激活 redisStorage() 方法
   │
   ▼
-new RedisGlobalSessionStorage(redisTemplate, objectMapper, keyStrategyFactory)
+new RedisGlobalSessionRepository(redisTemplate, objectMapper, keyStrategyFactory)
   │  内部: StringRedisTemplate → 序列化/反序列化 OverAllState.data()
   │  Redis key: "global-session:{sessionId}"
   │
@@ -690,23 +690,23 @@ SubGraphCheckpointSaverFactory = () -> new RedisSubGraphCheckpointSaver(redisTem
 
 切换机制基于 Spring Boot 的 `@ConditionalOnProperty` 注解实现：
 
-#### 组1: GlobalSessionStorageConfig (Session 级)
+#### 组1: GlobalSessionRepositoryConfig (Session 级)
 
 ```java
 @Configuration
-public class GlobalSessionStorageConfig {
+public class GlobalSessionRepositoryConfig {
 
-    @Bean("inMemoryGlobalSessionStorage")
+    @Bean("inMemoryGlobalSessionRepository")
     @ConditionalOnProperty(name = "storage.type", havingValue = "in-memory", matchIfMissing = true)
-    public GlobalSessionStorage inMemoryStorage() {
-        return new InMemoryGlobalSessionStorage();  // ConcurrentHashMap
+    public GlobalSessionRepository inMemoryStorage() {
+        return new InMemoryGlobalSessionRepository();  // ConcurrentHashMap
     }
 
-    @Bean("redisGlobalSessionStorage")
+    @Bean("redisGlobalSessionRepository")
     @ConditionalOnProperty(name = "storage.type", havingValue = "redis")
-    public GlobalSessionStorage redisStorage(RedisConnectionFactory cf, ObjectMapper om,
+    public GlobalSessionRepository redisStorage(RedisConnectionFactory cf, ObjectMapper om,
                                               @Qualifier("globalKeyStrategyFactory") KeyStrategyFactory ksf) {
-        return new RedisGlobalSessionStorage(redisTemplate, om, ksf);
+        return new RedisGlobalSessionRepository(redisTemplate, om, ksf);
     }
 }
 ```
@@ -741,9 +741,9 @@ public class SubGraphCheckpointSaverConfig {
   │
   ├── Spring 扫描 @Configuration 类
   │
-  ├── GlobalSessionStorageConfig:
+  ├── GlobalSessionRepositoryConfig:
   │   ├── @ConditionalOnProperty(name="storage.type", havingValue="in-memory", matchIfMissing=true)
-  │   │   → 匹配! 创建 InMemoryGlobalSessionStorage Bean
+  │   │   → 匹配! 创建 InMemoryGlobalSessionRepository Bean
   │   └── @ConditionalOnProperty(name="storage.type", havingValue="redis")
   │       → 不匹配, 跳过
   │
@@ -760,10 +760,10 @@ public class SubGraphCheckpointSaverConfig {
 
 ### 6.6 切换矩阵
 
-| `storage.type` | Session 级存储 (GlobalSessionStorage) | Thread 级存储 (SubGraphCheckpointSaver) | 适用场景 |
+| `storage.type` | Session 级存储 (GlobalSessionRepository) | Thread 级存储 (SubGraphCheckpointSaver) | 适用场景 |
 |---|---|---|---|
-| `in-memory` (默认) | `InMemoryGlobalSessionStorage` (ConcurrentHashMap) | `MemorySaver` (框架内置 HashMap) | 单实例开发 |
-| `redis` | `RedisGlobalSessionStorage` (StringRedisTemplate) | `RedisSubGraphCheckpointSaver` (StringRedisTemplate) | 多实例部署 / 持久化 |
+| `in-memory` (默认) | `InMemoryGlobalSessionRepository` (ConcurrentHashMap) | `MemorySaver` (框架内置 HashMap) | 单实例开发 |
+| `redis` | `RedisGlobalSessionRepository` (StringRedisTemplate) | `RedisSubGraphCheckpointSaver` (StringRedisTemplate) | 多实例部署 / 持久化 |
 
 ### 6.7 Redis 模式的依赖条件
 
@@ -783,14 +783,14 @@ storage:
     password: your-password  # 可选
 ```
 
-### 6.8 RedisGlobalSessionStorage 的特殊处理
+### 6.8 RedisGlobalSessionRepository 的特殊处理
 
 Redis 实现比 InMemory 多了一个关键步骤：**反序列化时必须重新注册 KeyStrategy**。
 
 原因：InMemory 模式下 `GlobalSessionContext` 对象一直存活在内存中，`OverAllState` 的 KeyStrategy 只在创建时注册一次。但 Redis 模式下，每次 `get()` 都是从 JSON 反序列化重建对象：
 
 ```java
-// RedisGlobalSessionStorage.get()
+// RedisGlobalSessionRepository.get()
 public GlobalSessionContext get(String sessionId) {
     String json = redisTemplate.opsForValue().get(KEY_PREFIX + sessionId);
     Map<String, Object> data = objectMapper.readValue(json, new TypeReference<>() {});
@@ -804,10 +804,10 @@ public GlobalSessionContext get(String sessionId) {
 }
 ```
 
-如果不注册 KeyStrategy，`state.updateState(data)` 会把 `messages` 当作 ReplaceStrategy（覆盖而非追加），导致对话历史丢失。因此 `RedisGlobalSessionStorage` 的构造函数需要注入 `KeyStrategyFactory`：
+如果不注册 KeyStrategy，`state.updateState(data)` 会把 `messages` 当作 ReplaceStrategy（覆盖而非追加），导致对话历史丢失。因此 `RedisGlobalSessionRepository` 的构造函数需要注入 `KeyStrategyFactory`：
 
 ```java
-public RedisGlobalSessionStorage(StringRedisTemplate redisTemplate,
+public RedisGlobalSessionRepository(StringRedisTemplate redisTemplate,
                                    ObjectMapper objectMapper,
                                    KeyStrategyFactory keyStrategyFactory) {
     this.redisTemplate = redisTemplate;
@@ -816,7 +816,7 @@ public RedisGlobalSessionStorage(StringRedisTemplate redisTemplate,
 }
 ```
 
-`InMemoryGlobalSessionStorage` 不需要 KeyStrategyFactory，因为对象始终在内存中，不需要重建。
+`InMemoryGlobalSessionRepository` 不需要 KeyStrategyFactory，因为对象始终在内存中，不需要重建。
 
 ---
 
@@ -826,7 +826,7 @@ public RedisGlobalSessionStorage(StringRedisTemplate redisTemplate,
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     GlobalSessionStorage (接口)                  │
+│                     GlobalSessionRepository (接口)                  │
 │  + get(sessionId): GlobalSessionContext                         │
 │  + put(sessionId, ctx)                                          │
 │  + remove(sessionId)                                            │
@@ -871,7 +871,7 @@ BankController
   │
   ├── DomainRouter (读 ctx.messages + ctx._lastDomain)
   │
-  └── GlobalSessionStateStore ←── GlobalSessionStorage (接口)
+  └── GlobalSessionStateStore ←── GlobalSessionRepository (接口)
         │                            ├── InMemory / Redis 实现
         │
         ├── getOrCreate(sessionId)
@@ -938,11 +938,11 @@ DomainServiceConfig                KeyStrategyFactoryConfig
 | 文件 | 类/接口 | 作用 | 典型用法 | 关键方法 |
 |------|---------|------|---------|---------|
 | `GlobalSessionContext.java` | `GlobalSessionContext` | 全局会话上下文，封装 OverAllState 的所有读写操作，是对 OverAllState 的业务层门面 | `ctx.addUserMessage("转账")`, `ctx.getDomainState("_transferState")`, `ctx.formatRecentMessages(6)` | `addUserMessage()`, `addAssistantMessage()`, `formatRecentMessages()`, `setLastDomain()`, `getLastDomain()`, `getDomainState()`, `updateDomainState()`, `data()`, `value()`, `clear()` |
-| `GlobalSessionStateStore.java` | `GlobalSessionStateStore` (@Component) | Session 级状态管理器，负责创建/获取/清理 GlobalSessionContext，内部委托 GlobalSessionStorage 做持久化 | `store.getOrCreate(sessionId)` → 获取或创建 ctx, `store.clearSession(sessionId)` → 清理 | `getOrCreate(sessionId)`, `clearSession(sessionId)` |
-| `GlobalSessionStorage.java` | `GlobalSessionStorage` (接口) | 存储后端抽象，将"用什么存"的决策从 GlobalSessionStateStore 中解耦。只定义 get/put/remove 三个方法 | `storage.get(sessionId)`, `storage.put(sessionId, ctx)` | `get(sessionId)`, `put(sessionId, ctx)`, `remove(sessionId)` |
-| `GlobalSessionStorageConfig.java` | `GlobalSessionStorageConfig` (@Configuration) | 根据 `storage.type` 用 `@ConditionalOnProperty` 选择激活哪个 GlobalSessionStorage 实现 | 无直接调用，Spring 容器自动根据配置激活对应 Bean | `inMemoryStorage()` → InMemory, `redisStorage()` → Redis |
+| `GlobalSessionStateStore.java` | `GlobalSessionStateStore` (@Component) | Session 级状态管理器，负责创建/获取/清理 GlobalSessionContext，内部委托 GlobalSessionRepository 做持久化 | `store.getOrCreate(sessionId)` → 获取或创建 ctx, `store.clearSession(sessionId)` → 清理 | `getOrCreate(sessionId)`, `clearSession(sessionId)` |
+| `GlobalSessionRepository.java` | `GlobalSessionRepository` (接口) | 存储后端抽象，将"用什么存"的决策从 GlobalSessionStateStore 中解耦。只定义 get/put/remove 三个方法 | `repository.get(sessionId)`, `repository.put(sessionId, ctx)` | `get(sessionId)`, `put(sessionId, ctx)`, `remove(sessionId)` |
+| `GlobalSessionRepositoryConfig.java` | `GlobalSessionRepositoryConfig` (@Configuration) | 根据 `storage.type` 用 `@ConditionalOnProperty` 选择激活哪个 GlobalSessionRepository 实现 | 无直接调用，Spring 容器自动根据配置激活对应 Bean | `inMemoryRepository()` → InMemory, `redisRepository()` → Redis |
 | `DomainStateAware.java` | `DomainStateAware` (接口) | 域状态注册接口，声明每个域在 OverAllState 中的 key 和策略。用轻量级匿名 Bean 注册，与 DomainService 解耦，避免循环依赖 | `DomainStateAware.of("_transferState", "TRANSFER")` | `getStateKey()`, `getStateStrategy()`, `initialState()`, `static of(stateKey, domain)` |
-| `KeyStrategyFactoryConfig.java` | `KeyStrategyFactoryConfig` (@Configuration) | 全局 KeyStrategyFactory Bean 定义。自动收集所有 DomainStateAware 实现，将公共 key + 域 key 统一注册 | 无直接调用，Spring 注入到 GlobalSessionStateStore 和 RedisGlobalSessionStorage | `globalKeyStrategyFactory(List<DomainStateAware>)` |
+| `KeyStrategyFactoryConfig.java` | `KeyStrategyFactoryConfig` (@Configuration) | 全局 KeyStrategyFactory Bean 定义。自动收集所有 DomainStateAware 实现，将公共 key + 域 key 统一注册 | 无直接调用，Spring 注入到 GlobalSessionStateStore 和 RedisGlobalSessionRepository | `globalKeyStrategyFactory(List<DomainStateAware>)` |
 | `SubGraphCheckpointSaverConfig.java` | `SubGraphCheckpointSaverConfig` (@Configuration) + `SubGraphCheckpointSaverFactory` (内部接口) | L2 子图 Checkpoint 工厂配置。根据 `storage.type` 选择 InMemory/Redis 的工厂 Bean。工厂模式：每次 `create()` 返回独立实例，避免多图共享 checkpoint 覆盖 | `factory.create()` → 每个图编译时创建独立的 saver | `inMemorySubGraphCheckpointSaverFactory()`, `redisSubGraphCheckpointSaverFactory()`, `SubGraphCheckpointSaverFactory.create()` |
 
 ### 8.2 memory/model/ 包 — 数据模型
@@ -959,8 +959,8 @@ DomainServiceConfig                KeyStrategyFactoryConfig
 
 | 文件 | 类 | 作用 | 典型用法 | 底层存储 |
 |------|-----|------|---------|---------|
-| `InMemoryGlobalSessionStorage.java` | `InMemoryGlobalSessionStorage` | GlobalSessionStorage 的 InMemory 实现，基于 ConcurrentHashMap | `storage.get(sessionId)` → 从 Map 取, `storage.put(sessionId, ctx)` → 放入 Map | `ConcurrentHashMap<String, GlobalSessionContext>` |
-| `RedisGlobalSessionStorage.java` | `RedisGlobalSessionStorage` | GlobalSessionStorage 的 Redis 实现，序列化 state.data() 到 Redis | `storage.get(sessionId)` → 从 Redis 读 JSON → 反序列化 → 重建 OverAllState | Redis String: `global-session:{sessionId}` → JSON, TTL 24h |
+| `InMemoryGlobalSessionRepository.java` | `InMemoryGlobalSessionRepository` | GlobalSessionRepository 的 InMemory 实现，基于 ConcurrentHashMap | `repository.get(sessionId)` → 从 Map 取, `repository.put(sessionId, ctx)` → 放入 Map | `ConcurrentHashMap<String, GlobalSessionContext>` |
+| `RedisGlobalSessionRepository.java` | `RedisGlobalSessionRepository` | GlobalSessionRepository 的 Redis 实现，序列化 state.data() 到 Redis | `repository.get(sessionId)` → 从 Redis 读 JSON → 反序列化 → 重建 OverAllState | Redis String: `global-session:{sessionId}` → JSON, TTL 24h |
 | `RedisSubGraphCheckpointSaver.java` | `RedisSubGraphCheckpointSaver` | BaseCheckpointSaver 的 Redis 实现，将 L2 Checkpoint 存储到 Redis List | 框架自动调用: `put()` 中断时保存, `get()` 恢复时读取 | Redis List: `checkpoint:{threadId}` → Checkpoint JSON 数组, TTL 24h |
 
 ### 8.4 config/ 包 — Memory 相关配置
@@ -974,9 +974,9 @@ DomainServiceConfig                KeyStrategyFactoryConfig
 
 ```
 BankController
-  └── GlobalSessionStateStore ──── GlobalSessionStorage (接口)
-  │                                      ├── InMemoryGlobalSessionStorage
-  │                                      └── RedisGlobalSessionStorage
+  └── GlobalSessionStateStore ──── GlobalSessionRepository (接口)
+  │                                      ├── InMemoryGlobalSessionRepository
+  │                                      └── RedisGlobalSessionRepository
   └── DomainRouter (读 ctx.messages + ctx._lastDomain)
 
 AbstractDomainService
@@ -990,9 +990,9 @@ AbstractDomainService
 GlobalSessionStateStore
   ├── KeyStrategyFactory (@Qualifier("globalKeyStrategyFactory"))
   │     └── KeyStrategyFactoryConfig (收集 DomainStateAware 列表)
-  └── GlobalSessionStorage (接口, Spring 注入)
+  └── GlobalSessionRepository (接口, Spring 注入)
 
-RedisGlobalSessionStorage
+RedisGlobalSessionRepository
   ├── StringRedisTemplate (new, 手动设置 ConnectionFactory)
   ├── ObjectMapper (Spring 共享 Bean)
   └── KeyStrategyFactory (@Qualifier("globalKeyStrategyFactory"))
@@ -1234,7 +1234,7 @@ AbstractDomainService.executeNewAgent(sessionId, intent, rewrittenInput)
 ```
 AbstractDomainService.resumeActiveAgent(sessionId, userInput, active)
   │
-  ├── graph = intentRegistry.getGraph(active.getIntent())
+  ├── graph = subGraphRegistry.getGraph(active.getIntent())
   ├── Map<String, Object> globalStateData = ctx.data()
   │
   └── graphExecutionEngine.resumeGraph(graph, intent, userInput, active.getThreadId(), globalStateData)
@@ -1271,7 +1271,7 @@ AbstractDomainService.resumeActiveAgent(sessionId, userInput, active)
   │   └── TransferService.handle()
   │       ├── ctx.formatRecentMessages(6)            ← 读 messages
   │       ├── contextRouter.route() → SWITCH
-  │       ├── intentRouter.rewriteAndIdentify() → TRANSFER
+  │       ├── subGraphRouter.rewriteAndIdentify() → TRANSFER
   │       │
   │       └── executeNewAgent(sessionId, "TRANSFER", "给张三转账500元")
   │           ├── threadId = "sess1-TRANSFER-a3f2b1"
@@ -1311,7 +1311,7 @@ AbstractDomainService.resumeActiveAgent(sessionId, userInput, active)
   │   ├── contextRouter.route() → FOLLOW
   │   │
   │   └── resumeActiveAgent(sessionId, "张三", active)
-  │       ├── graph = intentRegistry.getGraph("TRANSFER")
+  │       ├── graph = subGraphRegistry.getGraph("TRANSFER")
   │       ├── globalStateData = ctx.data()
   │       └── graphExecutionEngine.resumeGraph(graph, "TRANSFER", "张三", threadId, globalStateData)
   │           ├── graph.updateState(config, {_globalStateData, _latestUserInput:"张三"}, null)
@@ -1334,7 +1334,7 @@ AbstractDomainService.resumeActiveAgent(sessionId, userInput, active)
 
 ## 13. Redis 存储细节
 
-### 13.1 GlobalSessionStorage — Redis 实现
+### 13.1 GlobalSessionRepository — Redis 实现
 
 **Redis Key 格式:** `global-session:{sessionId}`
 
@@ -1493,11 +1493,11 @@ storage:
 
 ### 14.4 Bean 激活条件速查
 
-| `storage.type` 值 | 激活的 GlobalSessionStorage Bean | 激活的 SubGraphCheckpointSaverFactory Bean |
+| `storage.type` 值 | 激活的 GlobalSessionRepository Bean | 激活的 SubGraphCheckpointSaverFactory Bean |
 |---|---|---|
-| 未配置 (默认) | `inMemoryGlobalSessionStorage` | `inMemorySubGraphCheckpointSaverFactory` |
-| `in-memory` | `inMemoryGlobalSessionStorage` | `inMemorySubGraphCheckpointSaverFactory` |
-| `redis` | `redisGlobalSessionStorage` | `redisSubGraphCheckpointSaverFactory` |
+| 未配置 (默认) | `inMemoryGlobalSessionRepository` | `inMemorySubGraphCheckpointSaverFactory` |
+| `in-memory` | `inMemoryGlobalSessionRepository` | `inMemorySubGraphCheckpointSaverFactory` |
+| `redis` | `redisGlobalSessionRepository` | `redisSubGraphCheckpointSaverFactory` |
 
 ---
 
@@ -1507,11 +1507,11 @@ storage:
 |------|------|---------|
 | storage.type 配置定义 | `application.yml` | 117-123 |
 | StorageProperties | `config/StorageProperties.java` | 全文 |
-| GlobalSessionStorage 接口 | `memory/GlobalSessionStorage.java` | 全文 |
-| InMemory 实现 | `memory/impl/InMemoryGlobalSessionStorage.java` | 全文 |
-| Redis 实现 (Session) | `memory/impl/RedisGlobalSessionStorage.java` | 全文 |
+| GlobalSessionRepository 接口 | `memory/GlobalSessionRepository.java` | 全文 |
+| InMemory 实现 | `memory/impl/InMemoryGlobalSessionRepository.java` | 全文 |
+| Redis 实现 (Session) | `memory/impl/RedisGlobalSessionRepository.java` | 全文 |
 | Redis 实现 (Checkpoint) | `memory/impl/RedisSubGraphCheckpointSaver.java` | 全文 |
-| Session 级 ConditionalOnProperty | `memory/GlobalSessionStorageConfig.java` | 23-28, 30-40 |
+| Session 级 ConditionalOnProperty | `memory/GlobalSessionRepositoryConfig.java` | 23-28, 30-40 |
 | Checkpoint 级 ConditionalOnProperty | `memory/SubGraphCheckpointSaverConfig.java` | 31-36, 43-51 |
 | DomainStateAware 注册 | `config/DomainServiceConfig.java` | 38-51 |
 | KeyStrategyFactory 构建 | `memory/KeyStrategyFactoryConfig.java` | 26-56 |

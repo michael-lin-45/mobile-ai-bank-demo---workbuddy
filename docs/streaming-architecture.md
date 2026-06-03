@@ -73,7 +73,7 @@
                         ┌──────────────────────────────────┐
                         │        GES (Graph执行引擎)        │
                         │                                  │
-  IntentRegistry ──────→│  isStreamable(intent)?           │
+  SubGraphRegistry ──────→│  isStreamable(intent)?           │
   (L2注册时声明)         │     │                            │
                         │     ├── false → executeBlocking  │ ← 内部差异，外面看不到
                         │     │     stream().blockLast()    │
@@ -249,23 +249,32 @@ StreamChunk.streamingDone("WEALTH_INTERPRET")
 
 ### 5.1 图的注册
 
-L2图在 `AppInitConfig` 中绑定到 `IntentRegistry`：
+L2图在各 GraphConfig 的 `@Bean` 方法中自注册绑定到 `SubGraphRegistry`：
 
 ```java
-// AppInitConfig.java
-@PostConstruct
-public void bindGraphs() {
-    intentRegistry.bindGraph("TRANSFER", transferGraph);           // 非流式
-    intentRegistry.bindGraph("BILL_QUERY", billQueryGraph);        // 非流式
-    intentRegistry.bindGraph("WEALTH_CONSULT", wealthConsultGraph);// 非流式
-    intentRegistry.bindGraph("WEALTH_INTERPRET", wealthInterpretGraph, true);  // ✅ 流式
+// XxxGraphConfig.java 的 @Bean 方法
+@Bean("transferGraph")
+public CompiledGraph transferGraph() throws GraphStateException {
+    // ... 构建 StateGraph ...
+    CompiledGraph compiled = graph.compile(createInterruptCompileConfig());
+    subGraphRegistry.bindGraph("TRANSFER", compiled);           // 非流式
+    return compiled;
+}
+
+// 流式Graph示例:
+@Bean("wealthInterpretGraph")
+public CompiledGraph wealthInterpretGraph() throws GraphStateException {
+    // ... 构建 StateGraph ...
+    CompiledGraph compiled = graph.compile(createInterruptCompileConfig());
+    subGraphRegistry.bindGraph("WEALTH_INTERPRET", compiled, true);  // ✅ 流式
+    return compiled;
 }
 ```
 
-### 5.2 IntentRegistry的streamable字段
+### 5.2 SubGraphRegistry的streamable字段
 
 ```java
-// IntentRegistry.IntentConfig
+// SubGraphRegistry.IntentConfig
 @Data
 public static class IntentConfig {
     private final String name;
@@ -317,7 +326,7 @@ routing:
       disambiguation-question: "请问您需要理财咨询还是理财产品解读？"
 ```
 
-注意：`streamable` 不在yml中，而是在 `AppInitConfig.bindGraph()` 时硬编码。因为这是Graph的实现属性，不是配置属性。
+注意：`streamable` 不在yml中，而是在 GraphConfig 的 `@Bean` 方法中 `bindGraph()` 时指定。因为这是Graph的实现属性，不是配置属性。
 
 ---
 
@@ -331,7 +340,7 @@ GES是整个流式架构的**唯一分流点**。理解了 `executeStreaming()`�
 // GraphExecutionEngine.java
 public Flux<StreamChunk> executeGraph(CompiledGraph graph, String intent,
                                        Map<String, Object> input, String threadId) {
-    boolean streamable = intentRegistry.isStreamable(intent);  // ← 唯一读取点
+    boolean streamable = subGraphRegistry.isStreamable(intent);  // ← 唯一读取点
     if (!streamable) {
         return executeBlocking(graph, intent, input, threadId);
     }
@@ -609,7 +618,7 @@ resume的流式/非流式分流逻辑与execute完全对称：
 public Flux<StreamChunk> resumeGraph(CompiledGraph graph, String intent,
                                       String userInput, String threadId,
                                       Map<String, Object> globalStateData) {
-    boolean streamable = intentRegistry.isStreamable(intent);
+    boolean streamable = subGraphRegistry.isStreamable(intent);
     if (!streamable) {
         return resumeBlocking(graph, intent, userInput, threadId, globalStateData);
     }
@@ -669,7 +678,7 @@ L1的 `executeNewAgent` 和 `resumeActiveAgent` 是两个核心方法，所有�
 // AbstractDomainService.java
 
 protected Flux<StreamChunk> executeNewAgent(String sessionId, String intent, String rewrittenInput) {
-    var graph = intentRegistry.getGraph(intent);
+    var graph = subGraphRegistry.getGraph(intent);
 
     // 1. 生成独立threadId
     String threadId = generateThreadId(sessionId, intent);
@@ -1133,7 +1142,7 @@ TransferGraph注册时：`bindGraph("TRANSFER", transferGraph)` — 默认非流
 │     │     → transferChatMemory["session1@TransferService"] += [UserMessage]
 │     │
 │     ├─ ContextRouter → SWITCH
-│     ├─ IntentRouter → TRANSFER, belongsToDomain=true
+│     ├─ SubGraphRouter → TRANSFER, belongsToDomain=true
 │     │
 │     ├─ new AssistantWriter(transferChatMemory, "session1@TransferService")
 │     │
@@ -1250,7 +1259,7 @@ private Map<String, Object> executeWealthInterpretNode(OverAllState state) {
 ├─ ④ dispatchToDomain → WealthService.handle()
 │     │
 │     ▼ L1: MultiSubAgentDomainService
-│     │  无activeAgent，无消歧 → Phase2 IntentResolver
+│     │  无activeAgent，无消歧 → Phase2 SubGraphResolver
 │     │  识别为 WEALTH_INTERPRET（具体意图，非WEALTH组）
 │     │
 │     ├─ addUserMessage(wealthChatMemory, "session2@WealthService", ...)
@@ -1385,11 +1394,11 @@ eventSource.onmessage = (event) => {
 ├─ dispatchToDomain → WealthService.handle()
 │     │
 │     ▼ L1: MultiSubAgentDomainService
-│     │  无activeAgent → Phase1 ContextRouter + Phase2 IntentResolver
+│     │  无activeAgent → Phase1 ContextRouter + Phase2 SubGraphResolver
 │     │
 │     ├─ Phase1 ContextRouter → SWITCH (新意图)
 │     │
-│     ├─ Phase2 IntentResolver:
+│     ├─ Phase2 SubGraphResolver:
 │     │    用户说"理财"→ 匹配到WEALTH意图组，但无法区分是CONSULT还是INTERPRET
 │     │    → RoutingResolution.DISAMBIGUATION
 │     │    → question="请问您需要理财咨询还是理财产品解读？"
@@ -1426,7 +1435,7 @@ eventSource.onmessage = (event) => {
 │     ├─ Phase1 ContextRouter → FOLLOW (在回答消歧问题)
 │     │  但消歧中 → 不走FOLLOW → 继续Phase2
 │     │
-│     ├─ Phase2 IntentResolver (消歧模式):
+│     ├─ Phase2 SubGraphResolver (消歧模式):
 │     │    用户说"解读" → 明确为 WEALTH_INTERPRET
 │     │    → RoutingResolution.RESOLVED, intent="WEALTH_INTERPRET"
 │     │
@@ -1453,7 +1462,7 @@ eventSource.onmessage = (event) => {
                └─────────┬──────────┘
                          │
                ┌─────────┴──────────┐
-               │   Phase2 IntentResolver  │
+               │   Phase2 SubGraphResolver  │
                │   "理财" → 匹配WEALTH组  │
                │   但无法区分具体意图       │
                └─────────┬──────────┘
@@ -1471,7 +1480,7 @@ eventSource.onmessage = (event) => {
                     L1 WealthService (消歧中)
                          │
                ┌─────────┴──────────┐
-               │   Phase2 IntentResolver  │
+               │   Phase2 SubGraphResolver  │
                │   "解读" → WEALTH_INTERPRET │
                │   明确！→ RESOLVED         │
                └─────────┬──────────┘
@@ -1611,7 +1620,7 @@ L0 和 L1 **各自写各自的 ChatMemory bean**，互不干扰：
 
 两份记录**内容相同但存储隔离**，各自服务不同用途：
 - 全局chatMemory → 供 L0 DomainRouter 判断跨域上下文
-- 领域chatMemory → 供 L1 ContextRouter/IntentRouter 判断域内路由
+- 领域chatMemory → 供 L1 ContextRouter/SubGraphRouter 判断域内路由
 
 ### 14.5 ChatService 特殊路径
 
@@ -1695,7 +1704,7 @@ REROUTE 是最容易让人困惑的场景。关键点：**REROUTE chunk 不写 C
 │
 ├─ ④ WealthService.handle()
 │     ├─ addUserMessage(wealthChatMemory, "session1@WealthService", "我想贷款")
-│     ├─ IntentResolver → 识别为 LOAN → belongsToDomain=false
+│     ├─ SubGraphResolver → 识别为 LOAN → belongsToDomain=false
 │     └─ return Flux.just(StreamChunk.reroute("LOAN", null))
 │
 │  ┌─ L1 AssistantWriter.onChunk(REROUTE)
@@ -1815,9 +1824,9 @@ REROUTE 是最容易让人困惑的场景。关键点：**REROUTE chunk 不写 C
 |-----------------|--------|---------|------|
 | `chatMemory`（全局） | **L0** BankController | `sessionId` | 全局对话历史，供 L0 DomainRouter 判断跨域上下文 |
 | `chatMemory`（全局） | **L1** ChatService（只读） | — | ChatService 通过 ReadOnlyMemoryAdvisor 读取，不写入 |
-| `transferChatMemory` | **L1** TransferService | `sessionId@TransferService` | 转账域内对话历史，供 ContextRouter/IntentRouter |
-| `wealthChatMemory` | **L1** WealthService | `sessionId@WealthService` | 理财域内对话历史，供 ContextRouter/IntentRouter |
-| `billChatMemory` | **L1** BillService | `sessionId@BillService` | 账单域内对话历史，供 ContextRouter/IntentRouter |
+| `transferChatMemory` | **L1** TransferService | `sessionId@TransferService` | 转账域内对话历史，供 ContextRouter/SubGraphRouter |
+| `wealthChatMemory` | **L1** WealthService | `sessionId@WealthService` | 理财域内对话历史，供 ContextRouter/SubGraphRouter |
+| `billChatMemory` | **L1** BillService | `sessionId@BillService` | 账单域内对话历史，供 ContextRouter/SubGraphRouter |
 
 **核心规则**：
 - L0 **只写**全局 chatMemory，不写领域 chatMemory
@@ -1834,7 +1843,7 @@ REROUTE 是最容易让人困惑的场景。关键点：**REROUTE chunk 不写 C
 | `StreamChunk` | data | 统一数据载体，工厂方法 + `isTerminal()` + `getReplyContent()` |
 | `StreamingChatMemoryWriter` | execution | UserMessage写入 + AssistantWriter（累积+终结时写） |
 | `GraphExecutionEngine` | execution | 分流引擎：executeBlocking / executeStreaming |
-| `IntentRegistry` | router | 意图注册表，含streamable字段 |
+| `SubGraphRegistry` | router | 意图注册表，含streamable字段 |
 | `SseOutputAdapter` | infrastructure | Flux<StreamChunk> → SseEmitter / JSON |
 | `BankController` | controller (L0) | Content Negotiation + REROUTE + ChatMemory写入 |
 | `DomainHandler` | domain (L1) | 统一接口：`Flux<StreamChunk> handle()` |

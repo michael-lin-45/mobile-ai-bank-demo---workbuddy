@@ -14,7 +14,7 @@
 6. [Step 4: 注册 DomainStateAware (Java)](#6-step-4-注册-domainstateaware-java)
 7. [Step 5: 创建 L2 子 Graph (Java)](#7-step-5-创建-l2-子-graph-java)
 8. [Step 6: 创建 L1 DomainService 并注册 (Java)](#8-step-6-创建-l1-domainservice-并注册-java)
-9. [Step 7: 绑定 Graph 到 IntentRegistry (Java)](#9-step-7-绑定-graph-到-intentregistry-java)
+9. [Step 7: 绑定 Graph 到 SubGraphRegistry (Java)](#9-step-7-绑定-graph-到-intentregistry-java)
 10. [L2 子 Graph 适配详解](#10-l2-子-graph-适配详解)
 11. [获取 GlobalSessionContext 的方法](#11-获取-globalsessioncontext-的方法)
 12. [流式 vs 非流式输出](#12-流式-vs-非流式输出)
@@ -40,10 +40,10 @@ DomainServiceRegistry.getHandler(domain) → 找到你的 L1 DomainService
   ▼
 你的 L1 DomainService
   │  ContextRouter → FOLLOW / SWITCH / RESUME
-  │  IntentRouter / IntentResolver → 识别具体子意图
+  │  SubGraphRouter / SubGraphResolver → 识别具体子意图
   │
   ▼
-IntentRegistry.getGraph(intentName) → 找到你的 L2 子 Graph
+SubGraphRegistry.getGraph(intentName) → 找到你的 L2 子 Graph
   │
   ▼
 GraphExecutionEngine.executeGraph() / resumeGraph()
@@ -63,7 +63,7 @@ StreamChunk → 返回给前端
 | L0 | 声明你的领域关键词和意图 | `application.yml` |
 | L1 | 创建 DomainService Bean，注册 DomainStateAware | `DomainServiceConfig.java` |
 | L2 | 继承 `AbstractGraphConfig`，定义子 Graph | 新建 `XxxGraphConfig.java` |
-| 绑定 | 在 `AppInitConfig` 中将 Graph 绑定到 IntentRegistry | `AppInitConfig.java` |
+| 绑定 | GraphConfig 的 @Bean 方法中自注册 bindGraph | `XxxGraphConfig.java` |
 
 ---
 
@@ -76,13 +76,13 @@ Step 3  ──→  application.yml: routing.intent-groups   ← (可选) 配置�
 Step 4  ──→  DomainServiceConfig.java                 ← 注册 DomainStateAware Bean
 Step 5  ──→  新建 XxxGraphConfig.java                 ← 继承 AbstractGraphConfig，定义 L2 子 Graph
 Step 6  ──→  DomainServiceConfig.java                 ← 创建 DomainService Bean + 注册到 DomainServiceRegistry
-Step 7  ──→  AppInitConfig.java                       ← bindGraph(intentName, graph, streamable)
+Step 7  ──→  XxxGraphConfig.java @Bean 方法末尾       ← subGraphRegistry.bindGraph(intentName, graph, streamable)
 ```
 
 **最小改动文件：**
 - `application.yml` (1 处)
 - `DomainServiceConfig.java` (2 个 Bean)
-- `AppInitConfig.java` (1 行 bindGraph)
+- `XxxGraphConfig.java` 的 @Bean 方法末尾加 1 行 `subGraphRegistry.bindGraph(...)`
 - 新建 1 个 `XxxGraphConfig.java`
 
 ---
@@ -108,7 +108,7 @@ routing:
       param-schema: "保险类型(人寿/健康/财产), 保障范围(可选)"  # ← 参数描述
       is-write-op: false                # ← 是否写操作 (影响 L0 路由策略)
       intent-type: CONSULTATION         # ← 意图类型枚举
-      scope: "保险产品咨询、推荐与方案设计"  # ← 供 IntentRouter 判断 belongs_to_domain
+      scope: "保险产品咨询、推荐与方案设计"  # ← 供 SubGraphRouter 判断 belongs_to_domain
 ```
 
 ### 关键字段详解
@@ -120,7 +120,7 @@ routing:
 | `param-schema` | ✅ | 参数描述，供 LLM 提取参数时参考 | `"保险类型, 保障范围"` |
 | `is-write-op` | ✅ | 是否写操作。`true` = 资金变动类 (转账)，`false` = 查询/咨询类 | `false` |
 | `intent-type` | ✅ | 意图类型枚举，影响路由策略 | `OPERATION` / `QUERY` / `CONSULTATION` |
-| `scope` | ✅ | 意图的处理范围描述，供 IntentRouter 判断 `belongs_to_domain` | `"保险产品咨询与推荐"` |
+| `scope` | ✅ | 意图的处理范围描述，供 SubGraphRouter 判断 `belongs_to_domain` | `"保险产品咨询与推荐"` |
 
 ### intent-type 枚举
 
@@ -132,7 +132,7 @@ routing:
 
 ### scope 的作用
 
-`scope` 用于 IntentRouter 判断用户的请求是否属于**你的域**。当 IntentRouter 的 LLM 看到以下描述：
+`scope` 用于 SubGraphRouter 判断用户的请求是否属于**你的域**。当 SubGraphRouter 的 LLM 看到以下描述：
 
 ```
 - INSURANCE_CONSULT [CONSULTATION]: 保险产品咨询、推荐与方案设计
@@ -465,9 +465,9 @@ public class DomainServiceConfig {
     @Bean("insuranceDomainService")
     public SingleSubAgentDomainService insuranceDomainService(
             ContextRouter contextRouter,
-            IntentRouter intentRouter,                        // ← Single 域用 IntentRouter
+            SubGraphRouter subGraphRouter,                       // ← Single 域用 SubGraphRouter
             GraphExecutionEngine graphExecutionEngine,
-            IntentRegistry intentRegistry,
+            SubGraphRegistry subGraphRegistry,
             GlobalSessionStateStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
@@ -478,9 +478,9 @@ public class DomainServiceConfig {
                 .intent("INSURANCE_CONSULT")                 // ← 唯一子意图
                 .intentDescription("保险咨询")                // ← 意图描述
                 .contextRouter(contextRouter)
-                .intentRouter(intentRouter)
+                .subGraphRouter(subGraphRouter)
                 .graphExecutionEngine(graphExecutionEngine)
-                .intentRegistry(intentRegistry)
+                .subGraphRegistry(subGraphRegistry)
                 .globalSessionStore(globalSessionStore)
                 .l1DomainPairs(l1MaxPairs)
                 .build();
@@ -496,9 +496,9 @@ public class DomainServiceConfig {
     @Bean("insuranceDomainService")
     public MultiSubAgentDomainService insuranceDomainService(
             ContextRouter contextRouter,
-            IntentResolver intentResolver,                   // ← Multi 域用 IntentResolver
+            SubGraphResolver subGraphResolver,                   // ← Multi 域用 SubGraphResolver
             GraphExecutionEngine graphExecutionEngine,
-            IntentRegistry intentRegistry,
+            SubGraphRegistry subGraphRegistry,
             GlobalSessionStateStore globalSessionStore,
             DomainServiceRegistry domainServiceRegistry,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
@@ -507,12 +507,12 @@ public class DomainServiceConfig {
                 .logTag("InsuranceService")
                 .domainKey("INSURANCE")
                 .contextRouter(contextRouter)
-                .intentResolver(intentResolver)              // ← 不是 intentRouter
+                .subGraphResolver(subGraphResolver)              // ← 不是 subGraphRouter
                 .graphExecutionEngine(graphExecutionEngine)
-                .intentRegistry(intentRegistry)
+                .subGraphRegistry(subGraphRegistry)
                 .globalSessionStore(globalSessionStore)
-                .routingTemplatePath("prompts/l1-routing.st")         // ← Multi 域用完整路由模板
-                .intentionTemplatePath("prompts/l1-intention.st")     // ← Phase2 意图识别模板
+                .contextRoutingTemplatePath("prompts/l1-context.st")       // ← Multi 域用完整上下文路由模板
+                .intentRoutingTemplatePath("prompts/l1-intention.st")     // ← Phase2 意图路由模板
                 .rejectedMessage("该保险功能暂不支持，目前仅支持保险咨询和理赔申请")
                 .handledIntents(List.of(
                         new AbstractDomainService.IntentInfo("INSURANCE_CONSULT", "保险咨询与推荐"),
@@ -536,10 +536,10 @@ public class DomainServiceConfig {
 | `domainKey` | ✅ | ✅ | 大写，与 yml 一致 |
 | `intent` | ✅ | ❌ | Single 的唯一意图 |
 | `intentDescription` | ✅ | ❌ | 意图描述 |
-| `intentRouter` | ✅ | ❌ | Single 用 IntentRouter |
-| `intentResolver` | ❌ | ✅ | Multi 用 IntentResolver (含消歧) |
-| `routingTemplatePath` | 可选 | ✅ | L1 路由模板路径 |
-| `intentionTemplatePath` | 可选 | ✅ | Phase2 意图识别模板路径 |
+| `subGraphRouter` | ✅ | ❌ | Single 用 SubGraphRouter |
+| `subGraphResolver` | ❌ | ✅ | Multi 用 SubGraphResolver (含消歧) |
+| `contextRoutingTemplatePath` | 可选 | ✅ | Phase1 上下文路由模板路径 |
+| `intentRoutingTemplatePath` | 可选 | ✅ | Phase2 意图路由模板路径 |
 | `rejectedMessage` | ❌ | ✅ | 意图被拒绝时的回复 |
 | `handledIntents` | ❌ | ✅ | 域下所有子意图列表 |
 | `maxSuspendedDepth` | ❌ | ✅ | 最大挂起深度 |
@@ -547,48 +547,46 @@ public class DomainServiceConfig {
 
 ---
 
-## 9. Step 7: 绑定 Graph 到 IntentRegistry (Java)
+## 9. Step 7: 绑定 Graph 到 SubGraphRegistry (自注册模式)
 
-在 `AppInitConfig.java` 中添加绑定：
+**每个 GraphConfig 在自己的 `@Bean` 方法中完成 Graph 编译后自注册**，无需额外修改其他类。
 
 ```java
 @Configuration
-public class AppInitConfig {
+public class InsuranceConsultGraphConfig extends AbstractGraphConfig {
 
-    private final IntentRegistry intentRegistry;
-    private final CompiledGraph transferGraph;
-    private final CompiledGraph billQueryGraph;
-    private final CompiledGraph wealthConsultGraph;
-    private final CompiledGraph wealthInterpretGraph;
-    private final CompiledGraph insuranceConsultGraph;   // ← 新增
+    private final SubGraphRegistry subGraphRegistry;   // ← 注入
 
-    public AppInitConfig(IntentRegistry intentRegistry,
-                          @Qualifier("transferGraph") CompiledGraph transferGraph,
-                          @Qualifier("billQueryGraph") CompiledGraph billQueryGraph,
-                          @Qualifier("wealthConsultGraph") CompiledGraph wealthConsultGraph,
-                          @Qualifier("wealthInterpretGraph") CompiledGraph wealthInterpretGraph,
-                          @Qualifier("insuranceConsultGraph") CompiledGraph insuranceConsultGraph) {  // ← 新增
-        // ... 赋值
-        this.insuranceConsultGraph = insuranceConsultGraph;
+    public InsuranceConsultGraphConfig(...,
+                                       SubGraphRegistry subGraphRegistry) {  // ← 构造器参数
+        super(chatModel, objectMapper, subGraphCheckpointSaverFactory);
+        this.subGraphRegistry = subGraphRegistry;
     }
 
-    @PostConstruct
-    public void bindGraphs() {
-        // ... 已有绑定
-        intentRegistry.bindGraph("INSURANCE_CONSULT", insuranceConsultGraph);       // ← 非流式
-        // intentRegistry.bindGraph("INSURANCE_CONSULT", insuranceConsultGraph, true); // ← 流式
+    @Bean("insuranceConsultGraph")
+    public CompiledGraph insuranceConsultGraph() throws GraphStateException {
+        // ... 构建 StateGraph ...
+        CompiledGraph compiled = graph.compile(createInterruptCompileConfig());
+
+        subGraphRegistry.bindGraph("INSURANCE_CONSULT", compiled);       // ← 非流式
+        // subGraphRegistry.bindGraph("INSURANCE_CONSULT", compiled, true); // ← 流式
+
+        return compiled;
     }
 }
 ```
+
+> **设计原则**：Graph 的创建和注册在同一个类中完成，新增 Graph 只需新建一个 Config 类，
+> 不需要修改任何其他文件（不再有 `AppInitConfig` 这种上帝类）。
 
 ### bindGraph 的 streamable 参数
 
 ```java
 // 非流式 (默认) — Graph 执行完毕后一次性返回结果
-intentRegistry.bindGraph("INSURANCE_CONSULT", graph);
+subGraphRegistry.bindGraph("INSURANCE_CONSULT", compiled);
 
 // 流式 — Graph 执行过程中逐字返回 (如 LLM 生成的解读文本)
-intentRegistry.bindGraph("INSURANCE_INTERPRET", graph, true);
+subGraphRegistry.bindGraph("INSURANCE_INTERPRET", compiled, true);
 ```
 
 ---
@@ -719,7 +717,7 @@ private Map<String, Object> executeNode(OverAllState state) {
 1. `result.put("streaming_output", responseFlux)` — key 固定为 `streaming_output`
 2. 框架的 `NodeExecutor.getEmbedFlux()` 自动检测 Map 中的 Flux 值
 3. 每个 `ChatResponse` → `StreamingOutput` → `StreamChunk.chunk()` → 推给前端
-4. 在 `AppInitConfig` 中绑定时要声明 `streamable=true`
+4. 在 GraphConfig 的 `@Bean` 方法中绑定时要声明 `streamable=true`
 
 ---
 
@@ -800,7 +798,7 @@ public class YourComponent {
 
 ```java
 // 1. Graph 节点中: result.put("streaming_output", responseFlux)
-// 2. AppInitConfig 中: intentRegistry.bindGraph("YOUR_INTENT", graph, true)
+// 2. GraphConfig @Bean 方法中: subGraphRegistry.bindGraph("YOUR_INTENT", compiled, true)
 // 3. 仅此两步，框架自动处理后续
 ```
 
@@ -829,13 +827,13 @@ try {
   ├── 1 个 → SingleSubAgentDomainService
   │   - 无消歧
   │   - 无挂起/恢复
-  │   - 用 IntentRouter (简单改写+识别)
+  │   - 用 SubGraphRouter (简单改写+识别)
   │   - 例: 转账(TRANSFER)、账单(BILL_QUERY)
   │
   └── 2+ 个 → MultiSubAgentDomainService
       - 需要消歧 (配置 intent-groups)
       - 支持挂起/恢复 (子图之间切换)
-      - 用 IntentResolver (含消歧+模糊匹配)
+      - 用 SubGraphResolver (含消歧+模糊匹配)
       - 例: 理财(WEALTH_CONSULT + WEALTH_INTERPRET)
 ```
 
@@ -886,9 +884,9 @@ public DomainStateAware insuranceDomainStateAware() {
 @Bean("insuranceDomainService")
 public MultiSubAgentDomainService insuranceDomainService(
         ContextRouter contextRouter,
-        IntentResolver intentResolver,
+        SubGraphResolver subGraphResolver,
         GraphExecutionEngine graphExecutionEngine,
-        IntentRegistry intentRegistry,
+        SubGraphRegistry subGraphRegistry,
         GlobalSessionStateStore globalSessionStore,
         DomainServiceRegistry domainServiceRegistry,
         @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
@@ -897,12 +895,12 @@ public MultiSubAgentDomainService insuranceDomainService(
             .logTag("InsuranceService")
             .domainKey("INSURANCE")
             .contextRouter(contextRouter)
-            .intentResolver(intentResolver)
+            .subGraphResolver(subGraphResolver)
             .graphExecutionEngine(graphExecutionEngine)
-            .intentRegistry(intentRegistry)
+            .subGraphRegistry(subGraphRegistry)
             .globalSessionStore(globalSessionStore)
-            .routingTemplatePath("prompts/l1-routing.st")
-            .intentionTemplatePath("prompts/l1-intention.st")
+            .contextRoutingTemplatePath("prompts/l1-context.st")
+            .intentRoutingTemplatePath("prompts/l1-intention.st")
             .rejectedMessage("该保险功能暂不支持，目前仅支持保险咨询和理赔申请")
             .handledIntents(List.of(
                     new AbstractDomainService.IntentInfo("INSURANCE_CONSULT", "保险咨询与推荐"),
@@ -928,11 +926,13 @@ public MultiSubAgentDomainService insuranceDomainService(
 - `buildExtractPrompt`: 提取保单号、理赔类型、理赔金额
 - `paramRouter`: 按缺失参数路由到不同 askNode
 
-### 14.5 AppInitConfig.java (新增 2 行)
+### 14.5 GraphConfig 中自注册 (2 行)
 
 ```java
-intentRegistry.bindGraph("INSURANCE_CONSULT", insuranceConsultGraph);
-intentRegistry.bindGraph("INSURANCE_CLAIM", insuranceClaimGraph);
+// 在 InsuranceConsultGraphConfig 的 @Bean 方法末尾:
+subGraphRegistry.bindGraph("INSURANCE_CONSULT", compiled);
+// 在 InsuranceClaimGraphConfig 的 @Bean 方法末尾:
+subGraphRegistry.bindGraph("INSURANCE_CLAIM", compiled);
 ```
 
 ---
@@ -999,9 +999,9 @@ intentRegistry.bindGraph("INSURANCE_CLAIM", insuranceClaimGraph);
 
 ### Q: 新增意图后启动报错 "Graph not found for intent: XXX"
 
-**原因：** 意图在 yml 中注册了，但 Graph 还没绑定到 IntentRegistry。
+**原因：** 意图在 yml 中注册了，但 Graph 还没绑定到 SubGraphRegistry。
 
-**解决：** 检查 `AppInitConfig.bindGraphs()` 中是否有对应的 `bindGraph("XXX", graph)` 调用。
+**解决：** 检查对应 GraphConfig 的 `@Bean` 方法中是否有 `subGraphRegistry.bindGraph("XXX", compiled)` 调用。
 
 ### Q: L0 总是不路由到我的新域
 
@@ -1027,7 +1027,7 @@ disambiguation-question: "请问您需要保险咨询(回复1)还是理赔申请
 
 ### Q: Single 域能否改为 Multi 域？
 
-可以，只需要在 `DomainServiceConfig` 中把 `SingleSubAgentDomainService.builder()` 改为 `MultiSubAgentDomainService.builder()`，增加 `handledIntents`、`intentResolver` 等参数，并在 yml 中配置消歧组。
+可以，只需要在 `DomainServiceConfig` 中把 `SingleSubAgentDomainService.builder()` 改为 `MultiSubAgentDomainService.builder()`，增加 `handledIntents`、`subGraphResolver` 等参数，并在 yml 中配置消歧组。
 
 ### Q: L2 子 Graph 如何读取 L1 的对话历史？
 
