@@ -137,6 +137,8 @@ storage:
 
 # ==================== Memory配置 ====================
 memory:
+  store:
+    type: in-memory    # 长期记忆存储类型: in-memory(开发/测试) | redis(生产) — 与 storage.type 独立配置
   conversation:
     recent-days: 30   # 对话历史保留天数
   domain:
