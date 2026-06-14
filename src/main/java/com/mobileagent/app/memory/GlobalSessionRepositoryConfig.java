@@ -6,6 +6,7 @@ import com.mobileagent.app.memory.impl.InMemoryGlobalSessionRepository;
 import com.mobileagent.app.memory.impl.RedisGlobalSessionRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,11 +32,12 @@ public class GlobalSessionRepositoryConfig {
     @ConditionalOnProperty(name = "storage.type", havingValue = "redis")
     public GlobalSessionRepository redisRepository(RedisConnectionFactory connectionFactory,
                                                     ObjectMapper objectMapper,
-                                                    @Qualifier("globalKeyStrategyFactory") KeyStrategyFactory keyStrategyFactory) {
-        log.info("[GlobalSessionRepository] Using Redis implementation");
+                                                    @Qualifier("globalKeyStrategyFactory") KeyStrategyFactory keyStrategyFactory,
+                                                    @Value("${routing.history.max-stored-pairs:20}") int maxStoredPairs) {
+        log.info("[GlobalSessionRepository] Using Redis implementation, maxStoredPairs={}", maxStoredPairs);
         org.springframework.data.redis.core.StringRedisTemplate redisTemplate = new org.springframework.data.redis.core.StringRedisTemplate();
         redisTemplate.setConnectionFactory(connectionFactory);
         redisTemplate.afterPropertiesSet();
-        return new RedisGlobalSessionRepository(redisTemplate, objectMapper, keyStrategyFactory);
+        return new RedisGlobalSessionRepository(redisTemplate, objectMapper, keyStrategyFactory, maxStoredPairs);
     }
 }

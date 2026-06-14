@@ -4,6 +4,7 @@ import com.alibaba.cloud.ai.graph.KeyStrategyFactory;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
@@ -24,12 +25,16 @@ public class GlobalSessionStateStore {
 
     private final KeyStrategyFactory keyStrategyFactory;
     private final GlobalSessionRepository repository;
+    private final int maxStoredPairs;
 
     public GlobalSessionStateStore(@Qualifier("globalKeyStrategyFactory") KeyStrategyFactory keyStrategyFactory,
-                                    GlobalSessionRepository repository) {
+                                    GlobalSessionRepository repository,
+                                    @Value("${routing.history.max-stored-pairs:20}") int maxStoredPairs) {
         this.keyStrategyFactory = keyStrategyFactory;
         this.repository = repository;
-        log.info("[GlobalSessionStateStore] Initialized, repository={}", repository.getClass().getSimpleName());
+        this.maxStoredPairs = maxStoredPairs;
+        log.info("[GlobalSessionStateStore] Initialized, repository={}, maxStoredPairs={}",
+                repository.getClass().getSimpleName(), maxStoredPairs);
     }
 
     // ==================== GlobalSessionContext 管理 ====================
@@ -47,7 +52,7 @@ public class GlobalSessionStateStore {
         OverAllState state = new OverAllState();
         state.registerKeyAndStrategy(keyStrategyFactory.apply());
 
-        GlobalSessionContext ctx = new GlobalSessionContext(sessionId, state);
+        GlobalSessionContext ctx = new GlobalSessionContext(sessionId, state, maxStoredPairs);
         repository.put(sessionId, ctx);
         return ctx;
     }

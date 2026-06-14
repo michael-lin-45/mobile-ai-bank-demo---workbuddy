@@ -24,13 +24,16 @@ public class RedisGlobalSessionRepository implements GlobalSessionRepository {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final KeyStrategyFactory keyStrategyFactory;
+    private final int maxStoredPairs;
 
     public RedisGlobalSessionRepository(StringRedisTemplate redisTemplate,
                                          ObjectMapper objectMapper,
-                                         KeyStrategyFactory keyStrategyFactory) {
+                                         KeyStrategyFactory keyStrategyFactory,
+                                         int maxStoredPairs) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.keyStrategyFactory = keyStrategyFactory;
+        this.maxStoredPairs = maxStoredPairs;
     }
 
     @Override
@@ -42,7 +45,7 @@ public class RedisGlobalSessionRepository implements GlobalSessionRepository {
             OverAllState state = new OverAllState();
             state.registerKeyAndStrategy(keyStrategyFactory.apply());
             state.updateState(data);
-            return new GlobalSessionContext(sessionId, state);
+            return new GlobalSessionContext(sessionId, state, maxStoredPairs);
         } catch (Exception e) {
             log.warn("[RedisGlobalSessionRepository] Failed to deserialize: sessionId={}", sessionId, e);
             return null;
