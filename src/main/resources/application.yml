@@ -52,6 +52,7 @@ routing:
     l0-max-pairs: 10    # L0 域路由使用的历史对数
     l1-max-pairs: 10    # L1 意图路由使用的历史对数
     chat-max-pairs: 10  # ChatService 闲聊使用的历史对数
+    max-stored-pairs: 20  # OverAllState.messages 最大存储对话对数(超出时淘汰最早的对,0=不限制)
   # 参数校验重试
   verification:
     max-retries: 1      # L2 提参校验最大重试次数

@@ -1,11 +1,13 @@
 package com.mobileagent.app.memory;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
+import com.alibaba.cloud.ai.graph.state.ReplaceAllWith;
 import com.mobileagent.app.memory.model.DomainState;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -37,10 +39,16 @@ public class GlobalSessionContext {
 
     private final String sessionId;
     private final OverAllState state;
+    private final int maxStoredPairs;
 
     public GlobalSessionContext(String sessionId, OverAllState state) {
+        this(sessionId, state, 0);
+    }
+
+    public GlobalSessionContext(String sessionId, OverAllState state, int maxStoredPairs) {
         this.sessionId = sessionId;
         this.state = state;
+        this.maxStoredPairs = maxStoredPairs;
     }
 
     // ==================== 通用读取 ====================
@@ -57,10 +65,12 @@ public class GlobalSessionContext {
 
     public void addUserMessage(String content) {
         state.updateState(Map.of("messages", "用户: " + content));
+        evictMessagesIfNeeded();
     }
 
     public void addAssistantMessage(String content) {
         state.updateState(Map.of("messages", "助手: " + content));
+        evictMessagesIfNeeded();
     }
 
     // ==================== 消息读取 ====================
@@ -136,6 +146,37 @@ public class GlobalSessionContext {
             return stateKey.substring(1, stateKey.length() - 5).toUpperCase();
         }
         return stateKey;
+    }
+
+    // ==================== 消息淘汰 (maxStoredPairs 限制) ====================
+
+    /**
+     * 当 messages 列表超过 maxStoredPairs * 2 条时, 淘汰最早的记录, 保留最近的完整对.
+     * <p>
+     * 淘汰策略:
+     * - maxStoredPairs <= 0 时不限制, 不淘汰
+     * - 仅在消息条数为偶数时淘汰(确保淘汰完整的一问一答对, 不会截断半对)
+     * - 使用框架的 ReplaceAllWith 走 AppendStrategy 正规通道替换整个列表
+     */
+    @SuppressWarnings("unchecked")
+    private void evictMessagesIfNeeded() {
+        if (maxStoredPairs <= 0) return;
+
+        List<String> messages = (List<String>) (List<?>) state.value("messages")
+                .filter(List.class::isInstance)
+                .orElse(List.of());
+
+        int maxItems = maxStoredPairs * 2;
+        if (messages.size() <= maxItems) return;
+
+        // 奇数条 = 半对(用户消息已写入, 助手消息尚未写入), 等下一条凑成完整对再淘汰
+        if (messages.size() % 2 != 0) return;
+
+        List<String> trimmed = new ArrayList<>(
+                messages.subList(messages.size() - maxItems, messages.size()));
+        state.updateState(Map.of("messages", ReplaceAllWith.of(trimmed)));
+        log.debug("[GlobalSessionContext] Evicted {} old messages, remaining: {} (maxStoredPairs={})",
+                messages.size() - maxItems, trimmed.size(), maxStoredPairs);
     }
 
     // ==================== 清理 ====================
