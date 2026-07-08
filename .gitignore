@@ -31,3 +31,5 @@ build/
 
 ### VS Code ###
 .vscode/
+observability/otel-collector/
+observability/backend/data/
