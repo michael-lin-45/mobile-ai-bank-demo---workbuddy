@@ -11,6 +11,8 @@ import com.alibaba.cloud.ai.graph.exception.GraphStateException;
 import com.alibaba.cloud.ai.graph.state.strategy.AppendStrategy;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mobileagent.app.observability.AgentSpanContext;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.util.JsonParseUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -65,6 +67,7 @@ public abstract class AbstractGraphConfig {
 
     protected final ChatModel chatModel;
     protected final ObjectMapper objectMapper;
+    protected final ObservabilityMetrics obsMetrics;
     protected final SubGraphCheckpointSaverConfig.SubGraphCheckpointSaverFactory subGraphCheckpointSaverFactory;
 
     /**
@@ -77,9 +80,11 @@ public abstract class AbstractGraphConfig {
 
     protected AbstractGraphConfig(ChatModel chatModel,
                                    ObjectMapper objectMapper,
+                                   ObservabilityMetrics obsMetrics,
                                    SubGraphCheckpointSaverConfig.SubGraphCheckpointSaverFactory subGraphCheckpointSaverFactory) {
         this.chatModel = chatModel;
         this.objectMapper = objectMapper;
+        this.obsMetrics = obsMetrics;
         this.subGraphCheckpointSaverFactory = subGraphCheckpointSaverFactory;
     }
 
@@ -191,7 +196,13 @@ public abstract class AbstractGraphConfig {
     protected Map<String, Object> callExtractModel(String userInput) {
         String prompt = buildExtractPrompt(userInput);
         long startMs = System.currentTimeMillis();
-        ChatResponse response = chatModel.call(new Prompt(prompt));
+        AgentSpanContext.set("L2", getGraphName(), getGraphName(), null, null);
+        ChatResponse response;
+        try {
+            response = chatModel.call(new Prompt(prompt));
+        } finally {
+            AgentSpanContext.clear();
+        }
         long elapsedMs = System.currentTimeMillis() - startMs;
         String content = response.getResult().getOutput().getText();
         log.info("[{}.callExtractModel] LLM call completed in {}ms | input={}", getGraphName(), elapsedMs, userInput);
@@ -281,7 +292,13 @@ public abstract class AbstractGraphConfig {
 
         try {
             long startMs = System.currentTimeMillis();
-            ChatResponse response = chatModel.call(new Prompt(prompt));
+            AgentSpanContext.set("L2", getGraphName() + "-cancelCheck", getGraphName(), null, null);
+            ChatResponse response;
+            try {
+                response = chatModel.call(new Prompt(prompt));
+            } finally {
+                AgentSpanContext.clear();
+            }
             long elapsedMs = System.currentTimeMillis() - startMs;
             String content = response.getResult().getOutput().getText().trim();
             log.info("[{}.detectCancel] LLM call completed in {}ms | input={}", getGraphName(), elapsedMs, userInput);
@@ -428,6 +445,7 @@ public abstract class AbstractGraphConfig {
         return node_async(state -> {
             Map<String, Object> cancelResult = cancelAwareAsk(state);
             if (cancelResult != null) return cancelResult;
+            obsMetrics.recordSlotAskbackTotal(1);
             return askLogic.apply(state);
         });
     }

@@ -5,6 +5,7 @@ import com.alibaba.cloud.ai.graph.streaming.OutputType;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.router.registry.SubGraphRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -33,9 +34,12 @@ import java.util.Objects;
 public class GraphExecutionEngine {
 
     private final SubGraphRegistry subGraphRegistry;
+    private final ObservabilityMetrics obsMetrics;
 
-    public GraphExecutionEngine(SubGraphRegistry subGraphRegistry) {
+    public GraphExecutionEngine(SubGraphRegistry subGraphRegistry,
+                                ObservabilityMetrics obsMetrics) {
         this.subGraphRegistry = subGraphRegistry;
+        this.obsMetrics = obsMetrics;
     }
 
     /** 生成包含 threadId 的 config */
@@ -80,11 +84,29 @@ public class GraphExecutionEngine {
             try {
                 RunnableConfig config = threadConfig(threadId);
                 log.info("[GraphExec] Blocking execute: intent={}, threadId={}", intent, threadId);
+
+                long startMs = System.currentTimeMillis();
+                var timerSample = obsMetrics.startWorkflowTimer();
                 graph.stream(input, config).blockLast();
+                obsMetrics.stopWorkflowTimer(timerSample);
+                long durationMs = System.currentTimeMillis() - startMs;
+                // 埋点：子图执行耗时（带 intent/graph tag）
+                obsMetrics.recordWorkflowDuration(intent, intent, durationMs);
+
                 WorkflowOutput output = checkGraphResult(graph, config, intent);
+                if (output.getStatus() == com.mobileagent.app.data.WorkflowStatus.INTERRUPTED) {
+                    obsMetrics.recordWorkflowInterrupt();
+                    obsMetrics.recordWorkflowInterrupt(intent, "interruptBefore");
+                }
+                if (output.getStatus() == com.mobileagent.app.data.WorkflowStatus.COMPLETED) {
+                    obsMetrics.recordBusinessSuccess();
+                } else {
+                    obsMetrics.recordBusinessFail();
+                }
                 return Flux.just(StreamChunk.fromWorkflowOutput(output));
             } catch (Exception e) {
                 log.error("[GraphExec] Blocking execute failed", e);
+                obsMetrics.recordBusinessFail();
                 return Flux.just(StreamChunk.error("执行出错: " + e.getMessage()));
             }
         });
@@ -103,10 +125,21 @@ public class GraphExecutionEngine {
                     updateData.put("_globalStateData", globalStateData);
                 }
                 updateData.put("_latestUserInput", userInput);
+
+                long startMs = System.currentTimeMillis();
+                var timerSample = obsMetrics.startWorkflowTimer();
                 RunnableConfig updatedConfig = graph.updateState(config, updateData, null);
                 graph.stream(null, updatedConfig).blockLast();
+                obsMetrics.stopWorkflowTimer(timerSample);
+                long durationMs = System.currentTimeMillis() - startMs;
+                // 埋点：子图执行耗时（resume 路径）
+                obsMetrics.recordWorkflowDuration(intent, intent, durationMs);
 
                 WorkflowOutput output = checkGraphResult(graph, config, intent);
+                if (output.getStatus() == com.mobileagent.app.data.WorkflowStatus.INTERRUPTED) {
+                    obsMetrics.recordWorkflowInterrupt();
+                    obsMetrics.recordWorkflowInterrupt(intent, "interruptBefore");
+                }
                 return Flux.just(StreamChunk.fromWorkflowOutput(output));
             } catch (Exception e) {
                 log.error("[GraphExec] Blocking resume failed", e);
@@ -123,21 +156,27 @@ public class GraphExecutionEngine {
             RunnableConfig config = threadConfig(threadId);
             log.info("[GraphExec] Streaming execute: intent={}, threadId={}", intent, threadId);
 
+            long startMs = System.currentTimeMillis();
+
             return graph.graphResponseStream(input, config)
                 .flatMap(graphResponse -> {
                     StreamChunk chunk = mapStreamingOutput(graphResponse, intent);
                     return chunk != null ? Flux.just(chunk) : Flux.empty();
                 })
                 .concatWith(Flux.defer(() -> {
+                    long durationMs = System.currentTimeMillis() - startMs;
+                    obsMetrics.recordWorkflowDuration(intent, intent, durationMs);
                     StreamChunk terminal = buildStreamingTerminalChunk(graph, config, intent);
                     return Flux.just(terminal);
                 }))
                 .onErrorResume(e -> {
                     log.error("[GraphExec] Streaming execute failed", e);
+                    obsMetrics.recordBusinessFail();
                     return Flux.just(StreamChunk.error("执行出错: " + e.getMessage()));
                 });
         } catch (Exception e) {
             log.error("[GraphExec] Streaming execute setup failed", e);
+            obsMetrics.recordBusinessFail();
             return Flux.just(StreamChunk.error("执行出错: " + e.getMessage()));
         }
     }
@@ -156,21 +195,27 @@ public class GraphExecutionEngine {
             updateData.put("_latestUserInput", userInput);
             RunnableConfig updatedConfig = graph.updateState(config, updateData, null);
 
+            long startMs = System.currentTimeMillis();
+
             return graph.graphResponseStream((Map<String, Object>) null, updatedConfig)
                 .flatMap(graphResponse -> {
                     StreamChunk chunk = mapStreamingOutput(graphResponse, intent);
                     return chunk != null ? Flux.just(chunk) : Flux.empty();
                 })
                 .concatWith(Flux.defer(() -> {
+                    long durationMs = System.currentTimeMillis() - startMs;
+                    obsMetrics.recordWorkflowDuration(intent, intent, durationMs);
                     StreamChunk terminal = buildStreamingTerminalChunk(graph, config, intent);
                     return Flux.just(terminal);
                 }))
                 .onErrorResume(e -> {
                     log.error("[GraphExec] Streaming resume failed", e);
+                    obsMetrics.recordBusinessFail();
                     return Flux.just(StreamChunk.error("恢复执行出错: " + e.getMessage()));
                 });
         } catch (Exception e) {
             log.error("[GraphExec] Streaming resume setup failed", e);
+            obsMetrics.recordBusinessFail();
             return Flux.just(StreamChunk.error("恢复执行出错: " + e.getMessage()));
         }
     }
@@ -246,10 +291,12 @@ public class GraphExecutionEngine {
 
             // interruptBefore中断 — 带question
             if (nextNode != null && !nextNode.isEmpty() && !nextNode.equals("__END__")) {
+                obsMetrics.recordWorkflowInterrupt(intent, nextNode);
                 return StreamChunk.interrupted(intent, question);
             }
             // ask→END中断 — 带question
             if (question != null && !question.isEmpty()) {
+                obsMetrics.recordWorkflowInterrupt(intent, "askEnd");
                 return StreamChunk.interrupted(intent, question);
             }
 
@@ -313,12 +360,14 @@ public class GraphExecutionEngine {
             // 判断1: interruptBefore中断 (next()非空且非END)
             if (nextNode != null && !nextNode.isEmpty() && !nextNode.equals("__END__")) {
                 log.info("[GraphExec] Interrupted by interruptBefore: nextNode={}, question={}", nextNode, question);
+                obsMetrics.recordWorkflowInterrupt(intent, nextNode);
                 return WorkflowOutput.interrupted(intent, question);
             }
 
             // 判断2: ask→END中断 (graph结束但有提问 - 兜底)
             if (question != null && !question.isEmpty()) {
                 log.info("[GraphExec] Interrupted by ask→END: question={}", question);
+                obsMetrics.recordWorkflowInterrupt(intent, "askEnd");
                 return WorkflowOutput.interrupted(intent, question);
             }
 

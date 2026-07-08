@@ -3,10 +3,12 @@ package com.mobileagent.app.infrastructure;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.data.StreamChunk;
+import com.mobileagent.app.data.WorkflowOutput;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
@@ -84,14 +86,18 @@ public class SseOutputAdapter {
     /**
      * Flux<StreamChunk> → JSON响应（非SSE模式）
      *
-     * 取终结chunk → WorkflowOutput → block返回
+     * 取终结chunk → WorkflowOutput → ResponseEntity包装
+     * 明确设置Content-Type=application/json，防止Spring MVC转换器匹配失败
      */
-    public Object toJson(Flux<StreamChunk> pipeline) {
-        return pipeline
+    public ResponseEntity<WorkflowOutput> toJson(Flux<StreamChunk> pipeline) {
+        WorkflowOutput output = pipeline
                 .filter(StreamChunk::isTerminal)
                 .last()
                 .map(StreamChunk::toWorkflowOutput)
                 .block();
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(output);
     }
 
     private String serialize(StreamChunk chunk) {

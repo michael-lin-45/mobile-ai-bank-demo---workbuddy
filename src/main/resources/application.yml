@@ -2,39 +2,83 @@ spring:
   application:
     name: mobile-ai-demo    # 应用名称
 
+# ==================== 服务配置 ====================
+server:
+  error:
+    include-exception: true
+    include-message: always
+
+# ==================== 监控配置 ====================
+management:
+  health:
+    otlp:
+      enabled: false
+    redis:
+      enabled: false
+  otlp:
+    metrics:
+      export:
+        url: http://127.0.0.1:4318/v1/metrics
+        step: 60s
+        timeout: 1s
+        retry:
+          max-attempts: 2
+    # traces export handled by OTel javaagent
+    logs:
+      export:
+        url: http://127.0.0.1:4318/v1/logs
+  # tracing sampling handled by OTel javaagent
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+    prometheus:
+      enabled: true
+  observability:
+    metrics:
+      custom:
+        enabled: true
+        ai-intent-recognition: true
+        ai-session-lifecycle: true
+        ai-workflow-execution: true
+        ai-business-outcome: true
+
 # ==================== 模型配置 ====================
 # 每个模型可独立配置 base-url / api-key / model, 支持环境变量覆盖
 models:
   # L0 领域路由 - qwen2.5-7b-instruct 指令遵循更强
   domain:
-    base-url: ${DOMAIN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}    # L0 领域路由模型API地址
-    api-key: ${DOMAIN_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}                  # L0 领域路由模型API密钥
-    model: ${DOMAIN_MODEL:qwen-plus}                                                 # L0 领域路由模型名称
+    base-url: ${DOMAIN_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}    # L0 领域路由模型API地址
+    api-key: ${DOMAIN_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                  # L0 领域路由模型API密钥
+    model: ${DOMAIN_MODEL:qwen3.6-35b-a3b}                                                 # L0 领域路由模型名称
   # L1 上下文路由 (FOLLOW/SWITCH/RESUME)
   context:
-    base-url: ${CONTEXT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}    # L1 上下文路由模型API地址
-    api-key: ${CONTEXT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}                  # L1 上下文路由模型API密钥
-    model: ${CONTEXT_MODEL:qwen-plus}                                                 # L1 上下文路由模型名称
+    base-url: ${CONTEXT_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}    # L1 上下文路由模型API地址
+    api-key: ${CONTEXT_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                  # L1 上下文路由模型API密钥
+    model: ${CONTEXT_MODEL:qwen3.6-35b-a3b}                                                 # L1 上下文路由模型名称
   # L1 意图路由+改写 (理财L1)
   intent:
-    base-url: ${INTENT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}     # L1 意图路由模型API地址
-    api-key: ${INTENT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}                   # L1 意图路由模型API密钥
-    model: ${INTENT_MODEL:qwen-plus}                                                  # L1 意图路由模型名称
+    base-url: ${INTENT_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}     # L1 意图路由模型API地址
+    api-key: ${INTENT_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                   # L1 意图路由模型API密钥
+    model: ${INTENT_MODEL:qwen3.6-35b-a3b}                                                  # L1 意图路由模型名称
   # L2 子Graph提参
   param-extract:
-    base-url: ${PARAM_EXTRACT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}  # L2 参数提取模型API地址
-    api-key: ${PARAM_EXTRACT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}                # L2 参数提取模型API密钥
-    model: ${PARAM_EXTRACT_MODEL:qwen-plus}                                               # L2 参数提取模型名称
+    base-url: ${PARAM_EXTRACT_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}  # L2 参数提取模型API地址
+    api-key: ${PARAM_EXTRACT_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                # L2 参数提取模型API密钥
+    model: ${PARAM_EXTRACT_MODEL:qwen3.6-35b-a3b}                                               # L2 参数提取模型名称
   # L1 闲聊 - 默认复用context配置(可改为32B+模型)
   chat:
-    base-url: ${CHAT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}       # 闲聊模型API地址
-    api-key: ${CHAT_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}                     # 闲聊模型API密钥
-    model: ${CHAT_MODEL:qwen-turbo}                                                   # 闲聊模型名称(可用更快的turbo)
+    base-url: ${CHAT_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}       # 闲聊模型API地址
+    api-key: ${CHAT_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                     # 闲聊模型API密钥
+    model: ${CHAT_MODEL:qwen3.6-35b-a3b}                                                   # 闲聊模型名称(可用更快的turbo)
   # L2 理财产品解读 - 流式输出，需要较好的模型生成高质量解读内容
   wealth-interpret:
-    base-url: ${WEALTH_INTERPRET_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}  # 理财解读模型API地址
-    api-key: ${WEALTH_INTERPRET_API_KEY:sk-b545467bbc0f4270a842519ca69d9860}                # 理财解读模型API密钥
-    model: ${WEALTH_INTERPRET_MODEL:qwen-plus}                                               # 理财解读模型名称
+    base-url: ${WEALTH_INTERPRET_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}  # 理财解读模型API地址
+    api-key: ${WEALTH_INTERPRET_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                # 理财解读模型API密钥
+    model: ${WEALTH_INTERPRET_MODEL:qwen3.6-35b-a3b}                                               # 理财解读模型名称
 
 # ==================== 路由配置 ====================
 # 绑定到 SubGraphProperties, 新增领域只需改yml不动Java

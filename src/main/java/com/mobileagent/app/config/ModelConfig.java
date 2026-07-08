@@ -1,5 +1,7 @@
 package com.mobileagent.app.config;
 
+import com.mobileagent.app.observability.ObsChatModel;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -9,6 +11,7 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import java.util.Map;
 
 /**
  * 多模型配置 - L0/L1/L2各层独立ChatClient
@@ -27,10 +30,21 @@ import org.springframework.context.annotation.Configuration;
  *
  * 对话历史统一使用 GlobalSessionContext.messages,
  * 不再使用 Spring AI ChatMemory。
+ *
+ * OTel 可观测增强:
+ *   所有 ChatModel 均通过 ObsChatModel 包装，自动采集 llm.* 5 项指标:
+ *   llm.token.input, llm.token.output, llm.first_token.latency,
+ *   llm.operation.duration, llm.error.count
  */
 @Slf4j
 @Configuration
 public class ModelConfig {
+
+    private final MeterRegistry meterRegistry;
+
+    public ModelConfig(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
 
     // ==================== domain: L0 领域路由 ====================
 
@@ -40,7 +54,7 @@ public class ModelConfig {
             @Value("${models.domain.api-key}") String apiKey,
             @Value("${models.domain.model}") String model) {
         log.info("[ModelConfig] domainChatModel: baseUrl={}, model={}", baseUrl, model);
-        return buildChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model);
     }
 
     @Bean("domainChatClient")
@@ -56,7 +70,7 @@ public class ModelConfig {
             @Value("${models.context.api-key}") String apiKey,
             @Value("${models.context.model}") String model) {
         log.info("[ModelConfig] contextChatModel: baseUrl={}, model={}", baseUrl, model);
-        return buildChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model);
     }
 
     @Bean("contextChatClient")
@@ -72,7 +86,7 @@ public class ModelConfig {
             @Value("${models.intent.api-key}") String apiKey,
             @Value("${models.intent.model}") String model) {
         log.info("[ModelConfig] intentChatModel: baseUrl={}, model={}", baseUrl, model);
-        return buildChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model);
     }
 
     @Bean("intentChatClient")
@@ -88,7 +102,7 @@ public class ModelConfig {
             @Value("${models.param-extract.api-key}") String apiKey,
             @Value("${models.param-extract.model}") String model) {
         log.info("[ModelConfig] paramExtractChatModel: baseUrl={}, model={}", baseUrl, model);
-        return buildChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model);
     }
 
     @Bean("paramExtractChatClient")
@@ -104,7 +118,7 @@ public class ModelConfig {
             @Value("${models.wealth-interpret.api-key}") String apiKey,
             @Value("${models.wealth-interpret.model}") String model) {
         log.info("[ModelConfig] wealthInterpretChatModel: baseUrl={}, model={}", baseUrl, model);
-        return buildChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model);
     }
 
     @Bean("wealthInterpretChatClient")
@@ -120,7 +134,7 @@ public class ModelConfig {
             @Value("${models.chat.api-key}") String apiKey,
             @Value("${models.chat.model}") String model) {
         log.info("[ModelConfig] chatChatModel: baseUrl={}, model={}", baseUrl, model);
-        return buildChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model);
     }
 
     @Bean("chatChatClient")
@@ -130,16 +144,24 @@ public class ModelConfig {
 
     // ==================== 工具方法 ====================
 
-    private ChatModel buildChatModel(String baseUrl, String apiKey, String model) {
+    /**
+     * 构建 OpenAiChatModel 并用 ObsChatModel 包装以采集 llm.* 指标。
+     *
+     * streamUsage=true 使 OpenAI 在流式响应的最后一个 chunk 中返回 usage 信息，
+     * ObsChatModel 优先使用精确 usage，拿不到则走 content.length()/1.5 估算兜底。
+     */
+    private ChatModel wrapWithObsChatModel(String baseUrl, String apiKey, String model) {
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .build();
-        return OpenAiChatModel.builder()
+        OpenAiChatModel originalModel = OpenAiChatModel.builder()
                 .openAiApi(api)
                 .defaultOptions(OpenAiChatOptions.builder()
                         .model(model)
+                        .extraBody(Map.of("enable_thinking", false))
                         .build())
                 .build();
+        return new ObsChatModel(originalModel, meterRegistry, model);
     }
 }

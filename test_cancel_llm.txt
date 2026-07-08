@@ -1,25 +1,0 @@
-﻿1. BillNCS-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨)
-2. BillNCS-不查了 | status=INTERRUPTED | content=
-3. WealthInterpNCS-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦è§£è¯»åªä¸ªçè´¢äº§åï¼(å¦:ç¨³å©å®ãæ±æ·»å¯ç­)
-4. WealthInterpNCS-不想要了 | status=INTERRUPTED | content=
-5. DisambigNCS-Start | status=DISAMBIGUATION | question=è¯·é®æ¨éè¦çè´¢å¨è¯¢è¿æ¯çè´¢äº§åè§£è¯»ï¼
-6. DisambigNCS-算了不问了 | status=COMPLETED | content=å¥½ç,å·²åæ¶å½åæä½ãè¿æä»ä¹å¯ä»¥å¸®æ¨çåï¼
-7. TransferCancel-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
-8. TransferCancel-取消 | status=INTERRUPTED | content=
-9. BillCancel-算Liao | status=INTERRUPTED | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨)
-10. BillCancel-算了 | status=INTERRUPTED | content=
-11. TCancelFull-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
-12. TCancelFull-取消转账 | status=COMPLETED | content=å¥½ç,å·²åæ¶å½åæä½ãè¿æä»ä¹å¯ä»¥å¸®æ¨çåï¼
-13. CancelNothing-取消 | status=COMPLETED | content=å½åæ²¡æè¿è¡ä¸­çæä½ãæä»ä¹å¯ä»¥å¸®æ¨çåï¼
-14. Edge-BieZhuanLe-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
-15. Edge-BieZhuanLe-别转了 | status=INTERRUPTED | content=
-16. Basic-Transfer | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬ç»è°ï¼
-17. Basic-Payee | status=INTERRUPTED | question=è¯·é®æ¨è¦è½¬å¤å°éé¢ï¼
-18. Basic-Amount | status=COMPLETED | content=è½¬è´¦æåï¼å·²åå¼ ä¸è½¬è´¦100åãäº¤ææµæ°´å·ï¼TXN372061
-19. FollowUp-Start | status=INTERRUPTED | question=è¯·é®æ¨è¦æ¥è¯¢åªä¸ªæ¶é´æ®µçè´¦åï¼(å¦:ä¸ä¸ªæãæè¿ä¸å¨)
-20. FollowUp-Answer | status=COMPLETED | content=ä¸ä¸ªæçè´¦åæç»ï¼
-- é¤é¥®: 356.50å (05æ18æ¥)
-- äº¤é: 128.00å (05æ17æ¥)
-- è´­ç©: 899.00å (05æ16æ¥)
-- æ°´çµè´¹: 245.30å (05æ14æ¥)
-åè®¡: 1628.80å

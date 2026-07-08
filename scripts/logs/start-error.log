@@ -1,0 +1,14 @@
+﻿./mvnw.cmd : icm : Cannot index into a null array.
+所在位置 行:4 字符: 1
++ ./mvnw.cmd spring-boot:run -e 2>&1 | Out-File -FilePath start-error.l ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (icm : Cannot index into a null array.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+At line:1 char:77
++ ... 'mvnw.cmd'; icm -ScriptBlock ([Scriptblock]::Create((Get-Content -Raw ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [Invoke-Command], RuntimeException
+    + FullyQualifiedErrorId : NullArray,Microsoft.PowerShell.Commands.InvokeCommandCommand
+ 
+Cannot start maven from wrapper  

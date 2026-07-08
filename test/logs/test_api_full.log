@@ -1,0 +1,75 @@
+============================================================
+  Mobile AI Bank — 可观测系统 API 全量测试
+  Base URL: http://127.0.0.1:9090
+  Start:    2026-06-26 11:35:21
+============================================================
+
+--- T01: 基础设施测试 ---
+  [PASS] TC-T01-001: 8 张表存在性 (所有核心 endpoint 返回 code=0)
+  [PASS] TC-T01-003: /health 返回 status=UP
+  [PASS] TC-T01-004: Redis 连接状态 (settings/storage 含 redisStatus)
+  [PASS] TC-T01-006: H2 CRUD (POST 告警规则 → GET 验证 → DELETE)
+
+--- T02: 后端数据层 REST API 测试 ---
+  [Session API]
+  [PASS] TC-T02-001: GET /api/v1/sessions 无参数 → code=0
+  [PASS] TC-T02-001a: sessions 返回含 content 数组 + totalElements/totalPages
+  [PASS] TC-T02-002: GET /api/v1/sessions?sessionId=seed → 模糊搜索生效
+  [PASS] TC-T02-003: GET /api/v1/sessions?status=completed → 状态筛选
+  [PASS] TC-T02-004: GET /api/v1/sessions?userId=nonexistent → 空 content[], 不报错
+  [PASS] TC-T02-005: GET /api/v1/sessions/seed-am1 → 含 turns 数组
+  [PASS] TC-T02-006: GET /api/v1/sessions/nonexistent → 404 (业务码或HTTP)
+  [Agent Performance]
+  [PASS] TC-T02-010: GET agent-performance?dimension=agent → byAgent 数组非空
+  [PASS] TC-T02-011: GET agent-performance?dimension=llm → byModel 数组非空
+  [Token Cost]
+  [PASS] TC-T02-014: GET token-cost?groupBy=model → breakdown 数组非空
+  [PASS] TC-T02-015: GET token-cost?groupBy=intent → 同上
+  [PASS] TC-T02-016: GET token-cost?groupBy=agent → 同上
+  [Tools / Skills / Funnel / Satisfaction]
+  [PASS] TC-T02-017: GET /api/v1/ai/tool-stats → code=0
+  [PASS] TC-T02-018: GET /api/v1/ai/skill-stats → code=0 或 501 (P1 未实现)
+  [PASS] TC-T02-019: GET /api/v1/ai/conversion-funnel → stages 含5阶段
+  [PASS] TC-T02-020: GET /api/v1/ai/satisfaction → distribution/trend 字段存在
+  [Accuracy]
+  [PASS] TC-T02-022: GET intent-accuracy-trend → series 数组非空
+  [PASS] TC-T02-023: GET confusion-matrix → labels+matrix 字段存在
+  [Alerts & Settings]
+  [PASS] TC-T02-024: CRUD /api/v1/alerts/rules: POST → GET → PUT → DELETE
+  [PASS] TC-T02-025: GET /api/v1/alerts/events → 数组/分页响应
+  [PASS] TC-T02-026: GET /api/v1/settings/collection → 配置对象
+  [PASS] TC-T02-027: GET /api/v1/settings/storage → 含 redisStatus
+  [Extended APIs]
+  [PASS] TC-T02-028: GET /api/v1/metrics/realtime → 扩展字段 (dau/qps 等)
+  [PASS] TC-T02-029: GET /api/v1/traces?sessionId=seed-am1 → 筛选生效
+  [PASS] TC-T02-030: GET /api/v1/logs?level=INFO&page=0&size=3 → 返回日志数组
+
+--- T05: OTel 埋点验证 ---
+  [PASS] TC-T05-001: GET /api/v1/traces → spans 表有数据（非空）
+  [PASS] TC-T05-002: GET /api/v1/metrics/history → metrics_agg 表有数据
+  [PASS] TC-T05-003: Session seed-am1 详情中 traceId 字段非空
+  [PASS] TC-T05-004: agent-performance ttftP50 等字段非负
+  [PASS] TC-T05-005: metrics/realtime 含 ttftP50Ms/ttftP95Ms/ttftP99Ms
+  [PASS] TC-T05-006: Trace 详情含 span 树数据
+  [PASS] TC-T05-007: 日志条目含 traceId 关联
+  [PASS] TC-T05-008: agent-performance?dimension=llm → LLM 调用已追踪
+  [PASS] TC-T05-009: token-cost 从种子数据中聚合 Token 用量
+  [PASS] TC-T05-010: metrics/realtime 含 intentDistribution（意图分布）
+
+--- 边缘情况测试 ---
+  [PASS] EDGE-001: 不存在的 sessionId → 返回 404 不报 500
+  [PASS] EDGE-002: 分页极端值 page=500, size=200 → 不报错
+  [PASS] EDGE-005: 时间范围反向 from > to → 不报 500
+  [PASS] EDGE-006: SQL 注入 userId=' OR '1'='1 → 安全处理，不报 500
+  [PASS] EDGE-009: CORS OPTIONS /api/v1/sessions → 返回允许头
+  [PASS] EDGE-010: 超长 sessionId (10000 字符) → 优雅处理，不报 500
+
+============================================================
+  Total: 45
+  PASS:  45
+  FAIL:  0
+  通过率: 100.0%
+============================================================
+
+  Duration: 1.6s
+  Finished: 2026-06-26 11:35:23

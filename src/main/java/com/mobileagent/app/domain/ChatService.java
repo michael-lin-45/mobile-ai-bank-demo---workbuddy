@@ -1,6 +1,7 @@
 package com.mobileagent.app.domain;
 
 import com.mobileagent.app.data.StreamChunk;
+import com.mobileagent.app.observability.AgentSpanContext;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -52,7 +53,13 @@ public class ChatService implements DomainHandler {
                 promptBuilder = promptBuilder.user(userInput);
             }
 
-            String content = promptBuilder.call().content();
+            AgentSpanContext.set("L1", "ChatService", "CHAT", sessionId, null);
+            String content;
+            try {
+                content = promptBuilder.call().content();
+            } finally {
+                AgentSpanContext.clear();
+            }
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[ChatService] LLM call completed in {}ms", elapsedMs);
 

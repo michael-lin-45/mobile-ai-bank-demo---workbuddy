@@ -9,6 +9,7 @@ import com.mobileagent.app.memory.model.DomainState;
 import com.mobileagent.app.memory.GlobalSessionContext;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.execution.GraphExecutionEngine;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.router.subgraph.ContextRouter;
 import com.mobileagent.app.router.registry.SubGraphRegistry;
 import lombok.Data;
@@ -43,6 +44,7 @@ public abstract class AbstractDomainService implements DomainHandler {
     protected final GraphExecutionEngine graphExecutionEngine;
     protected final SubGraphRegistry subGraphRegistry;
     protected final GlobalSessionStateStore globalSessionStore;
+    protected final ObservabilityMetrics obsMetrics;
     protected final long activeAgentExpireMinutes;
     protected final int l1DomainPairs;
 
@@ -66,6 +68,7 @@ public abstract class AbstractDomainService implements DomainHandler {
                                     GraphExecutionEngine graphExecutionEngine,
                                     SubGraphRegistry subGraphRegistry,
                                     GlobalSessionStateStore globalSessionStore,
+                                    ObservabilityMetrics obsMetrics,
                                     long activeAgentExpireMinutes,
                                     int l1DomainPairs) {
         this.domainName = domainName;
@@ -75,6 +78,7 @@ public abstract class AbstractDomainService implements DomainHandler {
         this.graphExecutionEngine = graphExecutionEngine;
         this.subGraphRegistry = subGraphRegistry;
         this.globalSessionStore = globalSessionStore;
+        this.obsMetrics = obsMetrics;
         this.activeAgentExpireMinutes = activeAgentExpireMinutes;
         this.l1DomainPairs = l1DomainPairs;
     }
@@ -141,6 +145,8 @@ public abstract class AbstractDomainService implements DomainHandler {
                     ds.getActiveAgent().setLastQuestion(chunk.getQuestion());
                 }
             });
+            // 埋点：追问槽位 +1
+            obsMetrics.incrementAskbackSlot();
         } else if (chunk.getType() == ChunkType.COMPLETE) {
             ctx.updateDomainState(getStateKey(), ds -> {
                 if (ds.getActiveAgent() != null) {
@@ -148,6 +154,11 @@ public abstract class AbstractDomainService implements DomainHandler {
                 }
                 ds.setActiveAgent(null);
             });
+            // 埋点：L2 完成 → 技能/会话/业务结果
+            String intent = active.getIntent();
+            obsMetrics.recordSkillOutcome(intent, "success");
+            obsMetrics.recordSessionCompleted(intent, "success");
+            obsMetrics.recordBusinessOutcome(intent, "success");
         }
     }
 
@@ -168,6 +179,8 @@ public abstract class AbstractDomainService implements DomainHandler {
     protected Flux<StreamChunk> resumeActiveAgent(String sessionId, String userInput, ActiveAgentInfo active) {
         log.info("[{}] FOLLOW with own activeAgent: intent={}, threadId={}", logTag, active.getIntent(), active.getThreadId());
 
+        obsMetrics.recordStateTransition("FOLLOW");
+
         var graph = subGraphRegistry.getGraph(active.getIntent());
         if (graph == null) {
             return Flux.just(StreamChunk.error("Graph not found for intent: " + active.getIntent()));
@@ -185,6 +198,8 @@ public abstract class AbstractDomainService implements DomainHandler {
         if (graph == null) {
             return Flux.just(StreamChunk.error("Graph not found for intent: " + intent));
         }
+
+        obsMetrics.recordStateTransition("SWITCH");
 
         String threadId = generateThreadId(sessionId, intent);
         Map<String, Object> input = buildGraphInput(sessionId, rewrittenInput);
@@ -237,5 +252,33 @@ public abstract class AbstractDomainService implements DomainHandler {
     @Override
     public String getDomainName() {
         return domainName;
+    }
+
+    // ==================== 意图准确率埋点 ====================
+
+    /**
+     * 记录意图准确率（四态标签 §5.7）。
+     * 在 L2 执行完成后，由子类调用。
+     *
+     * @param predictedIntent   L1-LLM2 预测的意图
+     * @param actualIntent      L2 实际执行的意图
+     * @param wasDisambiguated  是否经过消歧流程
+     * @param triggeredReroute  是否触发了 REROUTE
+     */
+    protected void recordIntentAccuracy(String predictedIntent, String actualIntent,
+                                         boolean wasDisambiguated, boolean triggeredReroute) {
+        String state;
+        if (wasDisambiguated) {
+            state = "disambiguated";
+        } else if (predictedIntent != null && predictedIntent.equals(actualIntent)) {
+            state = "correct";
+        } else if (triggeredReroute) {
+            state = "error";
+        } else {
+            state = "fuzzy";
+        }
+        obsMetrics.recordIntentAccuracy(state,
+                predictedIntent != null ? predictedIntent : "UNKNOWN",
+                actualIntent != null ? actualIntent : "UNKNOWN");
     }
 }

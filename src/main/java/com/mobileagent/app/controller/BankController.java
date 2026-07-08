@@ -6,6 +6,9 @@ import com.mobileagent.app.domain.DomainHandler;
 import com.mobileagent.app.memory.GlobalSessionContext;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.infrastructure.SseOutputAdapter;
+import com.mobileagent.app.observability.ObservabilityMetrics;
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.Span;
 import com.mobileagent.app.router.registry.DomainServiceRegistry;
 import com.mobileagent.app.router.domain.DomainRouter;
 import jakarta.servlet.http.HttpServletResponse;
@@ -50,16 +53,22 @@ public class BankController {
     private final DomainRouter domainRouter;
     private final DomainServiceRegistry domainServiceRegistry;
     private final GlobalSessionStateStore globalSessionStore;
+    private final ObservabilityMetrics obsMetrics;
     private final SseOutputAdapter sseAdapter;
+    private final com.mobileagent.app.observability.SessionBridge sessionBridge;
 
     public BankController(DomainRouter domainRouter,
                           DomainServiceRegistry domainServiceRegistry,
                           GlobalSessionStateStore globalSessionStore,
-                          SseOutputAdapter sseAdapter) {
+                          ObservabilityMetrics obsMetrics,
+                          SseOutputAdapter sseAdapter,
+                          com.mobileagent.app.observability.SessionBridge sessionBridge) {
         this.domainRouter = domainRouter;
         this.domainServiceRegistry = domainServiceRegistry;
         this.globalSessionStore = globalSessionStore;
+        this.obsMetrics = obsMetrics;
         this.sseAdapter = sseAdapter;
+        this.sessionBridge = sessionBridge;
     }
 
     @PostMapping(value = "/chat", produces = {
@@ -94,18 +103,34 @@ public class BankController {
     // ==================== 管道构建 ====================
 
     private Flux<StreamChunk> buildChatPipeline(String sessionId, String userInput) {
+        long pipelineStartMs = System.currentTimeMillis();
         Set<String> excludedDomains = new HashSet<>();
         AtomicInteger rerouteCount = new AtomicInteger(0);
 
         GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
         ctx.addUserMessage(userInput);
 
+        // 埋点：会话创建（首次请求时 session 可能刚创建）
+        obsMetrics.recordSessionCreated();
+
         // 创建Accumulator用于积累Chunk的回复
         AtomicReference<String> currentDomainRef = new AtomicReference<>();
         AssistantAccumulator accumulator = new AssistantAccumulator(ctx, currentDomainRef);
 
         return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount, currentDomainRef)
-                .doOnNext(accumulator::onChunk);
+                .doOnNext(accumulator::onChunk)
+                .doOnTerminate(() -> {
+                    // 会话桥接：异步写入可观测后端 sessions 表
+                    String reply = accumulator.getFullReply();
+                    if (reply != null && !reply.isEmpty()) {
+                        sessionBridge.reportSession(sessionId, userInput, reply,
+                                currentDomainRef.get() != null ? currentDomainRef.get() : "CHAT",
+                                currentDomainRef.get() != null ? "L0→L1→L2(" + currentDomainRef.get() + ")" : "L0→L1(CHAT)",
+                                0.0,
+                                System.currentTimeMillis() - pipelineStartMs,
+                                0, getCurrentTraceId(), "COMPLETED");
+                    }
+                });
     }
 
     private Flux<StreamChunk> dispatchWithReroute(String sessionId, String userInput,
@@ -122,6 +147,7 @@ public class BankController {
 
         if (excludedDomains.contains(currentDomain)) {
             rerouteCount.incrementAndGet();
+            obsMetrics.recordReroute(currentDomain);
             log.warn("[BankController] L0 routed to excluded domain={}, counting as failed attempt ({}/{})",
                     currentDomain, rerouteCount.get(), maxRerouteAttempts);
             if (rerouteCount.get() >= maxRerouteAttempts) {
@@ -138,6 +164,7 @@ public class BankController {
             }
             excludedDomains.add(currentDomain);
             rerouteCount.incrementAndGet();
+            obsMetrics.recordReroute(currentDomain);
             log.info("[BankController] REROUTE #{}: domain={} excluded, rerouteIntent={}, rerouteHint={}, excluded={}",
                     rerouteCount.get(), currentDomain, chunk.getRerouteIntent(), chunk.getRerouteHint(), excludedDomains);
             if (rerouteCount.get() >= maxRerouteAttempts) {
@@ -200,6 +227,19 @@ public class BankController {
         return Map.of("status", "cleared", "sessionId", sessionId);
     }
 
+    /** Get current OTel traceId from context */
+    private String getCurrentTraceId() {
+        try {
+            Span currentSpan = Span.current();
+            if (currentSpan != null && currentSpan.getSpanContext().isValid()) {
+                return currentSpan.getSpanContext().getTraceId();
+            }
+        } catch (Exception e) {
+            log.debug("[BankController] Failed to get traceId: {}", e.getMessage());
+        }
+        return "";
+    }
+
     // ==================== 流式助手消息累积器 ====================
 
     /**
@@ -211,6 +251,8 @@ public class BankController {
         private final GlobalSessionContext ctx;
         private final AtomicReference<String> domainRef;
         private final StringBuilder accumulator = new StringBuilder();
+        /** 非流式场景下 terminal chunk 的 replyContent（getFullReply 兜底用） */
+        private String lastTerminalReply = null;
 
         public AssistantAccumulator(GlobalSessionContext ctx, AtomicReference<String> domainRef) {
             this.ctx = ctx;
@@ -227,8 +269,17 @@ public class BankController {
                         : chunk.getReplyContent();
                 if (fullReply != null && !fullReply.isEmpty()) {
                     ctx.addAssistantMessage(fullReply);
+                    // 缓存 terminal chunk 的内容，确保非流式场景下 getFullReply() 有值
+                    if (accumulator.length() == 0) {
+                        this.lastTerminalReply = fullReply;
+                    }
                 }
             }
+        }
+
+        public String getFullReply() {
+            if (accumulator.length() > 0) return accumulator.toString();
+            return lastTerminalReply != null ? lastTerminalReply : "";
         }
     }
 }

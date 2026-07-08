@@ -2,6 +2,8 @@ package com.mobileagent.app.router.subgraph;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.observability.AgentSpanContext;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.router.registry.SubGraphRegistry;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
@@ -26,13 +28,16 @@ public class SubGraphRouter {
     private final ChatClient chatClient;
     private final SubGraphRegistry subGraphRegistry;
     private final ObjectMapper objectMapper;
+    private final ObservabilityMetrics obsMetrics;
 
     public SubGraphRouter(@Qualifier("intentChatClient") ChatClient chatClient,
                            SubGraphRegistry subGraphRegistry,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           ObservabilityMetrics obsMetrics) {
         this.chatClient = chatClient;
         this.subGraphRegistry = subGraphRegistry;
         this.objectMapper = objectMapper;
+        this.obsMetrics = obsMetrics;
     }
 
     private static final String DEFAULT_TEMPLATE_PATH = "prompts/l1-intention.st";
@@ -66,11 +71,17 @@ public class SubGraphRouter {
                     domainIntentScopeList);
 
             long startMs = System.currentTimeMillis();
-            String content = chatClient.prompt()
-                    .system(systemPrompt)
-                    .user(userInput)
-                    .call()
-                    .content();
+            AgentSpanContext.set("L1-LLM2", "SubGraphRouter", null, sessionId, null);
+            String content;
+            try {
+                content = chatClient.prompt()
+                        .system(systemPrompt)
+                        .user(userInput)
+                        .call()
+                        .content();
+            } finally {
+                AgentSpanContext.clear();
+            }
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[SubGraphRouter] LLM call completed in {}ms | sessionId={}, userInput={}", elapsedMs, sessionId, userInput);
             log.debug("[SubGraphRouter] LLM raw response: {}", content);
@@ -79,6 +90,13 @@ public class SubGraphRouter {
             log.info("[SubGraphRouter] Result: intent={}, routeType={}, rewritten={}, confidence={}",
                     result.getIntentName(), result.getRefinedRouteType(),
                     result.getRewrittenInput(), result.getConfidence());
+
+            // 埋点：改写准确率轻量信号（实体守恒 + 代词检测）
+            checkRewriteAccuracy(userInput, result);
+            obsMetrics.recordRewriteTotal();
+            // 埋点：L1 意图识别调用计数（解锁 P0-5/P1-2 backend agent_call:L1 聚合）
+            obsMetrics.recordL1Call("intent_identify", result.getIntentName());
+
             return result;
 
         } catch (Exception e) {
@@ -195,5 +213,89 @@ public class SubGraphRouter {
 
     private String loadTemplate(String path) {
         return TemplateUtils.loadTemplate(path);
+    }
+
+    // ==================== 改写准确率轻量信号 (§5.7) ====================
+
+    /**
+     * 改写准确率轻量检测 — 实体守恒 + 金额归一 + 代词残留检测。
+     * 只写 rule_check tag，完整规则由后端可观测侧离线评估。
+     *
+     * 检测项:
+     *   P0: 原始实体（人名/金额/时间）在改写后必须出现
+     *   P1: 代词残留检测（"他/她/它/这个/那个/刚才"）
+     *   —: 金额规则覆盖「万」+「千」
+     */
+    private void checkRewriteAccuracy(String originalInput, RoutingResult result) {
+        String rewritten = result.getRewrittenInput();
+        if (rewritten == null || rewritten.equals(originalInput)) {
+            // 未改写 → 跳过
+            return;
+        }
+
+        String domain = result.getIntentName() != null ? result.getIntentName() : "UNKNOWN";
+        String ruleCheck = "pass";
+
+        // P1: 代词残留检测
+        if (containsAny(rewritten, "他", "她", "它", "这个", "那个", "刚才")) {
+            ruleCheck = "pronoun_unresolved";
+        }
+
+        // P0: 金额归一检测 (original 含非标准金额但 rewritten 未归一)
+        if ("pass".equals(ruleCheck) && containsAmount(originalInput)) {
+            if (!isAmountNormalized(rewritten)) {
+                ruleCheck = "amount_not_normalized";
+            }
+        }
+
+        // P0: 实体守恒检测 (数字实体在改写后必须出现)
+        if ("pass".equals(ruleCheck)) {
+            java.util.List<String> originalEntities = extractNumberEntities(originalInput);
+            if (!originalEntities.isEmpty()) {
+                boolean allPresent = true;
+                for (String entity : originalEntities) {
+                    if (!rewritten.contains(entity)) {
+                        allPresent = false;
+                        break;
+                    }
+                }
+                if (!allPresent) {
+                    ruleCheck = "entity_lost";
+                }
+            }
+        }
+
+        obsMetrics.recordRewriteAccuracy(ruleCheck, domain);
+    }
+
+    /** 检测文本是否包含非标准金额表达（万/千/元/块） */
+    private boolean containsAmount(String text) {
+        return java.util.regex.Pattern.compile("[0-9]+[万千百]|[0-9]+(\\.\\d+)?[元块]")
+                .matcher(text).find();
+    }
+
+    /** 检测改写后金额是否已归一为标准数字 */
+    private boolean isAmountNormalized(String text) {
+        // 简单检测：改写后不应出现金额归一的目标格式残差
+        return !java.util.regex.Pattern.compile("[0-9]+[万千百](?!元|块|美元)")
+                .matcher(text).find();
+    }
+
+    /** 提取数字实体（金额、数量等） */
+    private java.util.List<String> extractNumberEntities(String text) {
+        java.util.List<String> entities = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\d+(\\.\\d+)?[万千百元块]?")
+                .matcher(text);
+        while (m.find()) {
+            entities.add(m.group());
+        }
+        return entities;
+    }
+
+    private boolean containsAny(String text, String... keywords) {
+        for (String kw : keywords) {
+            if (text.contains(kw)) return true;
+        }
+        return false;
     }
 }

@@ -1,0 +1,35 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlphttp/json_backend:
+    endpoint: http://127.0.0.1:9090
+    tls:
+      insecure: true
+    encoding: json
+    compression: none
+
+# 内部遥测 Prometheus 端口改为 8887（避免与其它 Collector 8888 冲突）
+# 注意: address 字段在 v0.123+ 已弃用，必须用 readers/prometheus 格式
+service:
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 127.0.0.1
+                port: 8887
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/json_backend]
+    metrics:
+      receivers: [otlp]
+      exporters: [otlphttp/json_backend]
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp/json_backend]

@@ -1,0 +1,61 @@
+spring:
+  application:
+    name: observability-backend
+  # ── H2 文件数据库 ──
+  datasource:
+    url: jdbc:h2:file:./data/observability;MODE=MySQL;DATABASE_TO_LOWER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+  sql:
+    init:
+      mode: never
+      schema-locations: classpath:schema.sql
+  # ── Redis 连接 ──
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+
+# ==================== 服务配置 ====================
+server:
+  port: 9090
+  tomcat:
+    connection-timeout: 10s          # 连接超时（默认 20s，缩短防止 CLOSE_WAIT 堆积）
+    keep-alive-timeout: 15s          # Keep-Alive 空闲超时，强制回收僵尸连接
+    max-keep-alive-requests: 100     # 单连接最大复用次数
+    max-connections: 200             # 最大并发连接数
+    accept-count: 50                 # 等待队列长度
+  shutdown: graceful
+  lifecycle-timeout-per-phase: 15s
+
+# ==================== CORS ====================
+app:
+  cors:
+    allowed-origins: http://localhost:3000,http://127.0.0.1:3000
+
+# ==================== 日志 ====================
+logging:
+  level:
+    com.observability: DEBUG
+    org.springframework.web: INFO
+    org.hibernate: WARN

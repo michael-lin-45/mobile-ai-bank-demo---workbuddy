@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- 继承Spring Boot默认控制台输出格式，不改变原有日志输出效果 -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+    <!-- OTLP日志上报Appender，直接对接现有可观测后端 -->
+    <appender name="OTLP" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
+        <endpointUrl>http://127.0.0.1:9090/v1/logs</endpointUrl>
+        <!-- 上报所有MDC标签：traceId/spanId/AI模型名/智能体名/用户ID -->
+        <captureMdcAttributes>*</captureMdcAttributes>
+    </appender>
+    <springProfile name="otel">
+        <!-- OTLP profile: 同时输出控制台+OTLP -->
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="OTLP"/>
+        </root>
+    </springProfile>
+    <springProfile name="!otel">
+        <!-- Default profile: 仅输出控制台（本地开发无需OTLP） -->
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+</configuration>

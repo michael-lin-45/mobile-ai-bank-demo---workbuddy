@@ -1,0 +1,45 @@
+==========================================
+  Mobile AI Bank — Data Seed
+==========================================
+
+>>> zhangsan-01: Transfer (3 turns)
+  [COMPLETED] TRANSFER - 转账成功！已向Li Si转账50000元。交易流水号：TXN72434
+  [COMPLETED] None - 抱歉，暂时无法识别您的请求，请换个方式描述。
+  [COMPLETED] CHAT - 抱歉，暂时无法识别您的请求，请您具体说明需要办理的业务类型。
+
+>>> zhangsan-02: Bill query (2 turns)
+  [COMPLETED] BILL_QUERY - 上个月的账单明细(收支)：
+- 餐饮: 356.50元 (07月07日)
+- 交
+  [COMPLETED] BILL_QUERY - 上个月的账单明细(支出)：
+- 餐饮: 356.50元 (07月07日)
+- 交
+
+>>> wangwu-01: Wealth full chain (5 turns inc REROUTE)
+  (sent)
+  (sent)
+  [COMPLETED] CHAT - 如果您有其他问题或需要进一步了解理财产品、转账、账单查询等操作，欢迎随时告诉我！
+  [COMPLETED] TRANSFER - 转账成功！已向Zhao Liu转账30000元。交易流水号：TXN141696
+  [COMPLETED] None - 抱歉，暂时无法识别您的请求，请换个方式描述。
+
+>>> xiaomei-01: Disambiguation (2 turns)
+  (sent)
+  (sent)
+
+>>> laoliu-01: Cancel transfer (2 turns)
+  [COMPLETED] TRANSFER - 转账成功！已向Zhang San转账500元。交易流水号：TXN176213
+  [COMPLETED] None - 抱歉，暂时无法识别您的请求，请换个方式描述。
+
+>>> aming-01: Aggressive wealth (3 turns)
+  (sent)
+  (sent)
+  (sent)
+
+>>> xiaoming-01: Chat (2 turns)
+  [COMPLETED] CHAT - 你好！有什么可以帮到你的吗？比如转账、查询账单或者了解理财产品？
+  [COMPLETED] BILL_QUERY - 上个月的账单明细(收入)：
+- 工资收入: 15000.00元 (06月28日)
+
+==========================================
+Done! 7 sessions, 19 turns
+==========================================

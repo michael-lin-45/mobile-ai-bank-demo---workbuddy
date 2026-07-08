@@ -3,6 +3,7 @@ package com.mobileagent.app.domain;
 import com.mobileagent.app.data.RoutingResolution;
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.StreamChunk;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.memory.model.ActiveAgentInfo;
 import com.mobileagent.app.memory.model.DisambiguationState;
 import com.mobileagent.app.memory.model.DomainState;
@@ -45,7 +46,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     private MultiSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.domainKey,
                 builder.contextRouter, builder.graphExecutionEngine, builder.subGraphRegistry,
-                builder.globalSessionStore, builder.activeAgentExpireMinutes,
+                builder.globalSessionStore, builder.obsMetrics, builder.activeAgentExpireMinutes,
                 builder.l1DomainPairs);
         this.intentResolver = builder.intentResolver;
         this.contextRoutingTemplatePath = builder.contextRoutingTemplatePath != null
@@ -73,6 +74,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         private GraphExecutionEngine graphExecutionEngine;
         private SubGraphRegistry subGraphRegistry;
         private GlobalSessionStateStore globalSessionStore;
+        private ObservabilityMetrics obsMetrics;
         private String contextRoutingTemplatePath;
         private String intentRoutingTemplatePath;
         private String rejectedMessage;
@@ -90,6 +92,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder subGraphRegistry(SubGraphRegistry subGraphRegistry) { this.subGraphRegistry = subGraphRegistry; return this; }
         public Builder globalSessionStore(GlobalSessionStateStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
+        public Builder obsMetrics(ObservabilityMetrics obsMetrics) { this.obsMetrics = obsMetrics; return this; }
         public Builder contextRoutingTemplatePath(String contextRoutingTemplatePath) { this.contextRoutingTemplatePath = contextRoutingTemplatePath; return this; }
         public Builder intentRoutingTemplatePath(String intentRoutingTemplatePath) { this.intentRoutingTemplatePath = intentRoutingTemplatePath; return this; }
         public Builder rejectedMessage(String rejectedMessage) { this.rejectedMessage = rejectedMessage; return this; }
@@ -108,6 +111,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
             Objects.requireNonNull(subGraphRegistry, "subGraphRegistry is required");
             Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
+            Objects.requireNonNull(obsMetrics, "obsMetrics is required");
             String routingPath = contextRoutingTemplatePath != null ? contextRoutingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
             String intentionPath = intentRoutingTemplatePath != null ? intentRoutingTemplatePath : DEFAULT_INTENTION_TEMPLATE;
             TemplateUtils.warmUp(routingPath);
@@ -300,12 +304,16 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 if (!isOwnIntent(effectiveIntent)) {
                     log.info("[{}] Cross-domain intent detected: intent={} not in handledIntents, → REROUTE",
                             logTag, effectiveIntent);
+                    // 埋点：意图准确率错误（跨域 REROUTE）
+                    recordIntentAccuracy(effectiveIntent, effectiveIntent, isInDisambiguation(sessionId), true);
                     return Flux.just(StreamChunk.reroute(effectiveIntent, null));
                 }
 
                 if (resolution.isOutOfDomain()) {
                     log.info("[{}] Out-of-domain intent detected: intent={}, → REROUTE",
                             logTag, effectiveIntent);
+                    // 埋点：意图准确率错误（出域 REROUTE）
+                    recordIntentAccuracy(effectiveIntent, effectiveIntent, isInDisambiguation(sessionId), true);
                     return Flux.just(StreamChunk.reroute(effectiveIntent, null));
                 }
             }
@@ -329,6 +337,8 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                         clearOwnActiveAgent(sessionId);
                         log.info("[{}] Disambiguation: suspended own activeAgent intent={}, threadId={}", logTag, active.getIntent(), active.getThreadId());
                     }
+                    // 埋点：意图准确率（消歧状态）
+                    recordIntentAccuracy(resolution.getIntentName(), resolution.getIntentName(), true, false);
                     String groupId = resolveGroupId(resolution);
                     if (groupId != null) {
                         setDisambiguationState(sessionId, new DisambiguationState(groupId));
@@ -351,16 +361,32 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
     // ==================== 路由执行 ====================
 
     private Flux<StreamChunk> executeRoute(String sessionId, RoutingResolution resolution) {
+        String predictedIntent = resolution.getIntentName();
+        boolean wasDisambiguated = isInDisambiguation(sessionId);
+
         if (!"RESUME".equals(resolution.getRouteType())
                 && getOwnSuspendedAgent(sessionId, resolution.getIntentName()) != null) {
             log.info("[{}] Auto-upgrade {}→RESUME for suspended intent={}",
                     logTag, resolution.getRouteType(), resolution.getIntentName());
+            // 埋点：意图准确率（suspended 命中 = correct）
+            recordIntentAccuracy(predictedIntent, resolution.getIntentName(), wasDisambiguated, false);
             return handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
         }
-        return switch (resolution.getRouteType()) {
-            case "RESUME" -> handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
-            default -> handleSwitchNew(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
+        Flux<StreamChunk> result = switch (resolution.getRouteType()) {
+            case "RESUME" -> {
+                recordIntentAccuracy(predictedIntent, resolution.getIntentName(), wasDisambiguated, false);
+                yield handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
+            }
+            default -> {
+                recordIntentAccuracy(predictedIntent, resolution.getIntentName(), wasDisambiguated, false);
+                yield handleSwitchNew(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
+            }
         };
+        // 消歧完成后清理消歧状态
+        if (wasDisambiguated) {
+            clearDisambiguationState(sessionId);
+        }
+        return result;
     }
 
     private Flux<StreamChunk> handleSwitchNew(String sessionId, String intent, String rewrittenInput) {

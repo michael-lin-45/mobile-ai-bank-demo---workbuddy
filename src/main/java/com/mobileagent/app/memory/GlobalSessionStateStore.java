@@ -2,6 +2,7 @@ package com.mobileagent.app.memory;
 
 import com.alibaba.cloud.ai.graph.KeyStrategyFactory;
 import com.alibaba.cloud.ai.graph.OverAllState;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,13 +26,16 @@ public class GlobalSessionStateStore {
 
     private final KeyStrategyFactory keyStrategyFactory;
     private final GlobalSessionRepository repository;
+    private final ObservabilityMetrics obsMetrics;
     private final int maxStoredPairs;
 
     public GlobalSessionStateStore(@Qualifier("globalKeyStrategyFactory") KeyStrategyFactory keyStrategyFactory,
                                     GlobalSessionRepository repository,
+                                    ObservabilityMetrics obsMetrics,
                                     @Value("${routing.history.max-stored-pairs:20}") int maxStoredPairs) {
         this.keyStrategyFactory = keyStrategyFactory;
         this.repository = repository;
+        this.obsMetrics = obsMetrics;
         this.maxStoredPairs = maxStoredPairs;
         log.info("[GlobalSessionStateStore] Initialized, repository={}, maxStoredPairs={}",
                 repository.getClass().getSimpleName(), maxStoredPairs);
@@ -62,6 +66,7 @@ public class GlobalSessionStateStore {
     /** 清理 session (BankController.clearSession 时调用) */
     public void clearSession(String sessionId) {
         repository.remove(sessionId);
+        obsMetrics.recordSessionAbandoned();
         log.info("[GlobalSessionStateStore] Cleared session: sessionId={}", sessionId);
     }
 }

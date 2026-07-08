@@ -2,6 +2,8 @@ package com.mobileagent.app.router.subgraph;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.data.RoutingResult;
+import com.mobileagent.app.observability.AgentSpanContext;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.router.registry.SubGraphRegistry;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
@@ -29,13 +31,16 @@ public class ContextRouter {
     private final ChatClient chatClient;
     private final SubGraphRegistry subGraphRegistry;
     private final ObjectMapper objectMapper;
+    private final ObservabilityMetrics obsMetrics;
 
     public ContextRouter(@Qualifier("contextChatClient") ChatClient chatClient,
                         SubGraphRegistry subGraphRegistry,
-                        ObjectMapper objectMapper) {
+                        ObjectMapper objectMapper,
+                        ObservabilityMetrics obsMetrics) {
         this.chatClient = chatClient;
         this.subGraphRegistry = subGraphRegistry;
         this.objectMapper = objectMapper;
+        this.obsMetrics = obsMetrics;
     }
 
     /**
@@ -61,11 +66,17 @@ public class ContextRouter {
                     sessionState, templatePath, domainName, chatHistory, lastQuestion);
 
             long startMs = System.currentTimeMillis();
-            String content = chatClient.prompt()
-                    .system(systemPrompt)
-                    .user(userInput)
-                    .call()
-                    .content();
+            AgentSpanContext.set("L1-LLM1", "ContextRouter", null, sessionId, null);
+            String content;
+            try {
+                content = chatClient.prompt()
+                        .system(systemPrompt)
+                        .user(userInput)
+                        .call()
+                        .content();
+            } finally {
+                AgentSpanContext.clear();
+            }
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[ContextRouter] LLM call completed in {}ms | sessionId={}, template={}, domain={}",
                     elapsedMs, sessionId, templatePath, domainName);
@@ -74,6 +85,8 @@ public class ContextRouter {
             RoutingResult result = parseRoutingResponse(content, templatePath);
             log.info("[ContextRouter] LLM result: routeType={}, confidence={}",
                     result.getRouteType(), result.getConfidence());
+            // 埋点：L1 上下文路由调用计数（解锁 P0-5/P1-2 backend agent_call:L1 聚合）
+            obsMetrics.recordL1Call(result.getRouteType(), domainName);
             return result;
 
         } catch (Exception e) {

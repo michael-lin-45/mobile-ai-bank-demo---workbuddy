@@ -3,11 +3,11 @@
 		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
-	<!-- 1. 锁定 Spring Boot 3.5.x 父版本 -->
+	<!-- 1. 锁定 Spring Boot 3.5.x 版本 -->
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>3.5.5</version> <!-- 确保是 3.5.x 系列 -->
+		<version>3.5.5</version> <!-- 确保是3.5.x系列 -->
 		<relativePath/>
 	</parent>
 
@@ -84,6 +84,29 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-redis</artifactId>
 		</dependency>
+
+		<!-- ========== OpenTelemetry 埋点依赖 ========== -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-otlp</artifactId>
+		</dependency>
+		<!-- Micrometer → OTel Trace 桥接（Span 传播到 Collector） -->
+				<!-- OTel Logback Appender（结构化日志直发后端） -->
+		<dependency>
+			<groupId>io.opentelemetry.instrumentation</groupId>
+			<artifactId>opentelemetry-logback-appender-1.0</artifactId>
+			<version>2.12.0-alpha</version>
+		</dependency>
+		<!-- OpenTelemetry API for direct span creation in ObsChatModel -->
+		<dependency>
+			<groupId>io.opentelemetry</groupId>
+			<artifactId>opentelemetry-api</artifactId>
+			<version>1.43.0</version>
+		</dependency>
 	</dependencies>
 
 	<build>
@@ -91,6 +114,9 @@
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<jvmArguments>-javaagent:&quot;${project.basedir}/opentelemetry-javaagent.jar&quot; -Dserver.port=8080 -Dotel.exporter.otlp.endpoint=http://127.0.0.1:4318 -Dhttp.nonProxyHosts=localhost|127.0.0.1|*.local</jvmArguments>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>

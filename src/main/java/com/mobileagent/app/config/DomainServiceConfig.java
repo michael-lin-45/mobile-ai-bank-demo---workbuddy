@@ -6,6 +6,7 @@ import com.mobileagent.app.domain.MultiSubAgentDomainService;
 import com.mobileagent.app.domain.SingleSubAgentDomainService;
 import com.mobileagent.app.memory.DomainStateAware;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.execution.GraphExecutionEngine;
 import com.mobileagent.app.router.subgraph.ContextRouter;
 import com.mobileagent.app.router.registry.DomainServiceRegistry;
@@ -59,6 +60,7 @@ public class DomainServiceConfig {
             GraphExecutionEngine graphExecutionEngine,
             SubGraphRegistry subGraphRegistry,
             GlobalSessionStateStore globalSessionStore,
+            ObservabilityMetrics obsMetrics,
             DomainServiceRegistry domainServiceRegistry,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
@@ -72,6 +74,7 @@ public class DomainServiceConfig {
                 .graphExecutionEngine(graphExecutionEngine)
                 .subGraphRegistry(subGraphRegistry)
                 .globalSessionStore(globalSessionStore)
+                .obsMetrics(obsMetrics)
                 .l1DomainPairs(l1MaxPairs)
                 .build();
         domainServiceRegistry.register("TRANSFER", service);
@@ -87,6 +90,7 @@ public class DomainServiceConfig {
             GraphExecutionEngine graphExecutionEngine,
             SubGraphRegistry subGraphRegistry,
             GlobalSessionStateStore globalSessionStore,
+            ObservabilityMetrics obsMetrics,
             DomainServiceRegistry domainServiceRegistry,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
         SingleSubAgentDomainService service = SingleSubAgentDomainService.builder()
@@ -100,6 +104,7 @@ public class DomainServiceConfig {
                 .graphExecutionEngine(graphExecutionEngine)
                 .subGraphRegistry(subGraphRegistry)
                 .globalSessionStore(globalSessionStore)
+                .obsMetrics(obsMetrics)
                 .l1DomainPairs(l1MaxPairs)
                 .build();
         domainServiceRegistry.register("BILL", service);
@@ -115,6 +120,7 @@ public class DomainServiceConfig {
             GraphExecutionEngine graphExecutionEngine,
             SubGraphRegistry subGraphRegistry,
             GlobalSessionStateStore globalSessionStore,
+            ObservabilityMetrics obsMetrics,
             DomainServiceRegistry domainServiceRegistry,
             @Value("${routing.history.l1-max-pairs:6}") int l1MaxPairs) {
         MultiSubAgentDomainService service = MultiSubAgentDomainService.builder()
@@ -126,6 +132,7 @@ public class DomainServiceConfig {
                 .graphExecutionEngine(graphExecutionEngine)
                 .subGraphRegistry(subGraphRegistry)
                 .globalSessionStore(globalSessionStore)
+                .obsMetrics(obsMetrics)
                 .contextRoutingTemplatePath("prompts/l1-context.st")
                 .intentRoutingTemplatePath("prompts/l1-intention.st")
                 .rejectedMessage("该理财功能暂不支持，目前仅支持理财咨询和理财产品解读")

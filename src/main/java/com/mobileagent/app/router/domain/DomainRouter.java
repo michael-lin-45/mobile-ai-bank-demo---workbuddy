@@ -3,6 +3,8 @@ package com.mobileagent.app.router.domain;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.data.SubGraphProperties;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
+import com.mobileagent.app.observability.AgentSpanContext;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -33,18 +35,21 @@ public class DomainRouter {
 
     private final ChatClient domainChatClient;
     private final GlobalSessionStateStore globalSessionStore;
+    private final ObservabilityMetrics obsMetrics;
     private final ObjectMapper objectMapper;
     private final int l0MaxPairs;
     private final long lastDomainExpireMinutes;
 
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
                         GlobalSessionStateStore globalSessionStore,
+                        ObservabilityMetrics obsMetrics,
                         SubGraphProperties routingProperties,
                         ObjectMapper objectMapper,
                         @org.springframework.beans.factory.annotation.Value("${routing.history.l0-max-pairs:10}") int l0MaxPairs,
                         @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes) {
         this.domainChatClient = domainChatClient;
         this.globalSessionStore = globalSessionStore;
+        this.obsMetrics = obsMetrics;
         this.objectMapper = objectMapper;
         this.l0MaxPairs = l0MaxPairs;
         this.lastDomainExpireMinutes = lastDomainExpireMinutes;
@@ -73,6 +78,9 @@ public class DomainRouter {
         if (deterministic != null && !excludedDomains.contains(deterministic.domain())) {
             updateLastDomain(sessionId, deterministic.domain());
             log.info("[DomainRouter] Deterministic: domain={} for input='{}'", deterministic.domain(), userInput);
+            obsMetrics.recordRouterHit();
+            obsMetrics.recordIntentRecognized(deterministic.domain(), deterministic.confidence());
+            obsMetrics.recordRouterDecision("L0", "hit", deterministic.domain());
             return deterministic;
         }
 
@@ -85,17 +93,29 @@ public class DomainRouter {
 
             long startMs = System.currentTimeMillis();
 
-            String content = domainChatClient.prompt()
-                    .system(systemPrompt)
-                    .user(userInput)
-                    .call()
-                    .content();
+            var llmSample = obsMetrics.startLlmTimer();
+            AgentSpanContext.set("L0", "DomainRouter", null, sessionId, null);
+            String content;
+            try {
+                content = domainChatClient.prompt()
+                        .system(systemPrompt)
+                        .user(userInput)
+                        .call()
+                        .content();
+            } finally {
+                AgentSpanContext.clear();
+            }
+            obsMetrics.stopLlmTimer(llmSample);
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[DomainRouter] LLM call completed in {}ms | input='{}'", elapsedMs, userInput);
             log.info("[DomainRouter] LLM raw response: {}", content);
 
             DomainResult result = parseDomainResponse(content);
             log.info("[DomainRouter] Model resolved: domain={} (feature={}) for input='{}'", result.domain(), result.unsupportedFeature(), userInput);
+
+            obsMetrics.recordRouterLlmFallback();
+            obsMetrics.recordIntentRecognized(result.domain(), result.confidence());
+            obsMetrics.recordRouterDecision("L0", "llm_fallback", result.domain());
 
             if (!"CHAT".equals(result.domain()) && !result.isUnsupported()) {
                 updateLastDomain(sessionId, result.domain());
@@ -104,6 +124,8 @@ public class DomainRouter {
 
         } catch (Exception e) {
             log.error("[DomainRouter] LLM call failed, defaulting to CHAT", e);
+            obsMetrics.recordRouterFail();
+            obsMetrics.recordRouterDecision("L0", "fail", "CHAT");
             return new DomainResult("CHAT", null, 0.3, null);
         }
     }

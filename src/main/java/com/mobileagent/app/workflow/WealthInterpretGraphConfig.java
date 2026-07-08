@@ -5,7 +5,9 @@ import com.alibaba.cloud.ai.graph.exception.GraphStateException;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mobileagent.app.memory.SubGraphCheckpointSaverConfig;
+import com.mobileagent.app.observability.AgentSpanContext;
 import com.mobileagent.app.mock.MockBankingService;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.router.registry.SubGraphRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -54,8 +56,9 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
                                          MockBankingService mockBankingService,
                                          @Qualifier("wealthInterpretChatClient") ChatClient wealthInterpretChatClient,
                                          ObjectMapper objectMapper,
+                                         ObservabilityMetrics obsMetrics,
                                          SubGraphRegistry subGraphRegistry) {
-        super(chatModel, objectMapper, subGraphCheckpointSaverFactory);
+        super(chatModel, objectMapper, obsMetrics, subGraphCheckpointSaverFactory);
         this.mockBankingService = mockBankingService;
         this.wealthInterpretChatClient = wealthInterpretChatClient;
         this.subGraphRegistry = subGraphRegistry;
@@ -197,10 +200,16 @@ public class WealthInterpretGraphConfig extends AbstractGraphConfig {
 
         try {
             String prompt = buildWealthInterpretPrompt(productName);
-            Flux<ChatResponse> responseFlux = wealthInterpretChatClient.prompt()
-                    .user(prompt)
-                    .stream()
-                    .chatResponse();
+            AgentSpanContext.set("L2", "WealthInterpret", "WEALTH_INTERPRET", null, null);
+            Flux<ChatResponse> responseFlux;
+            try {
+                responseFlux = wealthInterpretChatClient.prompt()
+                        .user(prompt)
+                        .stream()
+                        .chatResponse();
+            } finally {
+                AgentSpanContext.clear();
+            }
 
             // Map中的Flux值会被NodeExecutor.getEmbedFlux()自动检测
             // 每个ChatResponse → StreamingOutput(GRAPH_NODE_STREAMING) → StreamChunk.chunk()

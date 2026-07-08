@@ -1,0 +1,85 @@
+sequenceDiagram
+    actor U as 用户
+    participant BC as BankController<br/>(L0调度层)
+    participant DR as DomainRouter<br/>(意图路由)
+    participant L1 as AbstractDomainService<br/>(L1领域服务)
+    participant GEE as GraphExecutionEngine<br/>(L2子图执行)
+    participant OM as ObservabilityMetrics<br/>(Micrometer)
+    participant OC as OTel Collector<br/>(:4318)
+    participant OB as 可观测后端<br/>(:9090)
+    participant OF as 可观测前端<br/>(:3000)
+
+    U->>BC: POST /api/bank/chat {sessionId, message}
+    activate BC
+    BC->>BC: setAttribute(session.id, user.id)
+    BC->>BC: setAttribute(agent.level, "L0")
+    
+    BC->>DR: route(sessionId, userInput)
+    activate DR
+    DR->>OM: recordIntentRecognized(intent, confidence)
+    DR-->>BC: DomainResult{domain: "TRANSFER"}
+    deactivate DR
+    
+    BC->>L1: handle(sessionId, userInput)
+    activate L1
+    L1->>L1: setAttribute(agent.level, "L1")
+    
+    opt L1改写
+        L1->>L1: rewrite(userInput)
+        L1->>OM: recordRewriteTotal()
+        L1->>OM: recordRewriteAccuracy(rate)
+    end
+    
+    L1->>GEE: executeGraph(graph, intent, input, threadId)
+    activate GEE
+    GEE->>GEE: setAttribute(agent.level, "L2")
+    GEE->>GEE: startWorkflowTimer()
+    
+    Note over GEE: LLM调用 (qwen-plus)
+    GEE->>GEE: recordFirstTokenTime(ttft)
+    GEE->>GEE: stopLlmTimer()
+    
+    GEE->>GEE: checkGraphResult()
+    GEE->>GEE: setAttribute(business.outcome, "success")
+    GEE->>OM: recordBusinessSuccess()
+    GEE-->>L1: Flux<StreamChunk>
+    deactivate GEE
+    
+    L1-->>BC: Flux<StreamChunk>
+    deactivate L1
+    
+    opt REROUTE检测
+        BC->>BC: addEvent("reroute.triggered")
+        BC->>DR: 重新路由(排除当前域)
+    end
+    
+    BC-->>U: SSE流式响应
+    deactivate BC
+
+    Note over OM,OC: OTLP数据管道
+    OM->>OC: Metrics/Traces/Logs (gRPC :4318)
+    OC->>OB: HTTP POST /api/v1/otlp/v1/*
+    OB->>OB: OtlpParserService → H2/Redis
+
+    Note over OF,OB: 前端查询
+    loop 每3秒
+        OF->>OB: GET /api/v1/metrics/realtime
+        OB->>OB: Redis 滑动窗口 → RealtimeMetricsVO
+        OB-->>OF: 20字段KPI数据
+    end
+
+    OF->>OB: GET /api/v1/sessions
+    OB->>OB: H2 sessions表
+    OB-->>OF: 会话列表
+
+    OF->>OB: GET /api/v1/sessions/{id}
+    OB->>OB: H2 sessions + session_turns
+    OB-->>OF: 会话详情(turns+timeline)
+
+    OF->>OB: GET /api/v1/traces
+    OB->>OB: H2 spans表
+    OB-->>OF: Trace列表
+
+    OF->>OB: GET /api/v1/traces/{traceId}
+    OB->>OB: TraceQueryService.buildSpanTree()
+    OB-->>OF: Span层级树+IO

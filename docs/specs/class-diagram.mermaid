@@ -1,0 +1,320 @@
+classDiagram
+    direction TB
+
+    %% ── 数据模型层 ──
+    class Session {
+        +Long id
+        +String sessionId
+        +String userId
+        +String channel
+        +String firstIntent
+        +String finalIntent
+        +int turnCount
+        +String agentChain
+        +long totalDurationMs
+        +long totalTokenInput
+        +long totalTokenOutput
+        +String status
+        +int satisfactionScore
+        +Instant createdAt
+        +Instant updatedAt
+    }
+
+    class SessionTurn {
+        +Long id
+        +String sessionId
+        +int turnNumber
+        +String traceId
+        +String userQuery
+        +String aiResponse
+        +String intent
+        +String agentLevel
+        +String agentName
+        +long durationMs
+        +int tokenInput
+        +int tokenOutput
+        +long ttftMs
+        +String rewriteOriginal
+        +String rewriteResult
+        +boolean rerouteTriggered
+        +String businessOutcome
+    }
+
+    class AgentPerformance {
+        +Long id
+        +String agentLevel
+        +String agentName
+        +String llmModel
+        +int callCount
+        +double ttftP50Ms
+        +double ttftP95Ms
+        +double ttftP99Ms
+        +double tpotP50Ms
+        +double tpotP95Ms
+        +double durationP50Ms
+        +double durationP95Ms
+        +int tokenAvgInput
+        +int tokenAvgOutput
+        +int errorCount
+        +Instant windowStart
+        +Instant windowEnd
+    }
+
+    class TokenCost {
+        +Long id
+        +String modelName
+        +String intent
+        +String agentLevel
+        +long inputTokens
+        +long outputTokens
+        +BigDecimal costEstimate
+        +String sessionId
+        +String traceId
+        +Instant recordedAt
+    }
+
+    class McpCall {
+        +Long id
+        +String toolName
+        +String toolProvider
+        +String sessionId
+        +String traceId
+        +String callStatus
+        +long durationMs
+        +String errorMessage
+        +Instant recordedAt
+    }
+
+    class SkillStats {
+        +Long id
+        +String skillName
+        +String intent
+        +int totalCalls
+        +int successCalls
+        +double completionRate
+        +double avgDurationMs
+        +double avgTurns
+        +double dropOffRate
+        +Instant windowStart
+        +Instant windowEnd
+    }
+
+    class AlertRule {
+        +Long id
+        +String name
+        +String description
+        +String metricName
+        +String conditionOperator
+        +double threshold
+        +int durationMinutes
+        +String severity
+        +boolean enabled
+        +String notifyChannels
+        +Instant createdAt
+        +Instant updatedAt
+    }
+
+    class AlertEvent {
+        +Long id
+        +Long ruleId
+        +String ruleName
+        +String severity
+        +String metricName
+        +double currentValue
+        +double threshold
+        +String status
+        +String acknowledgedBy
+        +Instant acknowledgedAt
+        +Instant resolvedAt
+        +String detailJson
+        +Instant firedAt
+    }
+
+    class SpanEntity {
+        +Long id
+        +String traceId
+        +String spanId
+        +String parentSpanId
+        +String serviceName
+        +String operationName
+        +String kind
+        +Instant startTime
+        +Instant endTime
+        +Long durationMs
+        +String statusCode
+        +String attributes
+    }
+
+    class LogEntity {
+        +Long id
+        +String traceId
+        +String spanId
+        +String level
+        +String serviceName
+        +String message
+        +Instant timestamp
+        +String attributes
+    }
+
+    class MetricsAgg {
+        +Long id
+        +String metricName
+        +String tags
+        +Double value
+        +String aggWindow
+        +Instant timestamp
+    }
+
+    %% ── DTO层 ──
+    class RealtimeMetricsVO {
+        +long requestCount
+        +long errorCount
+        +double avgLatency
+        +long tokenInput
+        +long tokenOutput
+        +Map~String,Long~ intentDistribution
+        +long activeSessions
+        +double p50Latency
+        +double p95Latency
+        +long dau
+        +long realtimeOnline
+        +double qps
+        +Map~String,Long~ agentDistribution
+        +long totalVisits
+        +long tokenTotal
+        +double ttftP50
+        +double ttftP95
+        +double ttftP99
+        +double intentAccuracyRate
+        +double rewriteAccuracyRate
+        +double rerouteRate
+        +double businessCompletionRate
+        +double conversionRate
+        +double violationRate
+    }
+
+    class TraceListVO {
+        +String traceId
+        +String userId
+        +String sessionId
+        +String intent
+        +String agentChain
+        +int llmCalls
+        +long durationMs
+        +String statusCode
+        +Instant timestamp
+        +long ttftMs
+        +long tokenTotal
+        +String statusDot
+    }
+
+    class TraceDetailVO {
+        +String traceId
+        +List~SpanNodeVO~ spanTree
+        +long totalDurationMs
+        +String rootServiceName
+    }
+
+    class ApiResponse~T~ {
+        +int code
+        +String message
+        +T data
+        +ok(T data) ApiResponse~T~
+        +error(int code, String msg) ApiResponse~T~
+    }
+
+    %% ── Service层 ──
+    class MetricsQueryService {
+        +getRealtime() RealtimeMetricsVO
+        +getHistory(from, to, step) List~MetricsAgg~
+    }
+
+    class RedisMetricsService {
+        +incrRequestCount(window)
+        +incrErrorCount(window)
+        +recordLatency(window, ms)
+        +getLatencyStats(window) Map
+        +incrTokenCount(window, type, value)
+        +setActiveSessions(count)
+        +getActiveSessions() long
+    }
+
+    class TraceQueryService {
+        +listTraces(from, intent, limit) List~TraceListVO~
+        +getTraceDetail(traceId) TraceDetailVO
+        -buildSpanTree(spans) List~SpanNodeVO~
+    }
+
+    class SessionService {
+        +listSessions(params) Page~Session~
+        +getSessionDetail(sessionId) SessionDetailVO
+    }
+
+    class AgentPerformanceService {
+        +getPerformance(dimension, from, to) AgentPerformanceVO
+    }
+
+    class TokenCostService {
+        +getCostBreakdown(groupBy, from, to) TokenCostVO
+    }
+
+    class AlertService {
+        +listRules() List~AlertRule~
+        +createRule(data) AlertRule
+        +updateRule(id, data) AlertRule
+        +deleteRule(id)
+        +listEvents(params) List~AlertEvent~
+    }
+
+    %% ── Controller层 ──
+    class MetricsQueryController {
+        +getRealtime() ApiResponse~RealtimeMetricsVO~
+        +getHistory(from, to, step) ApiResponse~List~
+    }
+
+    class SessionController {
+        +listSessions(params) ApiResponse~Page~
+        +getSession(sessionId) ApiResponse~SessionDetailVO~
+    }
+
+    class AgentPerformanceController {
+        +getPerformance(dimension, from, to) ApiResponse
+    }
+
+    class TokenCostController {
+        +getCost(groupBy, from, to) ApiResponse
+    }
+
+    class AlertController {
+        +listRules() ApiResponse
+        +createRule(data) ApiResponse
+        +updateRule(id, data) ApiResponse
+        +deleteRule(id) ApiResponse
+        +listEvents(params) ApiResponse
+    }
+
+    %% ── 关系 ──
+    Session "1" --> "*" SessionTurn : contains
+    AlertRule "1" --> "*" AlertEvent : triggers
+    SpanEntity "*" --> "1" SpanEntity : parentSpanId
+
+    MetricsQueryController --> MetricsQueryService
+    MetricsQueryService --> RedisMetricsService
+    MetricsQueryService --> MetricsAgg
+
+    SessionController --> SessionService
+    SessionService --> Session
+    SessionService --> SessionTurn
+
+    AgentPerformanceController --> AgentPerformanceService
+    AgentPerformanceService --> AgentPerformance
+
+    TokenCostController --> TokenCostService
+    TokenCostService --> TokenCost
+
+    AlertController --> AlertService
+    AlertService --> AlertRule
+    AlertService --> AlertEvent
+
+    TraceQueryService --> SpanEntity
+    RealtimeMetricsVO --> RedisMetricsService : populated by

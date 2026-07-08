@@ -2,6 +2,7 @@ package com.mobileagent.app.domain;
 
 import com.mobileagent.app.data.RoutingResult;
 import com.mobileagent.app.data.StreamChunk;
+import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.memory.model.ActiveAgentInfo;
 import com.mobileagent.app.memory.GlobalSessionContext;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
@@ -39,7 +40,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     private SingleSubAgentDomainService(Builder builder) {
         super(builder.domainName, builder.logTag, builder.domainKey,
                 builder.contextRouter, builder.graphExecutionEngine, builder.subGraphRegistry,
-                builder.globalSessionStore, builder.activeAgentExpireMinutes,
+                builder.globalSessionStore, builder.obsMetrics, builder.activeAgentExpireMinutes,
                 builder.l1DomainPairs);
         this.intent = builder.intent;
         this.intentDescription = builder.intentDescription;
@@ -67,6 +68,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         private GraphExecutionEngine graphExecutionEngine;
         private SubGraphRegistry subGraphRegistry;
         private GlobalSessionStateStore globalSessionStore;
+        private ObservabilityMetrics obsMetrics;
         private long activeAgentExpireMinutes = 20;
         private int l1DomainPairs = 6;
 
@@ -82,6 +84,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
         public Builder graphExecutionEngine(GraphExecutionEngine graphExecutionEngine) { this.graphExecutionEngine = graphExecutionEngine; return this; }
         public Builder subGraphRegistry(SubGraphRegistry subGraphRegistry) { this.subGraphRegistry = subGraphRegistry; return this; }
         public Builder globalSessionStore(GlobalSessionStateStore globalSessionStore) { this.globalSessionStore = globalSessionStore; return this; }
+        public Builder obsMetrics(ObservabilityMetrics obsMetrics) { this.obsMetrics = obsMetrics; return this; }
         public Builder activeAgentExpireMinutes(long activeAgentExpireMinutes) { this.activeAgentExpireMinutes = activeAgentExpireMinutes; return this; }
         public Builder l1DomainPairs(int l1DomainPairs) { this.l1DomainPairs = l1DomainPairs; return this; }
 
@@ -95,6 +98,7 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             Objects.requireNonNull(graphExecutionEngine, "graphExecutionEngine is required");
             Objects.requireNonNull(subGraphRegistry, "subGraphRegistry is required");
             Objects.requireNonNull(globalSessionStore, "globalSessionStore is required");
+            Objects.requireNonNull(obsMetrics, "obsMetrics is required");
             String resolvedRoutingPath = contextRoutingTemplatePath != null ? contextRoutingTemplatePath : DEFAULT_ROUTING_TEMPLATE;
             String resolvedIntentionPath = intentRoutingTemplatePath != null ? intentRoutingTemplatePath : DEFAULT_INTENTION_TEMPLATE;
             TemplateUtils.warmUp(resolvedRoutingPath);
@@ -200,6 +204,8 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     // ==================== SWITCH执行 ====================
 
     private Flux<StreamChunk> handleSwitchNew(String sessionId, String rewrittenInput) {
+        // 埋点：意图准确率（单一意图域 L1-LLM2 == L2）
+        recordIntentAccuracy(intent, intent, false, false);
         return executeNewAgent(sessionId, intent, rewrittenInput);
     }
 
