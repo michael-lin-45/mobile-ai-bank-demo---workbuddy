@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bank AI Observability — v18 · WorkBuddy 设计稿（数据健康+洞察右栏+日志告警修复）</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+:root{
+--primary:#1677ff;--primary-bg:#e6f4ff;--success:#52c41a;--warning:#faad14;--error:#ff4d4f;--purple:#722ed1;--cyan:#13c2c2;
+--bg-layout:#f0f2f5;--bg-card:#fff;--bg-sidebar:#001529;
+--text-primary:rgba(0,0,0,.88);--text-secondary:rgba(0,0,0,.65);--text-tertiary:rgba(0,0,0,.45);
+--text-sidebar:rgba(255,255,255,.65);--text-sidebar-active:#fff;
+--border:#f0f0f0;--border-strong:#d9d9d9;--radius:8px;--radius-sm:6px;
+--shadow-card:0 1px 2px 0 rgba(0,0,0,.03),0 1px 6px -1px rgba(0,0,0,.02),0 2px 4px 0 rgba(0,0,0,.02);
+--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+--mono:"SF Mono","Fira Code",Consolas,monospace;
+--bubble-user:#e6f4ff;--bubble-ai:#f6ffed;--bubble-sys:#fffbe6;
+--insight-perf:#ff4d4f;--insight-acc:#722ed1;--insight-biz:#13c2c2;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--font);background:var(--bg-layout);color:var(--text-primary);font-size:14px;min-height:100vh}
+.layout{display:flex;min-height:100vh}
+.sidebar{width:220px;background:var(--bg-sidebar);display:flex;flex-direction:column;flex-shrink:0;position:fixed;top:0;left:0;bottom:0;z-index:100}
+.sidebar-logo{height:56px;display:flex;align-items:center;padding:0 20px;color:#fff;font-size:15px;font-weight:600;gap:10px;border-bottom:1px solid rgba(255,255,255,.08)}
+.sidebar-logo .logo-icon{width:28px;height:28px;background:var(--primary);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px}
+.nav-group{padding:8px 0}.nav-group-title{padding:8px 20px 4px;font-size:10px;color:rgba(255,255,255,.35);text-transform:uppercase;letter-spacing:.5px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;color:var(--text-sidebar);cursor:pointer;transition:.2s;font-size:13px;border-left:3px solid transparent}
+.nav-item:hover{color:var(--text-sidebar-active);background:rgba(255,255,255,.06)}
+.nav-item.active{color:var(--text-sidebar-active);background:var(--primary);border-left-color:#fff}
+.nav-icon{width:16px;text-align:center;font-size:14px}
+.sidebar-footer{padding:12px 20px;border-top:1px solid rgba(255,255,255,.08);color:var(--text-sidebar);font-size:11px;display:flex;align-items:center;gap:6px}
+.dot{width:6px;height:6px;border-radius:50%;display:inline-block;background:var(--success)}
+.main{flex:1;margin-left:220px;display:flex;flex-direction:column}
+.topbar{height:56px;background:var(--bg-card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:50}
+.topbar-left{display:flex;align-items:center;gap:12px}.topbar-title{font-size:16px;font-weight:600}
+.env-tag{padding:2px 8px;border-radius:4px;font-size:12px;font-weight:500}.env-dev{background:#f6ffed;color:var(--success);border:1px solid #b7eb8f}
+/* 数据健康可信度 */
+.health-pill{display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:14px;font-size:12px;background:#f6ffed;color:var(--success);border:1px solid #b7eb8f;cursor:pointer}
+.health-pill.warn{background:#fffbe6;color:var(--warning);border-color:#ffe58f}
+.health-pill.bad{background:#fff2f0;color:var(--error);border-color:#ffccc7}
+.topbar-right{display:flex;align-items:center;gap:12px}
+.time-select,.filter-select{padding:5px 28px 5px 12px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:#fff;cursor:pointer;font-size:13px;color:var(--text-secondary);appearance:none;background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center}
+.filter-select:hover{border-color:var(--primary)}
+.content{padding:20px 24px;flex:1;overflow-x:hidden}.page{display:none}.page.active{display:block}
+.card{background:var(--bg-card);border-radius:var(--radius);box-shadow:var(--shadow-card);padding:20px;margin-bottom:16px}.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.card-title{font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}.card-extra{font-size:13px;color:var(--text-tertiary);cursor:pointer}.card-extra:hover{color:var(--primary)}
+.zone{margin-bottom:20px}.zone-title{font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:12px;display:flex;align-items:center;gap:8px;padding-left:10px;border-left:3px solid var(--primary)}.zone-title .zone-tag{font-size:11px;padding:1px 6px;border-radius:3px;font-weight:500}.tag-l1{background:#e6f4ff;color:var(--primary)}.tag-l2{background:#f9f0ff;color:var(--purple)}.tag-l3{background:#f6ffed;color:var(--success)}.tag-l4{background:#fff7e6;color:#d48806}
+.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.metric-grid.m4{grid-template-columns:repeat(4,1fr)}
+.metric-card{background:var(--bg-card);border-radius:var(--radius);box-shadow:var(--shadow-card);padding:20px;cursor:pointer;transition:.2s;border:1px solid transparent}.metric-card:hover{border-color:var(--primary);box-shadow:0 2px 12px rgba(22,119,255,.12);transform:translateY(-1px)}.metric-label{font-size:13px;color:var(--text-secondary);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}.metric-value{font-size:28px;font-weight:700;line-height:1.2}.metric-unit{font-size:13px;font-weight:400;color:var(--text-tertiary);margin-left:4px}.metric-delta{font-size:12px;margin-top:8px;display:flex;align-items:center;gap:4px}.delta-up{color:var(--error)}.delta-down{color:var(--success)}.delta-neutral{color:var(--text-tertiary)}.metric-sub{font-size:12px;color:var(--text-tertiary);margin-top:4px}.metric-mini-chart{height:32px;margin-top:8px}
+/* 数据可信度角标 */
+.trust{font-size:10px;padding:1px 6px;border-radius:3px;font-weight:500}.trust-ok{background:#f6ffed;color:var(--success);border:1px solid #b7eb8f}.trust-pending{background:#fffbe6;color:var(--warning);border:1px solid #ffe58f}.trust-off{background:#fff2f0;color:var(--error);border:1px solid #ffccc7}
+.chart-box{width:100%;height:280px}.chart-box-sm{width:100%;height:200px}
+.tbl{width:100%;border-collapse:collapse;font-size:13px}.tbl th{text-align:left;padding:10px 12px;background:#fafafa;border-bottom:1px solid var(--border);font-weight:600;color:var(--text-secondary);white-space:nowrap}.tbl td{padding:10px 12px;border-bottom:1px solid var(--border)}.tbl tr:hover td{background:#fafafa}.tbl .mono{font-family:var(--mono);font-size:12px}.tbl .link{color:var(--primary);cursor:pointer}.tbl .link:hover{text-decoration:underline}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:500}.badge-success{background:#f6ffed;color:var(--success);border:1px solid #b7eb8f}.badge-error{background:#fff2f0;color:var(--error);border:1px solid #ffccc7}.badge-warning{background:#fffbe6;color:var(--warning);border:1px solid #ffe58f}.badge-info{background:var(--primary-bg);color:var(--primary);border:1px solid #91caff}.badge-purple{background:#f9f0ff;color:var(--purple);border:1px solid #d3adf7}.badge-blue{background:#e6f4ff;color:#1677ff;border:1px solid #91caff}.badge-green{background:#f6ffed;color:#389e0d;border:1px solid #b7eb8f}.badge-orange{background:#fff7e6;color:#d46b08;border:1px solid #ffd591}
+.filter-bar{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}.filter-input{padding:6px 12px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-size:13px;width:160px;outline:none}.filter-input:focus{border-color:var(--primary);box-shadow:0 0 0 2px rgba(22,119,255,.1)}.btn-primary{padding:6px 16px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;cursor:pointer}.btn-primary:hover{background:#4096ff}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0}.tab{padding:8px 20px;cursor:pointer;font-size:14px;color:var(--text-secondary);border-bottom:2px solid transparent;transition:.2s}.tab:hover{color:var(--primary)}.tab.active{color:var(--primary);border-bottom-color:var(--primary);font-weight:500}.tab-pane{display:none}.tab-pane.active{display:block;padding:16px 0 0}
+.flex-between{display:flex;justify-content:space-between;align-items:center}.text-muted{color:var(--text-tertiary)}.text-sm{font-size:12px}.mt-8{margin-top:8px}.mt-16{margin-top:16px}
+.progress-bar{height:6px;background:#f0f0f0;border-radius:3px;overflow:hidden;margin-top:6px}.progress-fill{height:100%;border-radius:3px}
+
+/* 数据健康条 */
+.health-bar{display:flex;gap:12px;flex-wrap:wrap;padding:14px 18px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px}.health-item{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 10px;border-radius:20px;background:#fafafa}.health-item .h-dot{width:8px;height:8px;border-radius:50%}.h-ok{background:#f6ffed;color:var(--success)}.h-warn{background:#fffbe6;color:var(--warning)}.h-off{background:#fff2f0;color:var(--error)}
+
+/* AI 洞察建议区 */
+.insight-board{margin-bottom:16px}
+.insight-cat{margin-bottom:14px}.insight-cat-head{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;margin-bottom:10px}.insight-cat-head .cat-tag{padding:2px 8px;border-radius:4px;font-size:12px;color:#fff}.cat-perf{background:var(--insight-perf)}.cat-acc{background:var(--insight-acc)}.cat-biz{background:var(--insight-biz)}
+.insight-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.insight-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:16px;position:relative;overflow:hidden;transition:.2s}
+.insight-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08);transform:translateY(-2px)}
+.insight-card .ic-bar{position:absolute;left:0;top:0;bottom:0;width:4px}
+.ic-perf{background:var(--insight-perf)}.ic-acc{background:var(--insight-acc)}.ic-biz{background:var(--insight-biz)}
+.insight-card .ic-title{font-size:14px;font-weight:600;margin-bottom:6px;padding-left:6px;display:flex;align-items:center;gap:6px}
+.insight-card .ic-desc{font-size:12px;color:var(--text-secondary);line-height:1.6;padding-left:6px;min-height:54px}
+.insight-card .ic-metric{font-family:var(--mono);font-size:12px;color:var(--text-tertiary);padding-left:6px;margin:8px 0}
+.insight-card .ic-actions{display:flex;gap:8px;padding-left:6px;margin-top:6px}
+.insight-card .ic-link{font-size:12px;color:var(--primary);cursor:pointer;display:flex;align-items:center;gap:3px}
+.insight-card .ic-link:hover{text-decoration:underline}
+.sev{font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600}.sev-high{background:#fff2f0;color:var(--error)}.sev-mid{background:#fffbe6;color:var(--warning)}.sev-low{background:#f6ffed;color:var(--success)}
+
+/* 三件套互跳徽章 */
+.trio{display:inline-flex;gap:4px;align-items:center}
+.trio .t-badge{font-family:var(--mono);font-size:11px;padding:1px 6px;border-radius:3px;background:#fafafa;border:1px solid var(--border-strong);color:var(--text-secondary);cursor:pointer}
+.trio .t-badge:hover{border-color:var(--primary);color:var(--primary)}
+.trio .t-label{font-size:10px;color:var(--text-tertiary)}
+.breadcrumb{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);margin-bottom:16px}.breadcrumb a{color:var(--primary);cursor:pointer}.breadcrumb a:hover{text-decoration:underline}.breadcrumb .sep{color:var(--text-tertiary)}
+
+/* Session modal */
+.session-header{background:var(--bg-card);border-radius:var(--radius);box-shadow:var(--shadow-card);padding:20px 24px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px}.session-header-left{display:flex;flex-direction:column;gap:4px}.session-header-title{font-size:18px;font-weight:700;display:flex;align-items:center;gap:10px}.session-header-meta{display:flex;gap:20px;flex-wrap:wrap;margin-top:8px}.session-meta-item{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary)}.session-meta-item strong{color:var(--text-primary)}
+.turn{background:var(--bg-card);border-radius:var(--radius);box-shadow:var(--shadow-card);margin-bottom:16px;overflow:hidden}.turn-header{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:#fafafa;border-bottom:1px solid var(--border);font-size:12px}.turn-header-left{display:flex;align-items:center;gap:10px;color:var(--text-secondary)}.turn-num{width:22px;height:22px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600}.turn-body{padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+.msg-row{display:flex;gap:12px;align-items:flex-start}.msg-avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}.avatar-user{background:var(--primary-bg);color:var(--primary)}.avatar-ai{background:#f6ffed;color:var(--success)}.msg-content{flex:1}.msg-role{font-size:12px;color:var(--text-tertiary);margin-bottom:4px}.msg-bubble{padding:10px 14px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.6;max-width:80%}.bubble-user{background:var(--bubble-user);color:var(--text-primary)}.bubble-ai{background:var(--bubble-ai);color:var(--text-primary)}.msg-meta{display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;font-size:11px;color:var(--text-tertiary)}.msg-meta span{display:flex;align-items:center;gap:4px}.msg-meta .link{color:var(--primary);cursor:pointer}.msg-meta .link:hover{text-decoration:underline}
+.session-summary{display:flex;gap:24px;padding:16px 20px;background:#fafafa;border-top:1px solid var(--border);flex-wrap:wrap}
+.session-feedback-bar{display:flex;align-items:center;gap:10px;padding:12px 20px;border-top:1px solid var(--border);font-size:13px;color:var(--text-secondary)}
+
+/* Trace */
+.trace-layout{min-width:0}.trace-layout .trace-list-col{overflow-x:hidden}
+.trace-view-btn{display:inline-block;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:500;border:1px solid var(--primary);color:var(--primary);background:#fff;cursor:pointer;white-space:nowrap;transition:.15s}.trace-view-btn:hover{background:var(--primary);color:#fff}.trace-view-btn.active{background:var(--primary);color:#fff}
+#p-trace .tbl tr.selected td{background:#e6f4ff}#p-trace .tbl tr{cursor:pointer}#p-trace .tbl td:nth-child(4) .badge{min-width:82px;display:inline-block;text-align:center}
+.io-toggle{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;border:1px solid var(--primary);color:var(--primary);background:#fff;cursor:pointer;white-space:nowrap;transition:.15s}.io-toggle:hover,.io-toggle.active{background:var(--primary);color:#fff}
+.io-panel{max-height:0;overflow:hidden;transition:max-height .3s ease;background:#fafafa;border-radius:var(--radius-sm);margin:4px 0;padding:0 14px;border:1px solid transparent}.io-panel.open{max-height:600px;overflow-y:auto;padding:12px 14px;margin:6px 0 10px;border-color:var(--border)}.io-section{margin-bottom:12px}.io-sh{font-size:11px;font-weight:600;color:var(--primary);margin-bottom:4px}.io-code{background:#f5f5f5;border:1px solid var(--border);border-radius:4px;padding:8px 10px;font-family:var(--mono);font-size:11px;line-height:1.55;color:var(--text-primary);max-height:200px;overflow-y:auto;white-space:pre-wrap}
+
+/* Waterfall */
+.waterfall{background:#fafafa;border-radius:var(--radius-sm);padding:16px;position:relative}.wf-row{display:flex;align-items:center;height:30px;margin-bottom:2px}.wf-label{width:150px;font-size:12px;color:var(--text-secondary);padding-right:12px;text-align:right;flex-shrink:0}.wf-bar{display:inline-flex;align-items:center;height:18px;border-radius:3px;padding:0 6px;font-size:10px;color:#fff;white-space:nowrap}.bar-llm{background:var(--purple)}.bar-agent{background:var(--primary)}.bar-tool{background:var(--cyan)}.bar-http{background:#8c8c8c}.bar-db{background:#fa8c16}.ttft-marker{position:absolute;top:8px;bottom:8px;border-left:2px dashed var(--warning);z-index:2}.ttft-marker span{position:absolute;top:-2px;left:5px;color:var(--warning);font:700 11px var(--mono);background:#fafafa;padding:2px 5px;border-radius:3px;white-space:nowrap}
+
+/* Trace Agent Tree */
+.trace-tree{padding:12px 16px}.trace-agent{margin-bottom:0}.trace-agent-header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:var(--radius-sm);cursor:pointer;border:1px solid var(--border);margin-bottom:2px;transition:.15s}.trace-agent-header:hover{border-color:var(--primary)}.trace-agent-header .tag-l0{background:var(--primary-bg);color:var(--primary);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}.trace-agent-header .tag-l1{background:#f9f0ff;color:var(--purple);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}.trace-agent-header .tag-l2{background:#f6ffed;color:var(--success);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}.trace-agent-header .agent-name{font-weight:600;font-size:13px}.trace-agent-header .agent-desc{font-size:12px;color:var(--text-secondary)}.trace-agent-header .agent-time{margin-left:auto;font-family:var(--mono);font-size:12px;font-weight:600}.trace-agent-body{padding-left:32px}.trace-llm-row{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#fafafa;border-radius:4px;margin-bottom:4px;border-left:3px solid var(--purple);font-size:12px}.trace-llm-row .llm-detail{font-size:11px;color:var(--text-secondary);font-family:var(--mono)}.trace-llm-row .llm-time{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--purple);font-weight:600}.trace-connector{height:18px;border-left:2px dashed var(--border-strong);margin-left:26px;position:relative}.trace-connector span{position:absolute;left:-14px;top:-2px;font-size:10px;color:var(--text-tertiary);font-family:var(--mono);white-space:nowrap}
+
+/* Modal */
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:1000;display:none;align-items:center;justify-content:center}.modal-overlay.open{display:flex}
+.modal{background:#fff;border-radius:var(--radius);width:90%;max-width:980px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 6px 16px rgba(0,0,0,.08),0 3px 6px rgba(0,0,0,.12)}.modal-hdr{padding:16px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}.modal-close{cursor:pointer;font-size:18px;color:var(--text-secondary);padding:4px 8px;border-radius:4px}.modal-close:hover{background:#f5f5f5}.modal-body{flex:1;overflow-y:auto;padding:20px 24px}
+
+/* Alert */
+.alert-row{display:flex;align-items:center;gap:12px;padding:12px 16px;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:10px;background:#fff}.alert-row .a-sev{width:6px;height:38px;border-radius:3px}.a-crit{background:var(--error)}.a-warn{background:var(--warning)}.a-info{background:var(--primary)}.alert-row .a-main{flex:1}.alert-row .a-time{font-size:11px;color:var(--text-tertiary);font-family:var(--mono)}
+.timeline{position:relative;padding-left:20px}.timeline::before{content:"";position:absolute;left:6px;top:4px;bottom:4px;width:2px;background:var(--border)}.tl-item{position:relative;padding:0 0 18px 14px}.tl-item::before{content:"";position:absolute;left:-17px;top:4px;width:10px;height:10px;border-radius:50%;background:var(--primary);border:2px solid #fff;box-shadow:0 0 0 1px var(--border)}.tl-item.resolved::before{background:var(--success)}.tl-item.firing::before{background:var(--error)}
+
+/* Empty */
+.empty{text-align:center;padding:40px 0;color:var(--text-tertiary)}.empty .e-icon{font-size:32px;margin-bottom:8px}
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.set-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px}
+.set-row .set-k{color:var(--text-secondary)}.set-row .set-v{font-family:var(--mono);color:var(--text-primary)}
+.note{font-size:12px;color:var(--text-tertiary);background:#fafafa;border-left:3px solid var(--primary);padding:8px 12px;border-radius:0 4px 4px 0;margin-top:12px;line-height:1.6}
+
+/* ===== v18 redesign: typography, data health, logs, alerts, AI insight sidebar ===== */
+:root{
+  --font:'Manrope',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:'JetBrains Mono',"SF Mono","Fira Code",Consolas,monospace;
+}
+body{font-family:var(--font);background:var(--bg-layout);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+.card,.metric-card,.insight-mini,.alert-card,.health-card{transition:transform .2s,box-shadow .2s,border-color .2s}
+.metric-card:hover,.insight-mini:hover,.alert-card:hover,.health-list-item:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(15,23,42,.08)}
+.card{background:linear-gradient(180deg,#fff,#fbfcfd);border:1px solid #e8eaf0}
+
+/* Data Health Credibility Card */
+.health-card{display:flex;gap:22px;align-items:center;padding:18px 22px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;box-shadow:var(--shadow-card)}
+.health-ring{position:relative;width:88px;height:88px;flex-shrink:0;border-radius:50%;background:conic-gradient(var(--success) 0% 78%,#e8eaf0 78% 100%)}
+.health-ring::before{content:'';position:absolute;width:72px;height:72px;background:#fff;border-radius:50%;top:8px;left:8px}
+.health-score{position:absolute;z-index:1;font-size:22px;font-weight:800;color:var(--text-primary);line-height:1;top:50%;left:50%;transform:translate(-50%,-55%)}
+.health-label{position:absolute;z-index:1;font-size:10px;color:var(--text-tertiary);font-weight:600;bottom:22px;left:50%;transform:translateX(-50%);white-space:nowrap}
+.health-summary{display:flex;flex-direction:column;gap:8px;min-width:120px}
+.health-count{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;padding:6px 10px;border-radius:6px}
+.health-count.ok{background:#f6ffed;color:#389e0d}.health-count.pending{background:#fffbe6;color:#d48806}.health-count.off{background:#fff2f0;color:#cf1322}
+.health-count::before{content:'';width:8px;height:8px;border-radius:50%;background:currentColor}
+.health-list{flex:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px 12px}
+.health-list-item{font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:6px;background:#fafafa;border-left:3px solid transparent}
+.health-list-item.ok{border-left-color:var(--success);background:#f6ffed}
+.health-list-item.pending{border-left-color:var(--warning);background:#fffbe6}
+.health-list-item.off{border-left-color:var(--error);background:#fff2f0}
+
+/* Logs */
+.logs-card{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:#fff}
+.log-header{padding:12px 16px;font-size:12px;color:var(--text-secondary);background:#fafafa;border-bottom:1px solid var(--border)}
+.log-list{max-height:640px;overflow-y:auto}
+.log-entry{display:flex;align-items:flex-start;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;line-height:1.6;font-family:var(--mono);transition:background .12s}
+.log-entry:hover{background:#f4f8ff}
+.log-time{color:var(--text-tertiary);white-space:nowrap;min-width:92px}
+.log-level{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;min-width:46px;text-align:center}
+.log-info{background:#e6f4ff;color:#1677ff}.log-warn{background:#fffbe6;color:#d48806}.log-error{background:#fff2f0;color:#ff4d4f}
+.log-msg{color:var(--text-primary);flex:1;word-break:break-word}
+.log-msg .trio{margin-left:8px}
+
+/* Alerts */
+.alert-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.alert-meta{font-size:13px;color:var(--text-secondary)}
+.alert-card{border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px;background:#fff;display:flex;gap:14px;align-items:center}
+.alert-card:hover{border-color:var(--primary);box-shadow:0 4px 12px rgba(22,119,255,.08)}
+.alert-sev{width:6px;height:42px;border-radius:3px;flex-shrink:0}
+.alert-body{flex:1}.alert-body .title{font-weight:700;font-size:14px}.alert-body .cond{font-size:12px;color:var(--text-secondary);margin-top:3px}
+.alert-toggle{width:40px;height:20px;border-radius:10px;background:#d9d9d9;position:relative;cursor:pointer;transition:.2s;flex-shrink:0}
+.alert-toggle.on{background:var(--success)}.alert-toggle::after{content:'';position:absolute;width:16px;height:16px;background:#fff;border-radius:50%;top:2px;left:2px;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.alert-toggle.on::after{left:22px}
+.alert-notify{font-size:12px;color:var(--text-tertiary);white-space:nowrap;min-width:64px;text-align:right}
+
+/* AI Insight right panel */
+.insight-layout{display:flex;gap:16px;align-items:flex-start}
+.insight-main{flex:1;min-width:0}
+.insight-sidebar{width:320px;flex-shrink:0}
+.insight-sidebar .card{padding:16px}
+.insight-section-title{font-size:14px;font-weight:800;margin-bottom:12px;display:flex;align-items:center;gap:6px;color:var(--text-primary)}
+.insight-list{display:flex;flex-direction:column;gap:8px}
+.insight-mini{padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;cursor:pointer;transition:.15s;border-left:3px solid transparent}
+.insight-mini:hover{border-color:var(--primary);box-shadow:0 4px 12px rgba(15,23,42,.08)}
+.insight-mini.perf{border-left-color:var(--insight-perf)}.insight-mini.acc{border-left-color:var(--insight-acc)}.insight-mini.biz{border-left-color:var(--insight-biz)}
+.insight-mini-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;gap:6px}
+.insight-mini-title{font-size:13px;font-weight:700;line-height:1.4}
+.insight-mini-sub{font-size:11px;color:var(--text-secondary);line-height:1.5}
+.insight-mini-metric{font-family:var(--mono);font-size:11px;color:var(--text-tertiary);margin-top:6px;display:flex;gap:8px;align-items:center}
+
+/* Responsive */
+@media(max-width:1200px){
+  .insight-layout{flex-direction:column}
+  .insight-sidebar{width:100%;order:-1}
+  .insight-list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+}
+@media(max-width:860px){
+  .health-card{flex-direction:column;align-items:flex-start;gap:14px}
+  .health-list{grid-template-columns:1fr 1fr}
+  .insight-list{grid-template-columns:1fr}
+}
+
+/* Intelligence standalone page */
+.intelligence-header{display:flex;align-items:center;gap:16px;margin-bottom:24px;padding:20px 24px;background:linear-gradient(135deg,#f9f0ff 0%,#e6f7ff 100%);border-radius:var(--radius);border:1px solid #d3adf7}
+.intelligence-icon{width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#722ed1,#1677ff);color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 4px 12px rgba(114,46,209,.2)}
+.intelligence-title{font-size:20px;font-weight:800;color:var(--text-primary);margin-bottom:4px}
+.intelligence-subtitle{font-size:13px;color:var(--text-secondary)}
+.intelligence-grid{display:block}
+.intelligence-grid .card{padding:16px}
+.intelligence-grid .insight-list{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.intelligence-grid .insight-mini{height:100%;border-radius:var(--radius-sm);background:#fff;border:1px solid var(--border);border-left:4px solid var(--border)}
+.intelligence-grid .insight-mini.perf{border-left-color:var(--insight-perf)}
+.intelligence-grid .insight-mini.acc{border-left-color:var(--insight-acc)}
+.intelligence-grid .insight-mini.biz{border-left-color:var(--insight-biz)}
+.intelligence-grid .insight-mini:hover{border-color:var(--primary);box-shadow:0 6px 16px rgba(15,23,42,.08);transform:translateY(-2px)}
+.intelligence-grid .insight-section-title{padding:0 0 12px;font-size:16px}
+.intelligence-grid .insight-mini{padding:14px 16px}
+.intelligence-grid .insight-mini-title{font-size:14px}
+.intelligence-grid .insight-mini-sub{font-size:12px}
+.intelligence-grid .insight-mini-metric{font-size:12px}
+.nav-item.intelligence{background:linear-gradient(90deg,#f9f0ff 0,#e6f7ff 100%);border-left:3px solid #722ed1}
+.nav-item.intelligence.active{background:linear-gradient(90deg,#722ed1,#1677ff);color:#fff}
+.nav-item.intelligence.active .nav-icon{color:#fff}
+@media (max-width:1200px){.intelligence-grid .insight-list{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:768px){.intelligence-grid .insight-list{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <div class="sidebar-logo"><div class="logo-icon">BA</div><span>Bank AI 可观测</span></div>
+  <div class="nav-group"><div class="nav-group-title">监控</div>
+    <div class="nav-item active" onclick="sw('overview',this)"><span class="nav-icon">📊</span> 总览大屏</div>
+    <div class="nav-item" onclick="sw('session',this)"><span class="nav-icon">💬</span> 会话回放</div>
+    <div class="nav-item" onclick="sw('trace',this)"><span class="nav-icon">🔗</span> 链路追踪</div>
+    <div class="nav-item" onclick="sw('insight',this)"><span class="nav-icon">🧠</span> AI 洞察</div>
+    <div class="nav-item" onclick="sw('logs',this)"><span class="nav-icon">📋</span> 日志查询</div>
+  </div>
+  <div class="nav-group"><div class="nav-group-title">管理</div>
+    <div class="nav-item" onclick="sw('alerts',this)"><span class="nav-icon">🔔</span> 告警规则</div>
+    <div class="nav-item" onclick="sw('settings',this)"><span class="nav-icon">⚙️</span> 系统设置</div>
+  </div>
+  <div class="nav-group"><div class="nav-group-title">洞察</div>
+    <div class="nav-item intelligence" onclick="sw('intelligence',this)"><span class="nav-icon">✨</span> 智能洞察</div>
+  </div>
+  <div class="sidebar-footer"><span class="dot"></span> Collector Online · v17</div>
+</aside>
+
+<div class="main">
+<header class="topbar">
+  <div class="topbar-left"><span class="topbar-title" id="page-title">总览大屏</span><span class="env-tag env-dev">DEV</span></div>
+  <div class="topbar-right">
+    <div class="health-pill warn" onclick="sw('settings',this)" title="点击查看数据健康详情">数据健康 78%</div>
+    <select class="time-select"><option>最近 1h</option><option selected>最近 6h</option><option>最近 24h</option></select>
+    <button class="btn-primary" onclick="initAllCharts()">↻ 刷新</button>
+  </div>
+</header>
+<section class="content" id="ctx">
+
+<!-- OVERVIEW -->
+<div class="page active" id="p-overview">
+  <div class="health-card">
+    <div class="health-ring">
+      <div class="health-score">78%</div>
+      <div class="health-label">数据健康</div>
+    </div>
+    <div class="health-summary">
+      <div class="health-count ok">2 已接通</div>
+      <div class="health-count pending">2 已接待上报</div>
+      <div class="health-count off">2 待接入</div>
+    </div>
+    <div class="health-list">
+      <div class="health-list-item ok">Token / TTFT / 错误率 已接通</div>
+      <div class="health-list-item ok">业务完成率 已接通</div>
+      <div class="health-list-item pending">DAU / 在线 已接待上报</div>
+      <div class="health-list-item off">LLM 置信度 待 Core 埋点</div>
+      <div class="health-list-item off">分层意图 待 Core 埋点</div>
+      <div class="health-list-item pending">违规率 待安全围栏对接</div>
+    </div>
+  </div>
+  <div class="zone"><div class="zone-title"><span class="zone-tag tag-l1">A</span> 系统健康 <span class="trust trust-ok">已接通</span></div><div class="metric-grid">
+    <div class="metric-card"><div class="metric-label">访问用户量(DAU)<span class="trust trust-pending">待接入</span></div><div class="metric-value">1,284<span class="metric-unit">人</span></div><div class="metric-delta delta-up">↑ 12.3%</div><div class="metric-sub">DAU 由 SessionBridge 上报 userId 去重</div><div class="metric-mini-chart" id="mini-A1"></div></div>
+    <div class="metric-card"><div class="metric-label">访问次数 / QPS<span>📈</span></div><div class="metric-value">45.2<span class="metric-unit">req/s</span></div><div class="metric-delta delta-up">↑ 8.7%</div><div class="metric-sub">6h 累计 976,128 次（Redis 6h 窗口）</div><div class="metric-mini-chart" id="mini-A2"></div></div>
+    <div class="metric-card"><div class="metric-label">Agent 调用 L0/L1/L2<span>🤖</span></div><div class="metric-value">3,842<span class="metric-unit">次</span></div><div class="metric-delta delta-up">↑ 6.5%</div><div class="metric-sub">H2 spans 真实计数（L0≥L1≥L2）</div><div class="metric-mini-chart" id="mini-A3"></div></div>
+  </div></div>
+  <div class="zone"><div class="zone-title"><span class="zone-tag tag-l2">B</span> AI 性能 <span class="trust trust-ok">已接通</span></div><div class="metric-grid">
+    <div class="metric-card"><div class="metric-label">Token 调用量<span>🪙</span></div><div class="metric-value">2.34<span class="metric-unit">M</span></div><div class="metric-delta delta-up">↑ 23.1%</div><div class="metric-sub">输入 1.82M · 输出 0.52M</div><div class="metric-mini-chart" id="mini-B1"></div></div>
+    <div class="metric-card"><div class="metric-label">首 Token 时延 P95<span>⏱</span></div><div class="metric-value">480<span class="metric-unit">ms</span></div><div class="metric-delta delta-down">↓ 15.3%</div><div class="metric-sub">P50: 210ms · P99: 920ms（Histogram 真值）</div><div class="metric-mini-chart" id="mini-B2"></div></div>
+    <div class="metric-card"><div class="metric-label">P95 系统时延 / 错误率<span>⚡</span></div><div class="metric-value">312<span class="metric-unit">ms</span></div><div class="metric-delta delta-down">↓ 5.2%</div><div class="metric-sub"><span class="badge badge-success" style="font-size:11px">错误率 0.12%</span>（H2 spans 真值）</div><div class="metric-mini-chart" id="mini-B3"></div></div>
+  </div></div>
+  <div class="zone"><div class="zone-title"><span class="zone-tag tag-l3">C</span> 智能体语义质量 <span class="trust trust-pending">部分待接入</span></div><div class="metric-grid">
+    <div class="metric-card"><div class="metric-label">意图识别准确率<span>🎯</span></div><div class="metric-value">94.2<span class="metric-unit">%</span></div><div class="metric-delta delta-up">↑ 1.2%</div><div class="metric-sub">L0 98.2% · L1 94.2%（待 Core 分层 tag）</div><div class="metric-mini-chart" id="mini-C1"></div></div>
+    <div class="metric-card"><div class="metric-label">改写准确率<span>✍️</span></div><div class="metric-value">91.5<span class="metric-unit">%</span></div><div class="metric-delta delta-up">↑ 0.7%</div><div class="metric-sub">实体守恒+金额归一（Core 实测）</div><div class="metric-mini-chart" id="mini-C2"></div></div>
+    <div class="metric-card"><div class="metric-label">Reroute 率<span>🔀</span></div><div class="metric-value">14.2<span class="metric-unit">%</span></div><div class="metric-delta delta-down">↓ 2.1%</div><div class="metric-sub trust trust-off" style="display:inline">待 Core 发射 reroute 度量</div><div class="metric-mini-chart" id="mini-C3"></div></div>
+  </div></div>
+  <div class="zone"><div class="zone-title"><span class="zone-tag tag-l4">D</span> 业务效果 <span class="trust trust-pending">部分待接入</span></div><div class="metric-grid" style="grid-template-columns:1fr 1fr">
+    <div class="metric-card"><div class="metric-label">业务完成率<span>✅</span></div><div class="metric-value">87.6<span class="metric-unit">%</span></div><div class="metric-delta delta-up">↑ 3.4%</div><div class="metric-sub">success/(success+fail) 实时聚合</div><div class="metric-mini-chart" id="mini-D1"></div></div>
+    <div class="metric-card"><div class="metric-label">违规率<span>🚨</span></div><div class="metric-value" style="color:var(--text-tertiary)">待接入</div><div class="metric-sub">待安全围栏系统对接（不伪造）</div></div>
+  </div></div>
+  <div class="grid-2">
+    <div class="card"><div class="card-header"><div class="card-title">请求 & Token 趋势</div><div class="card-extra">最近 6h</div></div><div class="chart-box" id="chart-overview"></div></div>
+    <div class="card"><div class="card-header"><div class="card-title">Agent 分布</div><div class="card-extra">按执行层</div></div><div class="chart-box" id="chart-agent-dist"></div></div>
+  </div>
+  <div class="card"><div class="card-header"><div class="card-title">⚡ 性能瓶颈下钻 · 慢调用 TopN（LLM P95 超阈）</div><div class="card-extra" onclick="sw('insight')">去 AI 洞察 →</div></div>
+    <div style="padding:0;overflow:hidden"><table class="tbl"><thead><tr><th>Agent/模型</th><th>TTFT P95</th><th>调用量</th><th>错误率</th><th>瓶颈判定</th><th>下钻</th></tr></thead><tbody>
+      <tr><td>理财咨询 / qwen-max</td><td class="mono" style="color:var(--error)">2.1s</td><td class="mono">240</td><td class="mono" style="color:var(--error)">3.2%</td><td><span class="badge badge-error">P95 超阈 2x</span></td><td><span class="trace-view-btn" onclick="sw('insight');itab('perf',document.querySelector('[onclick*=perf]'))">性能 TAB</span></td></tr>
+      <tr><td>转账服务 / qwen-plus</td><td class="mono" style="color:var(--warning)">1.2s</td><td class="mono">1,820</td><td class="mono" style="color:var(--warning)">2.1%</td><td><span class="badge badge-warning">偏高</span></td><td><span class="trace-view-btn" onclick="sw('insight');itab('perf',document.querySelector('[onclick*=perf]'))">性能 TAB</span></td></tr>
+      <tr><td>ContextRouter / qwen-turbo</td><td class="mono">0.72s</td><td class="mono">2,400</td><td class="mono" style="color:var(--warning)">1.2%</td><td><span class="badge badge-info">正常</span></td><td><span class="trace-view-btn" onclick="sw('insight');itab('perf',document.querySelector('[onclick*=perf]'))">性能 TAB</span></td></tr>
+    </tbody></table></div>
+  </div>
+</div>
+
+<!-- SESSION -->
+<div class="page" id="p-session">
+  <div class="filter-bar">
+    <input class="filter-input" placeholder="session.id"><input class="filter-input" placeholder="user.id">
+    <select class="filter-select"><option>全部渠道</option><option>APP</option><option>小程序</option></select>
+    <select class="filter-select"><option>全部意图</option><option>CHAT</option><option>TRANSFER</option><option>WEALTH</option></select>
+    <select class="filter-select"><option>全部智能体</option><option>L0</option><option>TransferService</option><option>BillService</option></select>
+    <select class="filter-select"><option>全部状态</option><option>已完成</option><option>已失败</option><option>已取消</option></select>
+    <button class="btn-primary">查询</button>
+  </div>
+  <div class="card" style="padding:0;overflow:hidden">
+    <table class="tbl"><thead><tr><th>Session ID</th><th>User ID</th><th>渠道</th><th>时间</th><th>时长</th><th>轮次</th><th>意图</th><th>执行智能体</th><th>Token</th><th>会话状态</th><th>操作</th></tr></thead><tbody>
+      <tr data-session="s_3f09a1b2" style="cursor:pointer" onclick="openTraceModal(event)"><td class="mono link" onclick="openSession();event.stopPropagation()">s_3f09a1b2</td><td class="mono">u_8821</td><td>APP</td><td>10:15:22</td><td>8m14s</td><td>5</td><td>理财→转账</td><td>WealthConsult → TransferService</td><td>6,480</td><td><span class="badge badge-success"><span class="dot" style="background:var(--success)"></span>已完成</span></td><td><span class="link" onclick="openSession();event.stopPropagation()">查看回放</span></td></tr>
+      <tr data-session="s_5a7b8c9d" style="cursor:pointer" onclick="openTraceModal(event)"><td class="mono link" onclick="openSession();event.stopPropagation()">s_5a7b8c9d</td><td class="mono">u_3456</td><td>APP</td><td>10:45:10</td><td>3m20s</td><td>3</td><td>转账→错误</td><td>TransferService</td><td>3,210</td><td><span class="badge badge-error"><span class="dot" style="background:var(--error)"></span>已失败</span></td><td><span class="link" onclick="openSession();event.stopPropagation()">查看回放</span></td></tr>
+      <tr data-session="s_2e4f6a8c" style="cursor:pointer" onclick="openTraceModal(event)"><td class="mono link" onclick="openSession();event.stopPropagation()">s_2e4f6a8c</td><td class="mono">u_7890</td><td>小程序</td><td>11:02:33</td><td>1m45s</td><td>2</td><td>账单查询</td><td>BillService</td><td>1,840</td><td><span class="badge badge-success"><span class="dot" style="background:var(--success)"></span>已完成</span></td><td><span class="link" onclick="openSession();event.stopPropagation()">查看回放</span></td></tr>
+      <tr data-session="s_8c1d3e5f" style="cursor:pointer" onclick="openTraceModal(event)"><td class="mono link" onclick="openSession();event.stopPropagation()">s_8c1d3e5f</td><td class="mono">u_1234</td><td>APP</td><td>09:30:05</td><td>6m20s</td><td>3</td><td>转账</td><td>TransferService</td><td>4,120</td><td><span class="badge badge-warning"><span class="dot" style="background:var(--warning)"></span>已取消</span></td><td><span class="link" onclick="openSession();event.stopPropagation()">查看回放</span></td></tr>
+      <tr data-session="s_7a21c3d4" style="cursor:pointer" onclick="openTraceModal(event)"><td class="mono link" onclick="openSession();event.stopPropagation()">s_7a21c3d4</td><td class="mono">u_5532</td><td>APP</td><td>09:12:40</td><td>14m02s</td><td>6</td><td>账单查询</td><td>BillService</td><td>3,120</td><td><span class="badge badge-error"><span class="dot" style="background:var(--error)"></span>已失败</span></td><td><span class="link" onclick="openSession();event.stopPropagation()">查看回放</span></td></tr>
+    </tbody></table>
+  </div>
+</div>
+
+<!-- Session Modal -->
+<div class="modal-overlay" id="session-modal" onclick="if(event.target===this)closeSession()"><div class="modal"><div class="modal-hdr"><span style="font-size:16px;font-weight:600">💬 会话回放</span><span class="modal-close" onclick="closeSession()">✕</span></div><div class="modal-body">
+  <div class="session-header"><div class="session-header-left"><div class="session-header-title">会话 s_3f09a1b2 <span class="badge badge-success">已完成</span></div><div class="session-header-meta">
+    <div class="session-meta-item">👤 <strong>u_8821</strong></div><div class="session-meta-item">📱 APP</div><div class="session-meta-item">🕐 10:15→10:23</div><div class="session-meta-item">⏱ <strong>8m14s</strong></div><div class="session-meta-item">🔄 5 轮</div><div class="session-meta-item">🔀 2次域切换</div><div class="session-meta-item">🪙 6,480 tokens</div><div class="session-meta-item">💰 ¥0.52</div>
+    <div class="trio"><span class="t-label">三件套</span><span class="t-badge" onclick="sw('trace')">trace:c3d4e5f6</span><span class="t-badge" onclick="sw('logs')">user:u_8821</span></div>
+  </div></div><div style="display:flex;gap:8px"><button class="btn-primary" onclick="closeSession();sw('trace')">查看完整链路 →</button><button class="btn-primary" style="background:#fff;color:var(--primary);border:1px solid var(--primary)" onclick="closeSession();sw('logs')">查看会话日志</button></div></div>
+  <div class="turn"><div class="turn-header"><div class="turn-header-left"><span class="turn-num">1</span> 10:15:22 · <span class="badge badge-info">账单查询</span></div><div class="text-muted">L0→BillService · 置信度 0.95 · 耗时 890ms</div></div><div class="turn-body">
+    <div class="msg-row"><div class="msg-avatar avatar-user">👤</div><div class="msg-content"><div class="msg-role">用户</div><div class="msg-bubble bubble-user">我这个月信用卡账单还剩多少没还？</div></div></div>
+    <div class="msg-row"><div class="msg-avatar avatar-ai">🤖</div><div class="msg-content"><div class="msg-role">AI 助手</div><div class="msg-bubble bubble-ai">您好，您本月信用卡账单总额 ¥3,280.00，已还 ¥2,000.00，剩余待还 ¥1,280.00。</div><div class="msg-meta"><span>⏱ 890ms</span><span>🪙 1,240 tokens</span><span>🧠 qwen-max</span><span class="link" onclick="sw('trace')">🔗 trace: c3d4e5f6…</span></div></div></div>
+  </div></div>
+  <div class="turn"><div class="turn-header"><div class="turn-header-left"><span class="turn-num">2</span> 10:16:08 · <span class="badge badge-purple">转账</span></div><div class="text-muted">L0→TransferService · 0.92 · 1,240ms · <span class="badge badge-warning">参数追问×1</span></div></div><div class="turn-body">
+    <div class="msg-row"><div class="msg-avatar avatar-user">👤</div><div class="msg-content"><div class="msg-role">用户</div><div class="msg-bubble bubble-user">帮我把 500 块转到我妈卡上</div></div></div>
+    <div class="msg-row"><div class="msg-avatar avatar-ai">🤖</div><div class="msg-content"><div class="msg-role">AI 助手</div><div class="msg-bubble bubble-ai">好的，您要转账 ¥500.00。请提供收款人的银行卡号或手机号。</div><div class="msg-meta"><span>⏱ 1,240ms</span><span>🪙 1,820 tokens</span><span>🧠 qwen-max</span><span>🎯 amount=500 ✓, receiver=缺失 ✗</span><span class="link" onclick="sw('trace')">🔗 trace: a1b2c3d4…</span></div></div></div>
+  </div></div>
+  <div class="turn"><div class="turn-header"><div class="turn-header-left"><span class="turn-num">3</span> 10:17:30 · <span class="badge badge-purple">理财咨询</span></div><div class="text-muted">L0→WealthConsult · 0.88 · 1,560ms · <span class="badge badge-warning">REROUTE</span></div></div><div class="turn-body">
+    <div class="msg-row"><div class="msg-avatar avatar-user">👤</div><div class="msg-content"><div class="msg-role">用户</div><div class="msg-bubble bubble-user">现在有什么理财产品推荐吗？</div></div></div>
+    <div class="msg-row"><div class="msg-avatar avatar-ai">🤖</div><div class="msg-content"><div class="msg-role">AI 助手</div><div class="msg-bubble bubble-ai">您好！目前推荐以下稳健型产品：1. 天天利 2.8%；2. 季季盈 3.2%；3. 年年红 4.5%。</div><div class="msg-meta"><span>⏱ 1,560ms</span><span>🪙 2,480 tokens</span><span>🧠 qwen-turbo</span><span class="link" onclick="sw('trace')">🔗 trace: e7f8a9b0…</span></div></div></div>
+  </div></div>
+  <div class="turn"><div class="turn-header"><div class="turn-header-left"><span class="turn-num">4</span> 10:19:45 · <span class="badge badge-purple">转账</span></div><div class="text-muted">L0→TransferService · 0.96 · 5,201ms · <span class="badge badge-success">执行成功</span></div></div><div class="turn-body">
+    <div class="msg-row"><div class="msg-avatar avatar-user">👤</div><div class="msg-content"><div class="msg-role">用户</div><div class="msg-bubble bubble-user">我妈卡号 6225 **** 5567，转过去吧</div></div></div>
+    <div class="msg-row"><div class="msg-avatar avatar-ai">🤖</div><div class="msg-content"><div class="msg-role">AI 助手</div><div class="msg-bubble bubble-ai">转账成功！已向尾号 5567 转账 ¥500.00，流水号 TXN453765。</div><div class="msg-meta"><span>⏱ 5,201ms</span><span>🪙 940 tokens</span><span>🧠 qwen-plus</span><span class="link" onclick="sw('trace')">🔗 trace: d5e6f7a8…</span></div></div></div>
+  </div></div>
+  <div class="turn"><div class="turn-header"><div class="turn-header-left"><span class="turn-num">5</span> 10:23:15 · <span class="badge badge-info">账单复查</span></div><div class="text-muted">L0→BillService · 0.97 · 740ms</div></div><div class="turn-body">
+    <div class="msg-row"><div class="msg-avatar avatar-user">👤</div><div class="msg-content"><div class="msg-role">用户</div><div class="msg-bubble bubble-user">转完了，现在账单还剩多少？</div></div></div>
+    <div class="msg-row"><div class="msg-avatar avatar-ai">🤖</div><div class="msg-content"><div class="msg-role">AI 助手</div><div class="msg-bubble bubble-ai">转账后，信用卡账单仍剩余待还 ¥1,280.00。</div><div class="msg-meta"><span>⏱ 740ms</span><span>🪙 890 tokens</span><span>🧠 qwen-turbo</span><span class="link" onclick="sw('trace')">🔗 trace: b8c9d0e1…</span></div></div></div>
+  </div></div>
+  <div class="session-summary"><div class="session-summary-item"><span class="text-muted">意图流</span><span style="font-weight:600">账单→转账(追问)→理财咨询→转账完成→账单复查</span></div><div class="session-summary-item"><span class="text-muted">域切换</span><span>2 次</span></div><div class="session-summary-item"><span class="text-muted">总耗时</span><span style="font-weight:600">8m 14s</span></div><div class="session-summary-item"><span class="text-muted">总 Token</span><span style="font-weight:600">6,480</span></div></div>
+  <div class="session-feedback-bar"><span>本次会话体验如何？</span><button class="btn-primary" style="padding:4px 10px">👍 满意</button><button class="btn-primary" style="padding:4px 10px;background:#fff;color:var(--primary);border:1px solid var(--primary)">👎 不满意</button><span class="text-muted">→ 反馈写入 satisfaction，下钻至 AI 洞察满意度 TAB</span></div>
+</div></div></div>
+
+<!-- TRACE -->
+<div class="page" id="p-trace">
+  <div class="filter-bar">
+    <input class="filter-input" placeholder="user.id"><input class="filter-input" placeholder="session.id"><input class="filter-input" placeholder="trace.id">
+    <select class="filter-select"><option>全部层级</option><option>L0</option><option>L1</option><option>L2</option></select>
+    <select class="filter-select"><option>全部状态</option><option>正常</option><option>异常</option></select>
+    <button class="btn-primary">查询</button>
+  </div>
+  <div class="card" style="padding:0;overflow:hidden">
+    <table class="tbl"><thead><tr><th>Trace ID</th><th>User ID</th><th>Session ID</th><th>Agents 链</th><th>意图链</th><th>耗时</th><th>TTFT</th><th>Token</th><th>状态</th><th>操作</th></tr></thead><tbody>
+      <tr onclick="openTraceDetail('c3d4e5f6')"><td class="mono">c3d4e5f6</td><td class="mono">u_8821</td><td class="mono link" onclick="sw('session');event.stopPropagation()">s_3f09a1b2</td><td class="mono">L0→L1→BILL</td><td class="mono">BILL Domain</td><td>890ms</td><td>210ms</td><td>1,240</td><td><span class="badge badge-success">正常</span></td><td><span class="trace-view-btn" onclick="openTraceDetail('c3d4e5f6');event.stopPropagation()">查看</span></td></tr>
+      <tr onclick="openTraceDetail('a1b2c3d4')"><td class="mono">a1b2c3d4</td><td class="mono">u_8821</td><td class="mono link" onclick="sw('session');event.stopPropagation()">s_3f09a1b2</td><td class="mono">L0→L1→TRANSFER</td><td class="mono">TRANSFER Domain → SWITCH</td><td>1,240ms</td><td>280ms</td><td>1,820</td><td><span class="badge badge-success">正常</span></td><td><span class="trace-view-btn" onclick="openTraceDetail('a1b2c3d4');event.stopPropagation()">查看</span></td></tr>
+      <tr onclick="openTraceDetail('d5e6f7a8')"><td class="mono">d5e6f7a8</td><td class="mono">u_8821</td><td class="mono link" onclick="sw('session');event.stopPropagation()">s_3f09a1b2</td><td class="mono">L0→L1→TRANSFER</td><td class="mono">TRANSFER Domain → FOLLOW</td><td>5,201ms</td><td>320ms</td><td>940</td><td><span class="badge badge-success">正常</span></td><td><span class="trace-view-btn" onclick="openTraceDetail('d5e6f7a8');event.stopPropagation()">查看</span></td></tr>
+      <tr onclick="openTraceDetail('test3r2')"><td class="mono">test3r2</td><td class="mono">test3</td><td class="mono link" onclick="sw('session');event.stopPropagation()">test3</td><td class="mono">L0→L1→CHAT</td><td class="mono">CHAT Domain</td><td>—</td><td>—</td><td>—</td><td><span class="badge badge-error">异常</span></td><td><span class="trace-view-btn" onclick="openTraceDetail('test3r2');event.stopPropagation()">查看</span></td></tr>
+    </tbody></table>
+  </div>
+</div>
+
+<!-- Trace Detail Modal -->
+<div class="modal-overlay" id="trace-modal" onclick="if(event.target===this)closeTrace()"><div class="modal"><div class="modal-hdr"><span style="font-size:16px;font-weight:600">🔗 链路详情</span><span class="modal-close" onclick="closeTrace()">✕</span></div><div class="modal-body">
+  <div class="breadcrumb"><a onclick="closeTrace()">链路追踪</a><span class="sep">/</span><span>trace: d5e6f7a8</span><span class="trio" style="margin-left:8px"><span class="t-badge" onclick="sw('session')">session:s_3f09a1b2</span><span class="t-badge" onclick="sw('logs')">user:u_8821</span></span></div>
+  <div class="card" style="margin-bottom:12px"><div class="card-header" style="margin-bottom:8px"><div class="card-title" style="font-size:13px">Agent 层级树（L0→L1→L2）</div><span class="badge badge-success" style="font-size:10px">E2E 5,201ms</span></div>
+    <div class="trace-tree">
+      <div class="trace-agent"><div class="trace-agent-header"><span class="tag-l0">L0</span><span class="agent-name">DomainRouter</span><span class="agent-desc">领域路由 · 转账</span><span class="agent-time" style="color:var(--primary)">860ms</span><span class="io-toggle" onclick="tio(event,'ta-l0')">详情</span></div>
+        <div class="io-panel" id="io-ta-l0"><div class="io-section"><div class="io-sh">INPUT</div><div class="io-code">"帮我把 500 块转到我妈卡上"</div></div><div class="io-section"><div class="io-sh">OUTPUT — intent</div><div class="io-code">TRANSFER（confidence 0.92）</div></div></div>
+        <div class="trace-agent-body">
+          <div class="trace-agent"><div class="trace-agent-header"><span class="tag-l1">L1</span><span class="agent-name">ContextRouter + SubGraphRouter</span><span class="agent-desc">改写+业务路由 · SWITCH→FOLLOW</span><span class="agent-time" style="color:var(--purple)">1,320ms</span><span class="io-toggle" onclick="tio(event,'ta-l1')">详情</span></div>
+            <div class="io-panel" id="io-ta-l1"><div class="io-section"><div class="io-sh">OUTPUT — L1 intent</div><div class="io-code">routeType=SWITCH · intentName=TRANSFER</div></div></div>
+            <div class="trace-agent-body">
+              <div class="trace-agent"><div class="trace-agent-header"><span class="tag-l2">L2</span><span class="agent-name">TransferService</span><span class="agent-desc">转账执行 · 成功</span><span class="agent-time" style="color:var(--success)">2,280ms</span><span class="io-toggle" onclick="tio(event,'al2')">详情</span></div>
+                <div class="io-panel" id="io-al2">
+                  <div class="io-section"><div class="io-sh">INPUT — L2 业务执行参数</div><div class="io-code">{amount:500,recipient:"张三",from:"储蓄卡 6222***"}</div></div>
+                  <div class="io-section"><div class="io-sh">OUTPUT — 交易结果</div><div class="io-code">{status:"success",txn_id:"TXN453765",balance_after:4500}</div></div>
+                </div>
+                <div class="trace-agent-body"><div class="trace-llm-row"><span>🧠</span><span>L2-LLM</span><span class="llm-detail">qwen-plus</span><span class="llm-time">1,580ms</span><span class="llm-detail">in:156 out:45 → 参数提取</span><span class="io-toggle" onclick="tio(event,'llm-l2')">详情</span></div>
+                  <div class="io-panel" id="io-llm-l2"><div class="io-section"><div class="io-sh">Prompt <span class="badge badge-info" style="font-size:10px">含完整对话历史</span></div><div class="io-code">[System] 你是转账执行助手…[History] 用户:帮我把500块转到我妈卡上 / AI:请提供收款人…[User] 我妈卡号6225****5567</div></div><div class="io-section"><div class="io-sh">Response</div><div class="io-code">{"reply":"转账成功！已向张三转账500元，流水号TXN453765"}</div></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:12px"><div class="card-header" style="margin-bottom:8px"><div class="card-title" style="font-size:13px">Span 瀑布图</div><span class="badge badge-warning" style="font-size:10px">TTFT 3380ms</span></div>
+    <div class="waterfall">
+      <div class="ttft-marker" style="left: calc(178px + (100% - 32px) * 0.633)"><span>TTFT 3380ms</span></div>
+      <div class="wf-row"><span class="wf-label">总耗时 / HTTP 入口</span><div class="wf-bar bar-http" style="width:100%">5,340ms</div></div>
+      <div class="wf-row"><span class="wf-label">L0 领域路由 / qwen-plus</span><div class="wf-bar bar-agent" style="width:16%;margin-left:2%">860ms</div></div>
+      <div class="wf-row"><span class="wf-label">L1-LLM1 会话分类 / qwen-turbo</span><div class="wf-bar bar-llm" style="width:9%;margin-left:16%">480ms</div></div>
+      <div class="wf-row"><span class="wf-label">L1-LLM2 改写+业务路由 / qwen-turbo</span><div class="wf-bar bar-llm" style="width:25%;margin-left:25%">1,320ms</div></div>
+      <div class="wf-row"><span class="wf-label">L2 转账执行 / qwen-plus</span><div class="wf-bar bar-tool" style="width:43%;margin-left:50%">2,280ms</div></div>
+    </div>
+  </div>
+  <div class="card"><div class="card-header" style="margin-bottom:8px"><div class="card-title" style="font-size:13px">Slow / Error 标注</div></div>
+    <div class="note">⚠️ 该 trace 的 L2 转账执行 P95（2.28s）在「性能瓶颈」洞察中位列 Top3，建议检查 qwen-plus 在该节点是否可换更小模型或开启流式首包优化。<span class="link" style="color:var(--primary)" onclick="sw('insight');itab('perf',document.querySelector('[onclick*=perf]'))">→ 性能 TAB</span></div>
+  </div>
+</div></div></div>
+
+<!-- INSIGHT -->
+<div class="page" id="p-insight">
+  <div class="insight-layout">
+    <div class="insight-main">
+    <div class="card"><div class="tabs">
+    <div class="tab active" onclick="itab('accuracy',this)">准确率分析</div>
+    <div class="tab" onclick="itab('perf',this)">Agent 性能</div>
+    <div class="tab" onclick="itab('funnel',this)">业务转化漏斗</div>
+    <div class="tab" onclick="itab('token',this)">Token 成本</div>
+    <div class="tab" onclick="itab('agent',this)">智能体 / 工具</div>
+    <div class="tab" onclick="itab('satisfaction',this)">用户满意度</div>
+  </div></div>
+
+  <div class="tab-pane active" id="tab-accuracy">
+    <div class="card"><div class="card-header"><div class="card-title">意图识别准确率趋势</div><span class="text-sm text-muted">L0 98.2% · L1 94.2% · 整体 ↑1.8%</span></div><div class="chart-box" id="chart-accuracy"></div></div>
+    <div class="card mt-16"><div class="card-header"><div class="card-title">改写准确率分析</div><span class="text-sm text-muted">总体 91.5% ↑0.7% · 样本 2,100</span></div><div style="padding:0;overflow:hidden"><table class="tbl"><thead><tr><th>改写场景</th><th>总次数</th><th>正确次数</th><th>准确率</th><th>趋势</th><th>典型错误</th></tr></thead><tbody>
+      <tr><td>口语化金额转标准格式</td><td>820</td><td>768</td><td>93.7%</td><td><span class="delta-up">↑ 2.1%</span></td><td>"五百块" 未转为 500</td></tr>
+      <tr><td>收款人信息补全</td><td>640</td><td>572</td><td>89.4%</td><td><span class="delta-up">↑ 1.2%</span></td><td>"转给上次那个" 未关联收款人</td></tr>
+      <tr><td>时间表达式归一化</td><td>380</td><td>358</td><td>94.2%</td><td><span class="delta-down">↓ 0.5%</span></td><td>"下个月" 解析偏差</td></tr>
+      <tr><td>意图消歧</td><td>260</td><td>242</td><td>93.1%</td><td><span class="delta-up">↑ 3.4%</span></td><td>多义查询路由错误</td></tr>
+    </tbody></table></div></div>
+    <div class="card mt-16"><div class="card-header"><div class="card-title">改写失败根因 TOP3</div><span class="text-sm text-muted">共失败 179 例 · 占 8.5%</span></div>
+      <div style="display:flex;gap:16px;padding:0 20px 20px">
+        <div style="flex:1;background:#fff2f0;border-radius:var(--radius-sm);padding:16px 20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span style="font-weight:600;font-size:14px">1. 代词指代不明</span><span style="font-family:var(--mono);font-weight:700;font-size:20px;color:var(--error)">58</span></div><div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">他/她/它 跨轮次指向丢失</div><div class="progress-bar" style="height:8px"><div class="progress-fill" style="width:32.4%;background:var(--error)"></div></div><div style="text-align:right;font-size:12px;color:var(--error);margin-top:4px">32.4%</div></div>
+        <div style="flex:1;background:#fffbe6;border-radius:var(--radius-sm);padding:16px 20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span style="font-weight:600;font-size:14px">2. 金额格式未标准化</span><span style="font-family:var(--mono);font-weight:700;font-size:20px;color:var(--warning)">42</span></div><div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">"五百块/3千" 未及时转为数字</div><div class="progress-bar" style="height:8px"><div class="progress-fill" style="width:23.5%;background:var(--warning)"></div></div><div style="text-align:right;font-size:12px;color:var(--warning);margin-top:4px">23.5%</div></div>
+        <div style="flex:1;background:#f9f0ff;border-radius:var(--radius-sm);padding:16px 20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span style="font-weight:600;font-size:14px">3. 上下文关联断裂</span><span style="font-family:var(--mono);font-weight:700;font-size:20px;color:var(--purple)">31</span></div><div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">上一轮输出未注入改写 Prompt</div><div class="progress-bar" style="height:8px"><div class="progress-fill" style="width:17.3%;background:var(--purple)"></div></div><div style="text-align:right;font-size:12px;color:var(--purple);margin-top:4px">17.3%</div></div>
+      </div>
+    </div>
+    <div class="card mt-16"><div class="card-header"><div class="card-title">意图混淆矩阵</div><span class="text-sm text-muted">行=预测 · 列=实际</span></div><div class="chart-box" id="chart-confusion"></div></div>
+  </div>
+
+  <div class="tab-pane" id="tab-perf">
+    <div class="card"><div class="tabs" style="border:none;padding:0 0 12px"><div class="tab active" onclick="psw('agent',this)" style="font-size:12px">Agent 维度</div><div class="tab" onclick="psw('llm',this)" style="font-size:12px">LLM 维度</div></div>
+      <div class="perf-pane active" id="perf-agent">
+        <div style="display:flex;gap:16px;align-items:flex-end;margin-bottom:16px">
+          <div style="flex:1;text-align:center;padding:10px;background:#f0f5ff;border-radius:var(--radius-sm)"><div style="font-size:11px;color:var(--text-tertiary)">总调用</div><div style="font-family:var(--mono);font-weight:700;font-size:18px">12,040</div></div>
+          <div style="flex:1;text-align:center;padding:10px;background:#f6ffed;border-radius:var(--radius-sm)"><div style="font-size:11px;color:var(--text-tertiary)">平均耗时</div><div style="font-family:var(--mono);font-weight:700;font-size:18px">685<span style="font-size:12px;color:var(--text-tertiary)">ms</span></div></div>
+          <div style="flex:1;text-align:center;padding:10px;background:#fff2f0;border-radius:var(--radius-sm)"><div style="font-size:11px;color:var(--text-tertiary)">平均错误率</div><div style="font-family:var(--mono);font-weight:700;font-size:18px;color:var(--error)">1.3<span style="font-size:12px">%</span></div></div>
+          <div style="flex:1;text-align:center;padding:10px;background:#f9f0ff;border-radius:var(--radius-sm)"><div style="font-size:11px;color:var(--text-tertiary)">总 Token</div><div style="font-family:var(--mono);font-weight:700;font-size:18px">3.3<span style="font-size:12px;color:var(--text-tertiary)">M</span></div></div>
+        </div>
+        <div style="padding:0;overflow:hidden;margin-bottom:16px"><table class="tbl" id="tbl-perf-agent"><thead><tr><th>Agent</th><th>级别</th><th>调用</th><th>总耗时</th><th>TTFT P50</th><th>TTFT P95</th><th>TPOT P50</th><th>TPOT P95</th><th>总Token</th><th>错误%</th></tr></thead><tbody>
+          <tr class="perf-row"><td>L0</td><td><span class="badge badge-info">L0</span></td><td class="mono">5,800</td><td class="mono">420ms</td><td class="mono">180ms</td><td class="mono">520ms</td><td class="mono">12ms</td><td class="mono">45ms</td><td class="mono">1.2M</td><td class="mono" style="color:var(--success)">0.3%</td></tr>
+          <tr class="perf-row"><td>L1</td><td><span class="badge badge-purple">L1</span></td><td class="mono">2,400</td><td class="mono">620ms</td><td class="mono">280ms</td><td class="mono">780ms</td><td class="mono">18ms</td><td class="mono">62ms</td><td class="mono">0.8M</td><td class="mono" style="color:var(--warning)">1.2%</td></tr>
+          <tr class="perf-row"><td>转账服务</td><td><span class="badge badge-success">L2</span></td><td class="mono">1,820</td><td class="mono">890ms</td><td class="mono">320ms</td><td class="mono" style="color:var(--warning)">1.2s</td><td class="mono">18ms</td><td class="mono">72ms</td><td class="mono">0.6M</td><td class="mono" style="color:var(--warning)">2.1%</td></tr>
+          <tr class="perf-row"><td>账单查询</td><td><span class="badge badge-success">L2</span></td><td class="mono">980</td><td class="mono">450ms</td><td class="mono">200ms</td><td class="mono">610ms</td><td class="mono">15ms</td><td class="mono">58ms</td><td class="mono">0.3M</td><td class="mono" style="color:var(--success)">0.8%</td></tr>
+          <tr class="perf-row" style="background:#fff2f0"><td>理财咨询</td><td><span class="badge badge-success">L2</span></td><td class="mono">240</td><td class="mono">1,250ms</td><td class="mono" style="color:var(--warning)">480ms</td><td class="mono" style="color:var(--error)">2.1s</td><td class="mono">28ms</td><td class="mono" style="color:var(--warning)">95ms</td><td class="mono">0.1M</td><td class="mono" style="color:var(--error)">3.2%</td></tr>
+          <tr class="perf-row"><td>理财解读</td><td><span class="badge badge-success">L2</span></td><td class="mono">800</td><td class="mono">680ms</td><td class="mono">260ms</td><td class="mono">920ms</td><td class="mono">16ms</td><td class="mono">68ms</td><td class="mono">0.3M</td><td class="mono" style="color:var(--warning)">1.5%</td></tr>
+        </tbody></table></div>
+        <div class="grid-2"><div class="card" style="padding:16px"><div class="card-header" style="margin-bottom:8px"><div class="card-title" style="font-size:12px">TTFT 延迟分布</div></div><div class="chart-box-sm" id="chart-perf-box"></div></div><div class="card" style="padding:16px"><div class="card-header" style="margin-bottom:8px"><div class="card-title" style="font-size:12px">TTFT vs TPOT</div></div><div class="chart-box-sm" id="chart-perf-scatter"></div></div></div>
+      </div>
+      <div class="perf-pane" id="perf-llm">
+        <div style="padding:0;overflow:hidden;margin-bottom:16px"><table class="tbl" id="tbl-perf-llm"><thead><tr><th>Agent</th><th>模型</th><th>调用</th><th>TTFT P50</th><th>TTFT P95</th><th>TPOT P50</th><th>TPOT P95</th><th>Token(in/out)</th><th>错误%</th></tr></thead><tbody>
+          <tr class="perf-row"><td>L0</td><td class="mono">qwen-plus</td><td class="mono">5,800</td><td class="mono">160ms</td><td class="mono">480ms</td><td class="mono">10ms</td><td class="mono">38ms</td><td class="mono">52 / 18</td><td class="mono" style="color:var(--success)">0.3%</td></tr>
+          <tr class="perf-row"><td>L1</td><td class="mono">qwen-turbo</td><td class="mono">2,400</td><td class="mono">240ms</td><td class="mono">720ms</td><td class="mono">15ms</td><td class="mono">55ms</td><td class="mono">85 / 32</td><td class="mono" style="color:var(--warning)">1.2%</td></tr>
+          <tr class="perf-row" style="background:#fff2f0"><td>理财咨询</td><td class="mono">qwen-max</td><td class="mono">240</td><td class="mono" style="color:var(--warning)">420ms</td><td class="mono" style="color:var(--error)">1.9s</td><td class="mono">25ms</td><td class="mono" style="color:var(--warning)">85ms</td><td class="mono">210 / 68</td><td class="mono" style="color:var(--error)">3.2%</td></tr>
+          <tr class="perf-row"><td>理财解读</td><td class="mono">qwen-max</td><td class="mono">800</td><td class="mono">240ms</td><td class="mono">850ms</td><td class="mono">14ms</td><td class="mono">58ms</td><td class="mono">180 / 55</td><td class="mono" style="color:var(--warning)">1.5%</td></tr>
+        </tbody></table></div>
+        <div class="grid-2"><div class="card" style="padding:16px"><div class="card-header" style="margin-bottom:8px"><div class="card-title" style="font-size:12px">LLM TTFT 分布</div></div><div class="chart-box-sm" id="chart-perf-llm-box"></div></div><div class="card" style="padding:16px"><div class="card-header" style="margin-bottom:8px"><div class="card-title" style="font-size:12px">LLM TTFT vs TPOT</div></div><div class="chart-box-sm" id="chart-perf-llm-scatter"></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-pane" id="tab-funnel"><div class="grid-2"><div class="card"><div class="card-header"><div class="card-title">业务转化漏斗</div></div><div class="chart-box" id="chart-funnel"></div></div><div class="card"><div class="card-header"><div class="card-title">分阶段放弃率</div></div><div class="chart-box" id="chart-abandon"></div></div></div>
+    <div class="card mt-16"><div class="card-header"><div class="card-title">漏斗明细 <span class="text-sm text-muted">最大流失点在"参数提取"</span></div></div><div style="padding:0;overflow:hidden"><table class="tbl"><thead><tr><th>阶段</th><th>进入数</th><th>完成数</th><th>放弃数</th><th>转化率</th><th>放弃率</th><th>主要放弃原因</th></tr></thead><tbody>
+      <tr><td>会话发起</td><td>3,842</td><td>3,842</td><td>0</td><td>100%</td><td>—</td><td>—</td></tr>
+      <tr><td>意图识别</td><td>3,842</td><td>3,620</td><td>222</td><td>94.2%</td><td>5.8%</td><td>意图不明确 / 超时</td></tr>
+      <tr style="background:#fff2f0"><td>参数提取</td><td>3,620</td><td>3,050</td><td>570</td><td>84.3%</td><td>15.7%</td><td>用户未提供完整参数</td></tr>
+      <tr><td>执行确认</td><td>3,050</td><td>2,680</td><td>370</td><td>87.9%</td><td>12.1%</td><td>用户主动取消</td></tr>
+      <tr><td>业务完成</td><td>2,680</td><td>2,392</td><td>288</td><td>89.2%</td><td>10.8%</td><td>系统错误 / 余额不足</td></tr>
+    </tbody></table></div></div>
+  </div>
+
+  <div class="tab-pane" id="tab-token">
+    <div class="grid-2"><div class="card"><div class="card-header"><div class="card-title">Token 消耗趋势（按模型）</div></div><div class="chart-box-sm" id="chart-token-trend"></div></div><div class="card"><div class="card-header"><div class="card-title">Token 成本拆解（按意图）</div></div><div class="chart-box-sm" id="chart-token-pie"></div></div></div>
+    <div class="card mt-16"><div class="card-header"><div class="card-title">Token 明细（按意图 × 模型）</div></div><div style="padding:0;overflow:hidden"><table class="tbl"><thead><tr><th>意图</th><th>模型</th><th>调用次数</th><th>输入 Token</th><th>输出 Token</th><th>总 Token</th><th>占比</th></tr></thead><tbody>
+      <tr><td>转账</td><td>qwen-max</td><td>1,820</td><td>1,420,000</td><td>380,000</td><td>1,800,000</td><td>38.5%</td></tr>
+      <tr><td>账单查询</td><td>qwen-max</td><td>980</td><td>620,000</td><td>180,000</td><td>800,000</td><td>17.1%</td></tr>
+      <tr><td>理财咨询</td><td>qwen-max</td><td>620</td><td>520,000</td><td>130,000</td><td>650,000</td><td>13.9%</td></tr>
+      <tr><td>理财解读</td><td>qwen-max</td><td>450</td><td>420,000</td><td>110,000</td><td>530,000</td><td>11.4%</td></tr>
+      <tr><td>闲聊</td><td>qwen-32b</td><td>1,200</td><td>680,000</td><td>120,000</td><td>800,000</td><td>2.1%</td></tr>
+    </tbody></table></div></div>
+  </div>
+
+  <div class="tab-pane" id="tab-agent">
+    <div class="card"><div class="card-header"><div class="card-title">工具调用统计</div><span class="text-sm text-muted">核心银行 API 接入</span></div><div style="padding:0;overflow:hidden"><table class="tbl"><thead><tr><th>工具</th><th>提供方</th><th>调用</th><th>成功</th><th>成功率</th><th>平均耗时</th></tr></thead><tbody>
+      <tr><td>BankAccountQuery</td><td>banking-api</td><td>230</td><td>225</td><td><span class="badge badge-success">97.8%</span></td><td class="mono">120ms</td></tr>
+      <tr><td>TransferExecute</td><td>banking-api</td><td>182</td><td>178</td><td><span class="badge badge-success">97.8%</span></td><td class="mono">210ms</td></tr>
+      <tr><td>BillQuery</td><td>billing-api</td><td>98</td><td>96</td><td><span class="badge badge-success">98.0%</span></td><td class="mono">95ms</td></tr>
+    </tbody></table></div>
+    <div class="note">🟡 Skill 业务效果（skill_stats）属 P1 能力，P0 阶段按 spec §4.9 隐藏此区域，待建表后展示。</div>
+  </div>
+
+  <div class="tab-pane" id="tab-satisfaction">
+    <div class="grid-2"><div class="card"><div class="card-header"><div class="card-title">满意度分布</div></div><div class="chart-box-sm" id="chart-sat-pie"></div></div><div class="card"><div class="card-header"><div class="card-title">满意度趋势（7天）</div></div><div class="chart-box-sm" id="chart-sat-trend"></div></div></div>
+    <div class="card mt-16"><div class="card-header"><div class="card-title">不满意反馈原因聚类</div><span class="text-sm text-muted">与性能/准确率洞察互证</span></div>
+      <div style="padding:0;overflow:hidden"><table class="tbl"><thead><tr><th>原因</th><th>数量</th><th>占比</th><th>关联洞察</th></tr></thead><tbody>
+        <tr><td>超时 / 慢</td><td>18</td><td>40.0%</td><td><span class="link" onclick="gotoInsightTab('perf')">→ 性能瓶颈</span></td></tr>
+        <tr><td>意图识别错误</td><td>12</td><td>26.7%</td><td><span class="link" onclick="gotoInsightTab('accuracy')">→ 准确率提升点</span></td></tr>
+        <tr><td>回答不准确</td><td>10</td><td>22.2%</td><td><span class="link" onclick="gotoInsightTab('accuracy')">→ 改写根因</span></td></tr>
+        <tr><td>其他</td><td>5</td><td>11.1%</td><td>—</td></tr>
+      </tbody></table></div>
+    </div>
+  </div>
+  </div>
+  
+</div>
+</div>
+
+</div>
+
+<!-- LOGS -->
+<div class="page" id="p-logs">
+  <div class="filter-bar">
+    <input class="filter-input" placeholder="user.id"><input class="filter-input" placeholder="session.id"><input class="filter-input" placeholder="trace.id"><input class="filter-input" placeholder="全文检索">
+    <select class="filter-select"><option>全部级别</option><option>INFO</option><option>WARN</option><option>ERROR</option></select>
+    <button class="btn-primary">检索</button>
+  </div>
+  <div class="logs-card">
+    <div class="log-header">每行日志支持 <b>三件套</b> 跳转：点击 trace.id → 链路详情；点击 session.id → 会话回放</div>
+    <div class="log-list">
+      <div class="log-entry"><span class="log-time">10:19:45.231</span><span class="log-level log-info">INFO</span><span class="log-msg">L2 TransferService 执行成功 · <span class="trio"><span class="t-badge" onclick="sw('trace')">trace:d5e6f7a8</span><span class="t-badge" onclick="sw('session')">session:s_3f09a1b2</span></span></span></div>
+      <div class="log-entry"><span class="log-time">10:19:40.118</span><span class="log-level log-warn">WARN</span><span class="log-msg">L1 SubGraphRouter 改写后实体缺失 receiver · <span class="trio"><span class="t-badge" onclick="sw('trace')">trace:a1b2c3d4</span></span></span></div>
+      <div class="log-entry"><span class="log-time">10:18:12.905</span><span class="log-level log-info">INFO</span><span class="log-msg">L0 DomainRouter 命中 TRANSFER，last_domain=TRANSFER，沿用 domain · <span class="trio"><span class="t-badge" onclick="sw('trace')">trace:a1b2c3d4</span></span></span></div>
+      <div class="log-entry"><span class="log-time">16:55:02.774</span><span class="log-level log-error">ERROR</span><span class="log-msg">ChatService LLM 调用失败 404 NOT_FOUND · <span class="trio"><span class="t-badge" onclick="sw('trace')">trace:test3r2</span><span class="t-badge" onclick="sw('session')">session:test3</span></span> → 聊天服务暂时不可用</span></div>
+      <div class="log-entry"><span class="log-time">16:51:10.402</span><span class="log-level log-info">INFO</span><span class="log-msg">L0 DomainRouter 关键词命中 TRANSFER（未走 LLM）· <span class="trio"><span class="t-badge" onclick="sw('trace')">trace:test3r1</span></span></span></div>
+      <div class="log-entry"><span class="log-time">16:50:45.331</span><span class="log-level log-warn">WARN</span><span class="log-msg">ObsChatModel 捕获异常，held span 由 commitIntent 结束 · model=SenseNova · status=404</span></div>
+      <div class="log-entry"><span class="log-time">09:12:22.110</span><span class="log-level log-info">INFO</span><span class="log-msg">Collector 接收 OTLP trace batch · spans=42 · target=http://127.0.0.1:9090</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ALERTS -->
+<div class="page" id="p-alerts">
+  <div class="card">
+    <div class="card-header"><div class="card-title">🔔 告警规则</div><span class="text-sm text-muted">Grafana Alerting / Alertmanager</span></div>
+    <div class="alert-toolbar">
+      <div class="alert-meta">共 6 条规则 · 4 条启用 · 2 条建议启用</div>
+      <button class="btn-primary">+ 新增规则</button>
+    </div>
+    <div class="alert-card">
+      <div class="alert-sev a-crit"></div>
+      <div class="alert-body"><div class="title">LLM 错误率 &gt; 5%</div><div class="cond">metric: llm.error.count / llm.token · 持续 5m · 严重</div></div>
+      <div class="alert-toggle on" onclick="this.classList.toggle('on')"></div>
+      <div class="alert-notify">钉钉</div>
+    </div>
+    <div class="alert-card">
+      <div class="alert-sev a-warn"></div>
+      <div class="alert-body"><div class="title">P95 系统时延 &gt; 3000ms</div><div class="cond">metric: p95_latency · 持续 5m · 警告</div></div>
+      <div class="alert-toggle on" onclick="this.classList.toggle('on')"></div>
+      <div class="alert-notify">钉钉</div>
+    </div>
+    <div class="alert-card">
+      <div class="alert-sev a-warn"></div>
+      <div class="alert-body"><div class="title">转账槽位完成率骤降 &gt; 10%</div><div class="cond">funnel: slot_completion_rate · 5m 窗口 · 业务影响</div></div>
+      <div class="alert-toggle on" onclick="this.classList.toggle('on')"></div>
+      <div class="alert-notify">钉钉 + 邮件</div>
+    </div>
+    <div class="alert-card">
+      <div class="alert-sev a-warn"></div>
+      <div class="alert-body"><div class="title">Collector 接收量骤降</div><div class="cond">OTLP 摄入 &lt; 基线 30% · 平台自观测</div></div>
+      <div class="alert-toggle" onclick="this.classList.toggle('on')"></div>
+      <div class="alert-notify">邮件</div>
+    </div>
+    <div class="alert-card">
+      <div class="alert-sev a-info"></div>
+      <div class="alert-body"><div class="title">满意度负面反馈 &gt; 15%</div><div class="cond">satisfaction 表负面占比 · 1h 窗口 · 运营提示</div></div>
+      <div class="alert-toggle on" onclick="this.classList.toggle('on')"></div>
+      <div class="alert-notify">飞书</div>
+    </div>
+    <div class="alert-card">
+      <div class="alert-sev a-info"></div>
+      <div class="alert-body"><div class="title">Reroute 率 &gt; 20%</div><div class="cond">待 Core 发射 reroute 度量后启用 · 算法预警</div></div>
+      <div class="alert-toggle" onclick="this.classList.toggle('on')"></div>
+      <div class="alert-notify">邮件</div>
+    </div>
+    <div class="note">💡 这正是"SenseNova 全 404 挂一整天无人知"的治本手段：配 LLM 错误率告警后，端点故障会立即推送，不再靠人工翻日志。</div>
+  </div>
+  <div class="card"><div class="card-header"><div class="card-title">告警事件时间线（闭环）</div></div>
+    <div class="timeline">
+      <div class="tl-item firing"><div style="font-weight:600;color:var(--error)">🔴 LLM 错误率 92% — SenseNova 端点 404</div><div class="text-sm text-muted">2026-07-10 16:51 · 触发 · 持续中 · 通知已发钉钉</div></div>
+      <div class="tl-item resolved"><div style="font-weight:600;color:var(--success)">🟢 P95 时延恢复 &lt; 3000ms</div><div class="text-sm text-muted">2026-07-10 09:30 · 触发 08:05 · 恢复 08:12</div></div>
+      <div class="tl-item resolved"><div style="font-weight:600;color:var(--success)">🟢 业务完成率 低于 80% 已恢复</div><div class="text-sm text-muted">2026-07-09 22:10 · 触发 · 恢复 22:40</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- SETTINGS -->
+<div class="page" id="p-settings">
+  <div class="health-card">
+    <div class="health-ring">
+      <div class="health-score">78%</div>
+      <div class="health-label">数据健康</div>
+    </div>
+    <div class="health-summary">
+      <div class="health-count ok">1 已接通</div>
+      <div class="health-count pending">3 已接待上报/待对接</div>
+      <div class="health-count off">2 待接入</div>
+    </div>
+    <div class="health-list">
+      <div class="health-list-item ok">Token / TTFT / 错误率 已接通</div>
+      <div class="health-list-item pending">DAU / 在线 已接待上报</div>
+      <div class="health-list-item off">LLM 置信度 待 Core 埋点</div>
+      <div class="health-list-item off">分层意图 待 Core 埋点</div>
+      <div class="health-list-item pending">违规率 待安全围栏对接</div>
+      <div class="health-list-item pending">reroute 待 Core 发射度量</div>
+    </div>
+  </div>
+  <div class="settings-grid">
+    <div class="card"><div class="card-header"><div class="card-title">采集配置</div></div>
+      <div class="set-row"><span class="set-k">Collector 状态</span><span class="set-v" style="color:var(--success)">running</span></div>
+      <div class="set-row"><span class="set-k">Collector 端点</span><span class="set-v">http://127.0.0.1:4318</span></div>
+      <div class="set-row"><span class="set-k">采样率</span><span class="set-v">100%</span></div>
+      <div class="set-row"><span class="set-k">Prompt 存储</span><span class="set-v">开启</span></div>
+      <div class="set-row"><span class="set-k">保留天数</span><span class="set-v">30d</span></div>
+    </div>
+    <div class="card"><div class="card-header"><div class="card-title">存储配置</div></div>
+      <div class="set-row"><span class="set-k">信号库（trace/metric/log）</span><span class="set-v">H2（P0）→ Tempo/Prom/Loki（P2）</span></div>
+      <div class="set-row"><span class="set-k">业务语义库（session/funnel/satisfaction）</span><span class="set-v">H2 → PostgreSQL（P2）</span></div>
+      <div class="set-row"><span class="set-k">Redis 热层</span><span class="set-v" style="color:var(--success)">connected</span></div>
+      <div class="set-row"><span class="set-k">Trace 保留</span><span class="set-v">7d</span></div>
+      <div class="set-row"><span class="set-k">指标保留</span><span class="set-v">24h</span></div>
+    </div>
+  </div>
+  <div class="card mt-16"><div class="card-header"><div class="card-title">📊 数据健康总览（GAP 对照）</div></div>
+    <div style="padding:0;overflow:hidden"><table class="tbl"><thead><tr><th>指标</th><th>当前状态</th><th>数据源</th><th>修复建议</th></tr></thead><tbody>
+      <tr><td>DAU / 实时在线</td><td><span class="badge badge-warning">已接待上报</span></td><td>SessionBridge.userId 去重</td><td>Core 已上报，待流量验证</td></tr>
+      <tr><td>LLM 置信度</td><td><span class="badge badge-error">待接入</span></td><td>Span llm.confidence</td><td>Core 在 LLM span 携带 confidence（P0-4）</td></tr>
+      <tr><td>L0/L1 分层意图</td><td><span class="badge badge-error">待接入</span></td><td>Span/会话 l0/l1/l2Intent</td><td>Core 携带分层 intent（P0-5）</td></tr>
+      <tr><td>Reroute 率</td><td><span class="badge badge-error">待接入</span></td><td>Core reroute 度量</td><td>Core 发射 reroute 计数（P1-1）</td></tr>
+      <tr><td>违规率</td><td><span class="badge badge-warning">待对接</span></td><td>安全围栏系统</td><td>上游对接，不伪造</td></tr>
+      <tr><td>业务完成率 / 转化率</td><td><span class="badge badge-success">已接通</span></td><td>H2 agent.business.outcome</td><td>实时聚合，无需改动</td></tr>
+    </tbody></table></div>
+    <div class="note">📌 数据健康模型对齐《指标GAP分析-v2》：UI 用「待接入/已接待上报/已接通」三态角标诚实地反映数据可信度，避免伪造数字（spec §4.9 占位原则）。所有 P0-3~P0-6 类指标需 Core 侧补埋点后自动生效。</div>
+  </div>
+</div>
+
+<!-- INTELLIGENCE -->
+<div class="page" id="p-intelligence">
+  <div class="intelligence-header">
+    <div class="intelligence-icon">✨</div>
+    <div>
+      <div class="intelligence-title">智能洞察</div>
+      <div class="intelligence-subtitle">基于 AI 的可观测性自动提炼 · 运营与运维决策建议</div>
+    </div>
+  </div>
+  <div class="intelligence-grid">
+<div class="card">
+      <div class="insight-section-title">🧠 智能洞察建议</div>
+      <div class="insight-list">
+        <div class="insight-mini perf" onclick="gotoInsightTab('perf')">
+          <div class="insight-mini-head"><span class="insight-mini-title">理财咨询 TTFT P95 超阈</span><span class="sev sev-high">高</span></div>
+          <div class="insight-mini-sub">qwen-max 在理财咨询节点 P95=2.1s，错误率 3.2% 最高</div>
+          <div class="insight-mini-metric">P95 2.1s · 错误率 3.2%</div>
+        </div>
+        <div class="insight-mini perf" onclick="gotoInsightTab('perf')">
+          <div class="insight-mini-head"><span class="insight-mini-title">LLM 失败重试率高</span><span class="sev sev-mid">中</span></div>
+          <div class="insight-mini-sub">近 6h LLM 错误率 1.3%，主要集中 SenseNova 端点波动</div>
+          <div class="insight-mini-metric">错误率 1.3% · 重试 0.9%</div>
+        </div>
+        <div class="insight-mini perf" onclick="gotoInsightTab('funnel')">
+          <div class="insight-mini-head"><span class="insight-mini-title">槽位追问轮次偏高</span><span class="sev sev-low">低</span></div>
+          <div class="insight-mini-sub">转账类平均追问 1.8 轮，可前置参数完整性预检</div>
+          <div class="insight-mini-metric">平均追问 1.8 轮</div>
+        </div>
+        <div class="insight-mini acc" onclick="gotoInsightTab('accuracy')">
+          <div class="insight-mini-head"><span class="insight-mini-title">Reroute 率 14.2% 偏高</span><span class="sev sev-mid">中</span></div>
+          <div class="insight-mini-sub">意图识别后二次纠正比例偏高，主要分布在"转账↔理财"易混域</div>
+          <div class="insight-mini-metric">Reroute 14.2% · 待 Core 发射度量</div>
+        </div>
+        <div class="insight-mini acc" onclick="gotoInsightTab('accuracy')">
+          <div class="insight-mini-head"><span class="insight-mini-title">改写失败根因：代词指代</span><span class="sev sev-low">低</span></div>
+          <div class="insight-mini-sub">改写失败 TOP1 为"他/她/它"跨轮指代丢失（32.4%）</div>
+          <div class="insight-mini-metric">占比 32.4% · 179 例</div>
+        </div>
+        <div class="insight-mini acc" onclick="gotoInsightTab('accuracy')">
+          <div class="insight-mini-head"><span class="insight-mini-title">L0/L1 分层准确率待打通</span><span class="sev sev-low">低</span></div>
+          <div class="insight-mini-sub">当前仅整体准确率，L0/L1 分层待 Core 携带 layer tag</div>
+          <div class="insight-mini-metric">L0 待 Core · L1 94.2%</div>
+        </div>
+        <div class="insight-mini biz" onclick="gotoInsightTab('funnel')">
+          <div class="insight-mini-head"><span class="insight-mini-title">参数提取阶段放弃率 15.7%</span><span class="sev sev-high">高</span></div>
+          <div class="insight-mini-sub">漏斗显示用户在"参数提取"流失最高（570 例）</div>
+          <div class="insight-mini-metric">放弃率 15.7% · 570 例</div>
+        </div>
+        <div class="insight-mini biz" onclick="gotoInsightTab('funnel')">
+          <div class="insight-mini-head"><span class="insight-mini-title">转账转化率低于账单</span><span class="sev sev-mid">中</span></div>
+          <div class="insight-mini-sub">转账意图完成率 87.6%，低于账单查询 95%</div>
+          <div class="insight-mini-metric">转账 87.6% vs 账单 95%</div>
+        </div>
+        <div class="insight-mini biz" onclick="gotoInsightTab('satisfaction')">
+          <div class="insight-mini-head"><span class="insight-mini-title">满意度负面反馈聚类</span><span class="sev sev-low">低</span></div>
+          <div class="insight-mini-sub">不满意反馈中 40% 为"超时/慢"，26.7% 为"意图识别错误"</div>
+          <div class="insight-mini-metric">超时 40% · 误识别 26.7%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</section>
+</div>
+</div>
+
+<script>
+function sw(page,el){document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));document.getElementById('p-'+page).classList.add('active');document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));if(el)el.classList.add('active');const t={overview:'总览大屏',session:'会话回放',trace:'链路追踪',insight:'AI 洞察',logs:'日志查询',alerts:'告警规则',settings:'系统设置',intelligence:'智能洞察'};document.getElementById('page-title').textContent=t[page];initAllCharts();}
+function itab(name,el){document.querySelectorAll('#p-insight .tab-pane').forEach(p=>p.classList.remove('active'));const map={accuracy:'tab-accuracy',perf:'tab-perf',funnel:'tab-funnel',token:'tab-token',agent:'tab-agent',satisfaction:'tab-satisfaction'};document.getElementById(map[name]).classList.add('active');document.querySelectorAll('#p-insight .insight-main > .card > .tabs > .tab').forEach(t=>t.classList.remove('active'));if(el)el.classList.add('active');initAllCharts();}
+function gotoInsightTab(name){sw('insight');setTimeout(()=>{document.querySelectorAll('#p-insight .tab-pane').forEach(p=>p.classList.remove('active'));const map={accuracy:'tab-accuracy',perf:'tab-perf',funnel:'tab-funnel',token:'tab-token',agent:'tab-agent',satisfaction:'tab-satisfaction'};document.getElementById(map[name]).classList.add('active');document.querySelectorAll('#p-insight .insight-main > .card > .tabs > .tab').forEach(t=>t.classList.remove('active'));const target=document.querySelector('#p-insight .tab[onclick*="itab(\''+name+'\'"');if(target)target.classList.add('active');initAllCharts();},0);}
+function psw(dim,el){document.querySelectorAll('.perf-pane').forEach(p=>p.classList.remove('active'));document.getElementById('perf-'+dim).classList.add('active');document.querySelectorAll('#tab-perf .tabs .tab').forEach(t=>t.classList.remove('active'));if(el)el.classList.add('active');initAllCharts();}
+function tio(e,id){e.stopPropagation();const p=document.getElementById('io-'+id);p.classList.toggle('open');}
+function openSession(){document.getElementById('session-modal').classList.add('open');}
+function closeSession(){document.getElementById('session-modal').classList.remove('open');}
+function openTraceModal(e){/* from session list -> open session first */openSession();}
+function openTraceDetail(id){document.getElementById('trace-modal').classList.add('open');}
+function closeTrace(){document.getElementById('trace-modal').classList.remove('open');}
+
+/* ── Charts (mock) ── */
+let charts=[];
+function reg(id,opt){const c=echarts.init(document.getElementById(id));c.setOption(opt);charts.push(c);}
+function initAllCharts(){
+  charts.forEach(c=>c.dispose());charts=[];
+  const g={top:30,left:40,right:20,bottom:30,containLabel:true};
+  // overview
+  reg('chart-overview',{tooltip:{trigger:'axis'},legend:{data:['请求量','Token']},grid:g,xAxis:{type:'category',data:['10:00','11:00','12:00','13:00','14:00','15:00','16:00']},yAxis:[{type:'value',name:'req'},{type:'value',name:'token'}],series:[{name:'请求量',type:'bar',data:[820,910,760,880,1020,940,980],itemStyle:{color:'#1677ff'}},{name:'Token',type:'line',yAxisIndex:1,data:[120,135,118,142,165,150,158],itemStyle:{color:'#52c41a'}}]});
+  reg('chart-agent-dist',{tooltip:{},legend:{data:['L0','L1','L2']},grid:g,xAxis:{type:'category',data:['转账','账单','理财','闲聊']},yAxis:{type:'value'},series:[{name:'L0',type:'bar',stack:'a',data:[40,30,20,10],itemStyle:{color:'#1677ff'}},{name:'L1',type:'bar',stack:'a',data:[30,20,15,5],itemStyle:{color:'#722ed1'}},{name:'L2',type:'bar',stack:'a',data:[20,15,10,2],itemStyle:{color:'#52c41a'}}]});
+  // accuracy trend
+  if(document.getElementById('chart-accuracy'))reg('chart-accuracy',{tooltip:{trigger:'axis'},legend:{data:['L0','L1','整体']},grid:g,xAxis:{type:'category',data:['07-04','07-05','07-06','07-07','07-08','07-09','07-10']},yAxis:{type:'value',max:100},series:[{name:'L0',type:'line',data:[96,97,97.5,98,98.1,98.2,98.2]},{name:'L1',type:'line',data:[91,92,93,93.5,94,94.1,94.2]},{name:'整体',type:'line',data:[90,91,92,92.5,93,93.8,94.2],lineStyle:{width:3}}]});
+  // confusion matrix
+  if(document.getElementById('chart-confusion'))reg('chart-confusion',{tooltip:{position:'top'},grid:{top:20,left:60,right:20,bottom:60},xAxis:{type:'category',data:['TRANSFER','BILL','WEALTH_C','WEALTH_I','CHAT','UNSUP']},yAxis:{type:'category',data:['TRANSFER','BILL','WEALTH_C','WEALTH_I','CHAT','UNSUP']},visualMap:{min:0,max:90,calculable:true,orient:'horizontal',left:'center',bottom:10},series:[{type:'heatmap',data:[[0,0,85],[0,1,5],[0,2,3],[0,3,2],[0,4,3],[0,6,2],[1,0,8],[1,1,75],[1,2,5],[1,3,2],[2,0,4],[2,1,3],[2,2,88],[2,4,1],[3,0,2],[3,2,4],[3,3,80],[4,0,10],[4,1,8],[4,2,6],[4,4,76]]}]});
+  // perf box
+  if(document.getElementById('chart-perf-box'))reg('chart-perf-box',{tooltip:{},grid:g,xAxis:{type:'category',data:['L0','L1','转账','账单','理财咨询','理财解读']},yAxis:{type:'value',name:'ms'},series:[{type:'boxplot',data:[[120,160,180,320,520],[200,240,280,420,780],[200,300,320,520,1200],[150,180,200,280,610],[300,420,480,720,2100],[180,240,260,420,920]]}]});
+  if(document.getElementById('chart-perf-scatter'))reg('chart-perf-scatter',{tooltip:{},grid:g,xAxis:{type:'value',name:'TTFT P50'},yAxis:{type:'value',name:'TPOT P50'},series:[{type:'scatter',data:[[180,12],[280,18],[320,18],[200,15],[480,28],[260,16]],itemStyle:{color:'#722ed1'}}]});
+  if(document.getElementById('chart-perf-llm-box'))reg('chart-perf-llm-box',{tooltip:{},grid:g,xAxis:{type:'category',data:['L0','L1','理财咨询','理财解读']},yAxis:{type:'value'},series:[{type:'boxplot',data:[[100,160,160,240,480],[150,240,240,360,720],[300,420,420,600,1900],[180,240,240,360,850]]}]});
+  if(document.getElementById('chart-perf-llm-scatter'))reg('chart-perf-llm-scatter',{tooltip:{},grid:g,xAxis:{type:'value'},yAxis:{type:'value'},series:[{type:'scatter',data:[[160,10],[240,15],[420,25],[240,14]],itemStyle:{color:'#1677ff'}}]});
+  // funnel
+  if(document.getElementById('chart-funnel'))reg('chart-funnel',{tooltip:{},series:[{type:'funnel',left:'10%',width:'80%',data:[{value:3842,name:'会话发起'},{value:3620,name:'意图识别'},{value:3050,name:'参数提取'},{value:2680,name:'执行确认'},{value:2392,name:'业务完成'}],color:['#1677ff','#722ed1','#13c2c2','#52c41a','#faad14']}]});
+  if(document.getElementById('chart-abandon'))reg('chart-abandon',{tooltip:{trigger:'axis'},grid:g,xAxis:{type:'category',data:['意图识别','参数提取','执行确认','业务完成']},yAxis:{type:'value',max:20},series:[{type:'bar',data:[5.8,15.7,12.1,10.8],itemStyle:{color:'#ff4d4f'}}]});
+  // token
+  if(document.getElementById('chart-token-trend'))reg('chart-token-trend',{tooltip:{trigger:'axis'},legend:{data:['qwen-plus','qwen-turbo','qwen-max']},grid:g,xAxis:{type:'category',data:['07-04','07-06','07-08','07-10']},yAxis:{type:'value'},series:[{name:'qwen-plus',type:'line',data:[400,520,610,720]},{name:'qwen-turbo',type:'line',data:[200,260,300,340]},{name:'qwen-max',type:'line',data:[300,420,520,650]}]});
+  if(document.getElementById('chart-token-pie'))reg('chart-token-pie',{tooltip:{},series:[{type:'pie',radius:'60%',data:[{value:38.5,name:'转账'},{value:17.1,name:'账单'},{value:13.9,name:'理财咨询'},{value:11.4,name:'理财解读'},{value:2.1,name:'闲聊'}],color:['#1677ff','#52c41a','#722ed1','#13c2c2','#faad14']}]});
+  // satisfaction
+  if(document.getElementById('chart-sat-pie'))reg('chart-sat-pie',{tooltip:{},series:[{type:'pie',radius:['40%','65%'],data:[{value:320,name:'满意'},{value:80,name:'中立'},{value:45,name:'不满意'}],color:['#52c41a','#faad14','#ff4d4f']}]});
+  if(document.getElementById('chart-sat-trend'))reg('chart-sat-trend',{tooltip:{trigger:'axis'},grid:g,xAxis:{type:'category',data:['07-04','07-06','07-08','07-10']},yAxis:{type:'value',max:100},series:[{type:'line',data:[70.1,71.2,71.5,71.9],areaStyle:{}}]});
+  // mini sparklines
+  ['mini-A1','mini-A2','mini-A3','mini-B1','mini-B2','mini-B3','mini-C1','mini-C2','mini-C3','mini-D1'].forEach((id,i)=>{const el=document.getElementById(id);if(el)reg(id,{grid:{top:2,bottom:2,left:0,right:0},xAxis:{type:'category',show:false,data:[1,2,3,4,5,6,7]},yAxis:{show:false,type:'value'},series:[{type:'line',data:[10,14,12,18,16,20,22].map(v=>v+(i%3)),smooth:true,lineStyle:{width:2,color:['#1677ff','#52c41a','#722ed1'][i%3]},areaStyle:{opacity:0.1}}]});});
+}
+window.addEventListener('resize',()=>charts.forEach(c=>c.resize()));
+initAllCharts();
+</script>
+</body>
+</html>

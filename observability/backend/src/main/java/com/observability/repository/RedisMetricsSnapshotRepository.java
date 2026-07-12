@@ -2,8 +2,10 @@ package com.observability.repository;
 
 import com.observability.model.RedisMetricsSnapshot;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -33,8 +35,12 @@ public interface RedisMetricsSnapshotRepository extends JpaRepository<RedisMetri
 
     /**
      * Delete snapshots older than the given timestamp (used by data cleanup).
+     * @Modifying 批量 DELETE，避免大表派生删除 OOM。
      */
-    void deleteByTimestampBefore(Instant before);
+    @Transactional
+    @Modifying
+    @Query("DELETE FROM RedisMetricsSnapshot s WHERE s.timestamp < :before")
+    int deleteByTimestampBefore(@Param("before") Instant before);
 
     /**
      * Get the latest snapshot value for a metric key - returns 0 if not found.

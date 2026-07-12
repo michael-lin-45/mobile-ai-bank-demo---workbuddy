@@ -47,6 +47,12 @@ print(f"  C2 真值 (rewriteAccuracy 非None?): {'✅' if ra is not None else '�
 rr = data.get("rerouteRate")
 print(f"  C3 (rerouteRate 非None?): {'✅' if rr is not None else '❌ 仍None'}")
 
+cr = data.get("completionRate")
+print(f"  C4 (completionRate 非None?): {'✅' if cr is not None else '❌ 仍None (需最近6h内 L2 business.outcome 数据)'}")
+
+cvr = data.get("conversionRate")
+print(f"  D1 (conversionRate 非None?): {'✅' if cvr is not None else '❌ 仍None (同 C4 数据源)'}")
+
 rep = get(f"/api/v1/ai/accuracy-report?from={frm}&to={to}")
 rdata = rep.get("data", rep)
 cm = rdata.get("confusion") if isinstance(rdata, dict) else None
@@ -56,7 +62,7 @@ print(f"  totalSamples: {ts}  -> {'✅ 有数据' if ts else '❌ 仍0 (agent.in
 print(f"  OVERALL: {rdata.get('overallStats') if isinstance(rdata, dict) else None}")
 
 print("\n=== 3. 关联端点 ===")
-for ep in ["/api/v1/ai/intent-distribution", "/api/v1/ai/tool-stats",
+for ep in ["/api/v1/ai/confusion-matrix", "/api/v1/ai/tool-stats",
            "/api/v1/ai/token-cost", "/api/v1/ai/satisfaction"]:
     d = get(ep)
     err = d.get("_err") if isinstance(d, dict) else None

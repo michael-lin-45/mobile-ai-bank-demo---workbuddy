@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import MetricCard from '../components/MetricCard';
 import TrendChart from '../components/charts/TrendChart';
 import PieChart from '../components/charts/PieChart';
-import { fetchRealtimeMetrics } from '../api/client';
+import { fetchRealtimeMetrics, fetchMetricsTrend } from '../api/client';
 import usePolling from '../hooks/usePolling';
 
 /**
@@ -15,6 +15,7 @@ import usePolling from '../hooks/usePolling';
  */
 function DashboardPage() {
   const [metrics, setMetrics] = useState(null);
+  const [trend, setTrend] = useState(null);
   const [error, setError] = useState(null);
 
   const loadMetrics = useCallback(async () => {
@@ -30,8 +31,21 @@ function DashboardPage() {
     }
   }, []);
 
-  // 3s 轮询
+  // 趋势数据（6h，按 30min 分桶）：相对静态，30s 轮询即可
+  const loadTrend = useCallback(async () => {
+    try {
+      const data = await fetchMetricsTrend(6);
+      if (data && data.times) setTrend(data);
+    } catch (err) {
+      // 趋势获取失败不阻断主指标展示
+      console.warn('[Dashboard] trend fetch failed:', err.message);
+    }
+  }, []);
+
+  // 3s 轮询主指标
   usePolling(loadMetrics, 3000, true);
+  // 30s 轮询趋势
+  usePolling(loadTrend, 30000, true);
 
   // 首次加载中 — 显示加载状态
   if (metrics === null) {
@@ -104,14 +118,14 @@ function DashboardPage() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
           <MetricCard
-            label="访问用户量"
+            label="访问用户量 (DAU)"
             icon="👥"
-            value={metrics.activeSessions != null ? metrics.activeSessions.toLocaleString() : '-'}
+            value={metrics.dau != null ? metrics.dau.toLocaleString() : '-'}
             unit="人"
             delta={metrics.activeSessionsDelta || null}
             deltaUp={metrics.activeSessionsDeltaUp}
             deltaNote="较昨日"
-            sub={`DAU ${metrics.dau != null ? metrics.dau.toLocaleString() : '-'} · 实时在线 ${metrics.realTimeOnline != null ? metrics.realTimeOnline : '-'}`}
+            sub={`实时在线 ${metrics.realTimeOnline != null ? metrics.realTimeOnline + ' 人' : '-'}`}
             sparkColor="#1677ff"
           />
           <MetricCard
@@ -207,7 +221,7 @@ function DashboardPage() {
                 color: '#52c41a',
                 border: '1px solid #b7eb8f',
               }}>
-                错误率 {metrics.errorRate}%
+                错误率 {(metrics.errorRate * 100).toFixed(2)}%
               </span>
             ) : '-'}
             sparkColor="#722ed1"
@@ -309,6 +323,8 @@ function DashboardPage() {
             deltaUp={metrics.conversionRateDeltaUp}
             sub={metrics.conversionDetail || '-'}
             sparkColor="#d48806"
+            empty={metrics.conversionRate == null}
+            emptyText="暂无"
           />
           <MetricCard
             label="违规率"
@@ -346,7 +362,7 @@ function DashboardPage() {
               最近 6h
             </span>
           </div>
-          <TrendChart height={280} />
+          <TrendChart height={280} data={trend} />
         </div>
 
         <div style={{

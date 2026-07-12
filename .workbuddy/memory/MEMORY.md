@@ -11,8 +11,20 @@
 ## 数据库架构
 - **只有 H2，没有 SQLite！** 旧记录中的"SQLite"是误写
 - Java 可观测后端使用 H2 文件数据库：`jdbc:h2:file:./data/observability`（相对路径，取决于 Java 进程工作目录）
-- H2 文件位于 `observability/backend/data/observability.mv.db`（53KB）和 `data/observability.mv.db`（2.2GB）
+- H2 文件位置**取决于 Java 进程工作目录(CWD)**，非固定：
+  - **当前活动库（2026-07-10 实测）**：`observability/backend/data/observability.mv.db`（约 10MB，运行期持续写入，mtime 随写入更新）。原因：start-all.ps1 从 `observability/backend/` 启动 → `./data` 解析为 `observability/backend/data/`。
+  - ⚠️ **项目根 `data/observability.mv.db` 已非活动库**（旧记录写的 2.2GB 文件已不存在，该目录现仅 `observability.trace.db` ~2KB）。若用 H2 查看器打开项目根 `data/` 会看到"空表"——这是**看错文件，数据没丢**，API 仍能查到全量 span。
+  - **查实时 span 请用 API 而非直开文件**：H2 MVStore 运行期持独占锁无法直读，且相对路径易指错。正确做法：`GET /api/v1/traces/debug/span-stats`（返回 `totalSpans` / `distinctOpNames`）。
 - 数据流: Core(8080) → OTel SDK → Collector(4318) → Java Backend(9090) → H2
+
+### 两套独立的可观测数据管道（关键！易混淆）
+可观测后端有**两条互不依赖**的数据写入管道，关联键完全不同：
+1. **spans 管道（链路追踪）**：Core OTel javaagent 自动拦截 → OTLP → Collector(4318) → Backend → 写 `spans` 表。按 **traceId** 关联（一次 HTTP 请求 = 一个 trace）。前端「链路追踪/Trace 列表」读此表。
+2. **sessions 管道（会话回放）**：Core `BankController` 处理 `/api/bank/chat` 完成后，**异步**调 `SessionBridge.reportSession(...)`（`@Async`，fire-and-forget，失败不影响主业务）→ `HttpClient` **HTTP POST `http://127.0.0.1:9090/api/v1/sessions`** → Backend `SessionService.upsertSession` 写 **`sessions` 表 + `session_turns` 表**。按 **sessionId** 关联（同一次会话的多轮对话共享 sessionId）。
+- **为什么"会话回放永远有值、trace 经常空"**：sessions 是 Core 每请求必调的显式桥接，与 OTel 导出成败无关；spans 依赖更长的 OTel 导出链 + 旧根 span 识别逻辑（R24 已修），更易空。
+- **几轮会话如何关联**：靠 sessionId。`upsertSession` 按 sessionId upsert → `turnCount+1`、`intentFlow = flow+" → "+intent`（追加意图链）、`session_turns` 追加一条 turn。**完全不依赖 span / 根 span / traceId**。
+- **两管道的弱关联**：`session_turns.traceId` 存当轮对应 OTel traceId（Core 传入），理论上可从会话回放跳转到 trace，但这是单向引用而非依赖——session 不靠 trace 存在，反之亦然。
+- ⚠️ 副作用（待优化）：trace 列表的 `intent` 字段曾从 Session 表 `intentFlow` 回退取值，导致某 trace 的 intent 显示成**整个会话**的意图长链（如 "WEALTH→…→TRANSFER"）。正确做法应是取该 trace 自身业务 span 的 intent，而非回退 Session 表整条 intentFlow。
 
 ## 核心惯例
 
@@ -53,6 +65,8 @@
 - SseAdapter toJson → 返回 ResponseEntity<WorkflowOutput> 替代 Object
 - start-all.ps1 4处 Start-Process 嵌套引号导致路径空格截断 → 统一用 Base64 EncodedCommand
 - Core DNS 无法解析 dashscope.aliyuncs.com → start-all.ps1 自动检测系统 DNS 并注入 JVM 参数
+- **Spring Data JPA `@Modifying` 批量 DELETE 必须加 `@Transactional`**：否则继承 `SimpleJpaRepository` 类级 `readOnly=true`，在只读事务里执行 DELETE 会抛异常（删除不生效，被 `safeDelete` 吞掉返回 -1 造成"假成功"）。`AdminController.purge` 清理 4 表的 `@Modifying deleteByX` 已补 `@Transactional` 修复。验收脚本断言必须检查删除计数非 -1，不能只看 HTTP 200。
+- **链路追踪列表为空 bug（已修复）**：`TraceQueryService.listTraces/listTracesPaginated` 原依赖"根 span（parentSpanId IS NULL）当 trace 入口"，但本仓库数据里所有根 span 都是 Core OTel 导出器的 OTLP 导出 span（`POST` CLIENT），真实的 `POST /api/bank/chat` SERVER span 未被导出/命名 → fallback 查 `SERVER + 'POST %'` 返回 0 → 列表空。修复为**按 `trace_id` 去重枚举**（`findDistinctTraceIdsSince`）+ 对每个 trace 的 spans 聚合（跳过无业务 span 的 trace）。前端 Trace 列表只显示真正调过 LLM 的 trace（规则命中无 span 不显示，属待定项 A 范畴）。
 
 ### 7. Core 启动 JVM DNS 配置（重要！）
 - Core 使用 Reactor Netty DNS 解析器，沙箱中默认 DNS (192.168.1.1) 无法解析外部域名
@@ -69,3 +83,9 @@
 - `.\test\test-results\` — 测试结果、测试报告
 - Playwright 输出配置在 `playwright.config.js` → `testDir: '.', testMatch: 'test/**/*.spec.js', outputDir: 'test/test-results'`
 - 正常业务代码（java/xml/html/jsx 等）按常规项目结构保存，不受上述限制
+
+### 9. 指标发射与聚合惯例（重要，易踩坑）
+- **Core 侧 Timer 必须 `publishPercentileHistogram(true)`**：`Timer.publishPercentiles(...)` 会被 Micrometer OTLP 导出器导出为 **OTLP Summary** 类型；而 Backend `OtlpParser.parseMetrics` 只解析 Histogram/Sum/Gauge，**完全不解析 Summary** → 分位数指标（如首 Token 时延 TTFT）永远为 0。要导出真正的 OTLP Histogram 必须用 `publishPercentileHistogram(true)`（见 `ObsChatModel.buildTimer`）。
+- **不要读"全库无写入方"的静态表**：`agent_performance` / `token_cost` 等表在 schema.sql 有定义但全代码库无 INSERT → 读它们永远为空。正确做法是**实时聚合**：调用次数/耗时分位/错误率从 `SpanEntity`（每个 LLM 调用一条业务 span，attributes 含 `model.name/agent.name/agent.level/intent`）聚合；Token 总量/TTFT/TPOT 从 H2 `metrics_agg` 取（`llm.token.input/output` 为 cumulative 取窗口 MAX，`llm.first_token.latency`/`llm.token.per.output.time` 为 Histogram 样本）。
+- **改指标相关的 H2 表结构要谨慎**：`application.yml` 设 `ddl-auto: none`，表由 `schema.sql` 管理；加列需改 schema.sql 并 ALTER 现有运行期 `.mv.db`（有风险，且运行期持独占锁无法直接操作）。优先复用现有表（SpanEntity + metrics_agg）而非加列。
+- **避免改 H2 表结构**：若只需新增聚合维度，优先用现有 Span attributes JSON + metrics_agg 的 tags JSON 提取（如 `extractTagValue(tags,"agent.name")`），不要新增列。

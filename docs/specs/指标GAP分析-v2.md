@@ -51,13 +51,13 @@
 | C1 | intentAccuracy | 🔴P0 | 单值 `intentAccuracy`；改读 H2 `agent.intent.accuracy`（computeIntentAccuracy 按 intent_predicted/state 聚合） | Core 发射 `agent.intent.accuracy` Counter → 后端实时算 → 实测 77.78% | 🟢 已解决（2026-07-08 P0-3） |
 | C2 | rewriteAccuracy | ⚠️单值(P1) | 改读 H2 `agent.rewrite.accuracy` 的 `rule_check` tag 计数（pass/总数×100） | Core 发射改写信号 → 后端实时算 → 实测 0.0%（Core 改写检测全判失败，真实值） | 🟢 已解决（2026-07-08 C2） |
 | C3 | rerouteRate | 🔴P0 | 改读 H2 `agent.reroute.count`（computeRerouteCount） / (L0+L1 调用数) | Core `BankController` 每次 reroute 发射 `agent.reroute.count` → 后端实时算 → 实测 0.03 | 🟢 已解决（2026-07-08 C3） |
-| C4 | completionRate | 🟡P1 | 单值 `businessCompletionRate`，读 `business_completion` Redis | **`setBusinessCompletionRate()` 无调用方**；L2 未实现 → null | 🔴 仍开放 |
+| C4 | completionRate | 🟡P1 | 单值 `businessCompletionRate`，读 `business_completion` Redis | **`setBusinessCompletionRate()` 无调用方** → 改从 H2 `agent.business.outcome` 按 `outcome=success/fail` 聚合实时算（success/(success+fail)×100） | 🟢 已解决（2026-07-08 C4） |
 
 ### 1.4 DashboardPage — Zone D 业务效果
 
 | # | 指标名 | V1状态 | 当前实现 | 数据来源 | V2状态 |
 |---|--------|--------|---------|---------|--------|
-| D1 | conversionRate | ❌P1 | 单值 `businessConversionRate`，读 `conversion` Redis | **`setConversionRate()` 无调用方**；无上游系统 | 🔴 仍开放 |
+| D1 | conversionRate | ❌P1 | 单值 `businessConversionRate`，读 `conversion` Redis | **`setConversionRate()` 无调用方** → 改从 H2 `agent.business.outcome` 实时算（业务成功率近似转化率） | 🟢 已解决（2026-07-08 D1） |
 | D2 | violationRate | ❌P1 | 后端硬编码 `setViolationRate(null)` | 无 | 🔴 仍开放 |
 
 ### 1.5 TraceExplorerPage — 链路追踪
@@ -397,9 +397,234 @@ V1 是一份"识别问题"的文档；半年后重审，V2 的结论是：**计�
 | P0-5 分层意图 (T2) | 🔴 | Core 在 Span/会话携带 L0/L1/L2 分层意图字段 |
 | P0-6 趋势/混淆矩阵分层 | 🔴 | 依赖 P0-4/P0-5 的 span 字段 + Core 在 `recordIntentAccuracy` 加 `layer` tag |
 | C3 rerouteRate | 🔴 | Core 在 reroute 时发射 reroute 度量（或写 `reroute_rate` Redis） |
-| C4 completionRate | 🔴 | L2 实现 + Core 发射业务完成率 |
-| D1 conversionRate / D2 violationRate | 🔴 | 上游业务系统对接 |
+| C4 completionRate | 🟢 | 后端聚合已兼容 `outcome`/`result` 双源，无数据显示 null（2026-07-08 修正"假0.0"：streaming 路径漏埋 `outcome=success`，且 `AbstractDomainService` 仅发 `result=success`） |
+| D1 conversionRate / D2 violationRate | 🟢(D1)/🔴(D2) | D1 同 C4 数据源已修；D2 违规率无安全围栏对接、无数据源，仍开放 |
 | I2 混淆矩阵 | 🔴(运行时空) | 实时库 `traces` 为空（totalElements=0）→ 无 span 数据源；需 Core/Collector 把带 `intent_predicted`/`intent_actual` 的 span 写入该 H2 |
 | I5 L2 意图识别 | 🔴 | 占位，需 L2 链路数据 |
 
 > 结论：后端侧修复到此告一段落。下一步必须由 Core 团队补数据发射（chat 500 修复 + 意图准确率/置信度/分层意图/reroute/span 属性），后端已预留全部读取与聚合能力，Core 补字段即自动生效。
+
+### 8.9 C4/D1 业务效果指标真值化 — 已修复（2026-07-08 第三轮）
+
+- **根因（与 C1/C2/C3 同构）**：Dashboard Zone C `businessCompletionRate` 读 Redis `business_completion`、Zone D `businessConversionRate` 读 Redis `conversion`，二者 `setBusinessCompletionRate()`/`setConversionRate()` 全库无调用方 → 永远 null → 前端卡片显示 `-`/`暂无`。
+- **数据源（Core 已接通）**：
+  - `AbstractDomainService.java:161` 在 L2 子图 `COMPLETE` 时发 `agent.business.outcome{intent,result=success}`（每次 L2 完成都发，真实高频成功信号；**无 `result=fail` 分支**）。
+  - `GraphExecutionEngine.java:102/104` 在 **blocking** 子图 `COMPLETED` 调 `recordBusinessSuccess()` → 发 `agent.business.outcome{outcome=success}`；否则/异常调 `recordBusinessFail()` → `{outcome=fail}`。
+- **修复**（纯后端，Core 无需重编，与 C1/C2/C3 同构）：
+  1. `AIInsightsService` 新增 `computeBusinessSuccessRate(from,to)`：从 H2 `agent.business.outcome` 聚合业务成功率 = success/(success+fail)×100；无数据返回 null。
+  2. `MetricsQueryService` Zone C/D：Redis 有值优先，否则 `computeBusinessSuccessRate(近6h)` 兜底；最终 null 才标记 fallback。
+  3. D1 转化率以"业务成功率"近似（Core 无独立转化/到达埋点），与 C4 同源同构；D2 违规率无安全围栏对接、无数据源，保持 null（前端"暂无"，不伪造）。
+
+### 8.10 C4/D1 "假 0.0" 修正（2026-07-08 第四轮）
+
+- **现象**：start-all 重编 backend 后，realtime `completionRate`/`conversionRate` 实测为 `0.0`（非 null），前端显示"完成率 0%"——比 null 更误导。
+- **根因**：
+  1. 第三轮聚合**只认 `outcome=success/fail` tag**，但 `GraphExecutionEngine` 的 **streaming 成功路径（`executeStreaming`/`resumeStreaming` 的 terminal 分支）从未调 `recordBusinessSuccess()`**（仅 blocking 与异常路径调用）→ 窗口内 `agent.business.outcome{outcome=success}` 几乎为 0。
+  2. `AbstractDomainService` 仅发 `result=success`（无 `result=fail`），第三轮因"无 outcome 键"将其忽略。
+  3. 聚合 `total<=0` 时返回 `0.0` → 把"无 outcome 数据"误显成"0% 完成率"。
+- **修复**（`AIInsightsService.computeBusinessSuccessRate`，仍纯后端）：
+  - 成功判定兼容**两套埋点**：`outcome=success` **或** `result=success` 均计入 success 桶；`outcome=fail`/`result=fail` 计入 fail 桶。
+  - `total<=0` 改为返回 **null**（前端"暂无"），彻底消除假 0.0。
+  - 现 success 以 `result=success`（每次 L2 COMPLETE 高频发射）为主源，可得出真实完成率。
+- **待验证**：后端已改，待主人重跑 `start-all.ps1`（脚本会自动停 backend 释放 jar 锁并重编 backend）→ 用 `test/seed.sh`+`seed_new.sh` 打一轮 L2 流量 → 等 60s OTLP 步长 → 跑 `test/verify_gap_batch.py` 确认 C4/D1 显示真实非 0 值（或暂无数据时为 `-`）。
+
+### 8.11 总览大屏 AI 性能 + AI 洞察 AGENT性能/TOKEN成本 三类归零 — 已修复（2026-07-08 第五轮）
+
+**现象（主人反馈）**：
+1. 总览大屏 Zone B（AI 性能）：TOKEN 调用量 / 输入 / 输出**全为 0**；首 Token 时延 P50/P95/P99 **全为 0**。
+2. AI 洞察 → AGENT 性能 TAB：表格 / KPI / 箱线图 / 散点图**基本全空**。
+3. AI 洞察 → TOKEN 成本 TAB：趋势 / 拆解 / 明细**基本全空或 0**。
+- 主人判断三类归零"有联系"，要求一起修。
+
+**根因定位（三层，互相关联）**：
+
+#### 根因① TTFT 永远为 0（Core 导出类型陷阱）
+- `ObsChatModel` 原对 `llm.first_token.latency` / `llm.operation.duration` 用 `Timer.publishPercentiles(0.5,0.75,0.9,0.95,0.99)`。
+- **Micrometer OTLP 导出器对 `publishPercentiles` 的 Timer 导出为 OTLP `Summary` 类型**；而 `OtlpParserService.parseMetrics` 只解析 `getHistogram()/getSum()/getGauge()`，**完全不解析 Summary** → TTFT P50/P95/P99 永远 0，且 Redis `ttft:1m` ZSET 永远无样本。
+- **修复**：新增 `buildTimer(...)` 统一用 `publishPercentileHistogram(true)`（导出为真正的 OTLP Histogram）→ 经 OTel Collector(4318) → `OtlpParser.recordTTFT` 写入 Redis `ttft:1m`，并由 `RedisH2SyncService` 每 30s 快照 `ttft_p50/p95/p99:1m` 到 H2 `redis_metrics_snapshot` 兜底。TTFT 修复**只需改 Core**，后端管道已就绪。
+
+#### 根因② 总览大屏 Token 调用量/输入/输出为 0（Redis 1m 窗口空闲 + H2 兜底偏弱）
+- Token 类 Counter（`llm.token.input/output`）经 `incrTokenCountDelta` 写入 **1m 窗口**（TTL 60s）。当观测窗口无实时 LLM 流量时 Redis 1m 值归 0 → 大屏显示 0。
+- 原兜底逻辑 `if (tokenInput == 0 && tokenOutput == 0)` **两个方向同时才回退**，且 `getLatestMetricValue` 取 H2 `llm.token.input/output` 累计值（cumulative 最后一行=当前总量）本应兜底，但联动条件使单方向缺失时不触发。
+- **修复**：`MetricsQueryService.getRealtime()` 改为**输入/输出各自独立回退**（`if (tokenInput == 0) {...}` / `if (tokenOutput == 0) {...}`），回退窗口放宽到近 7d。Token 总量即可从 H2 cumulative 真实兜底，不再因 Redis 1m 空闲而恒 0。
+
+#### 根因③ AGENT 性能 / TOKEN 成本页面全空（读从未写入的静态表）
+- `AgentPerformanceService` / `TokenCostService` 原实现分别读取 `agent_performance` / `token_cost` 静态表；**全代码库无任何写入方**（schema.sql 定义了表但无 INSERT）→ 页面永远为空。
+- **修复（重写两个 Service，改为实时聚合，接口契约不变）**：
+  - `AgentPerformanceService`：从 **SpanEntity**（每个 LLM 调用一条业务 span，含 `model.name/agent.name/agent.level/intent` 属性）实时聚合调用次数 / 真实 operation 耗时分位 / 错误率（按 model 与 agent 双维度）；再从 H2 `metrics_agg` 补充 TTFT（`llm.first_token.latency`）、TPOT（`llm.token.per.output.time`）、Token 总量（`llm.token.input/output`，cumulative 取窗口 MAX）。返回结构保持与原前端契约一致：`{dimension, kpis, tables, boxplots, scatters, categories}`。
+  - `TokenCostService`：从 H2 `metrics_agg` 按 `model`/`intent` 聚合 `llm.token.input/output`（cumulative 取窗口 MAX），从 SpanEntity 按 `(intent,model)` 交叉统计调用次数；成本 = 输入×0.002/1000 + 输出×0.006/1000（每 1K tokens，单位元）。`getDetailTable` 返回 `{content: [...]}` 适配前端 `detailRes.value?.content`。
+  - 维度提取：优先从 Span/metrics 的 attributes JSON 读 `model.name/agent.name/agent.level/intent`，fallback 解析 operationName 的 `L0:qwen-plus` 格式。
+- 为避免改 H2 表结构（`ddl-auto:none` + 需 ALTER 现有 2.2GB 文件的风险），**未新增列**，完全复用 SpanEntity + metrics_agg 现有表作为真实数据源。Controller 接口签名、前端端点、返回 JSON 结构均兼容，仅替换实现。
+- 前端 `AgentPerfTab.jsx`：Agent 维度无 TTFT 时原渲染 `nullms`，改为显示 `—`。
+
+**编译验证**：
+- 重写 `TokenCostController` 调用 `getDetailTable()` 时因返回类型由 `List` 改为 `Map` 触发一次编译错误（`TokenCostController.java:44` 类型不兼容），已修正为直接赋值 `data = tokenCostService.getDetailTable(...)`（其已返回 `{content:[...]}`）。
+- 后端 `mvnw.cmd -o package -DskipTests` **BUILD SUCCESS**（2026-07-08 17:36），`AgentPerformanceService`/`TokenCostService`/`ObsChatModel`/`MetricsQueryService` 改动全部通过编译。
+
+**待验证（需主人操作）**：
+- 后端已编译通过，待主人重跑 `start-all.ps1`（会停 backend 释放 jar 锁并重编 Core + backend，并完成 Core 端 `publishPercentileHistogram` 修复的部署）。
+- 打一轮 L2 流量（LLM 真实调用）→ 等 60s OTLP 步长 + 30s Redis→H2 TTFT 快照：
+  1. 总览大屏 Zone B：TOKEN 调用量/输入/输出应从 H2 cumulative 兜底显示真实非 0；TTFT P50/P95/P99 应出现真实延迟值（不再恒 0）。
+  2. AI 洞察 → AGENT 性能：表格/KPI/箱线图/散点图应从 Span + metrics_agg 渲染真实 agent/model 维度数据。
+  3. AI 洞察 → TOKEN 成本：趋势/拆解/明细应从 metrics_agg + Span 渲染真实 token 量与成本估算。
+
+**补正（2026-07-09 验收）**：主人重启后验收，AGENT性能（532 calls + KPI + 箱线/散点图）/TOKEN成本（trend 312874 input/9261 output/cost 0.68 + detail 按 intent×model）已闭环；但**总览大屏 Token 仍 0**。根因：①Token 兜底原位于 60s 节流块内，大屏 3s 轮询多数落在节流窗口 → 显示 Redis 1m 空值（闪 0）；②`getLatestMetricValue` 取末行，而 Core 重启使 cumulative 计数器归零 → 末行仅重启后小计（25752）非真实累计总量（312874=窗口 MAX，TOKEN成本因用 MAX 故正确）。修复：`MetricsQueryService` 将 Token/Error 兜底**移出节流**（Redis 为 0 时每次实时查 H2 MAX，廉价查询并标记 fallback）、`getLatestMetricValue`→`getMaxMetricValue`（窗口 MAX）。前端 Zone B "Token 调用量"=tokenInput+tokenOutput，故修 tokenInput/output 即同时修三项。compile 通过；因运行中的 backend 持 jar 锁致 `package` repackage 失败，需重跑 `start-all.ps1` 释放锁重编部署，再用 `test/send_l2_traffic.py` 打 L2 流量验证 TTFT+Token。
+
+### 8.12 总览大屏 8 项人工验证问题修复（2026-07-09 第十~十四轮，已闭环）
+
+**背景**：master 重跑 `start-all.ps1` 部署后，主人对总览大屏做人工验收，发现 8 项显示问题（Zone B/C/D + 数据清理）。逐项定位根因并修复，最终 8/8 全真 PASS（第十四轮前台阻塞验收确认）。
+
+**问题清单与根因/修复**：
+
+| # | 问题 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | 清 H2 老数据只留 2 天 | 无清理端点；`void deleteByX` 派生删除在 2.2GB `spans` 表 OOM→500；后改 `@Modifying` 批量删但漏 `@Transactional` 致假绿（`-1`） | 新增 `AdminController.POST /purge?days=2`，4 表 `@Modifying @Query` 批量删 + `@Transactional` 写事务；`verify_dashboard.py` 断言任一表删除=-1 即 FAIL |
+| 2 | 首Token时延=0ms | `recordTTFT((long)avg)` 收秒级 `avg`→截断 0 | 按指标单位归一：llm.* Timer 记录为毫秒直接入；`http.*.request.duration` 秒×1000（新增 `isSecondsUnitMetric`） |
+| 3 | P95系统时延=0ms | 同上 `avg` 单位误判 | 同 #2，`recordLatency` 用统一 `valueMs`；`isLatencyMetric` 排除 `jvm./tomcat./system./process.`（避免 GC 时长污染 P95） |
+| 4 | 错误率只留 2 位小数 | Redis `incrErrorCount` 按"每个 error 指标每次导出自增"→ `errorCount(44)/requestCount(12)=366%` 失真 | `errorRate` 改基于 H2 spans 真实计算（错误数/操作数，6h 窗口；错误数=MAX(ERROR-status span 数, `llm.error.count` 窗口 MAX)），恒 0~1 分数；前端 `errorRate*100`→2 位小数 % |
+| 5 | 业务转化率改"暂无" | 无数据源（`setConversionRate` 无调用方） | 后端 `businessConversionRate=null`；前端 `MetricCard emptyText="暂无"` |
+| 6 | 访问用户量=0 人 | 前端用 `activeSessions`(=0) | 改读 `dau`（历史统计人数，非 0） |
+| 7 | 实时在线=0 | `setOnlineUsers` TTL 30s < Session 5min 滑动窗口→过期归零 | TTL 改 300s 匹配窗口 |
+| 8 | 趋势图例空 | `<TrendChart>` 未传 `data` prop（无数据早退不渲染 legend） | 新增 `GET /metrics/trend` + `TrendVO` + `fetchMetricsTrend` + `<TrendChart data={trend}/>`（按 30min 分桶：请求量=根 span 计数、Token=llm.token 累计增量） |
+
+**修复链关键坑（第十二~十三轮）**：
+- **532000ms 误放大**：第十轮 blanket `avg*1000` 修"0ms"，但 `avg` 单位因指标而异（`http.server/client.request.duration` 由 Micrometer OTLP 以**秒**导出；`llm.*` Timer（`buildTimer` 用 `MILLISECONDS`）`avg` 本就是**毫秒**）→ llm.* 被放大千倍。第十二轮改 metric-aware（`isSecondsUnitMetric`）。
+- **errorRate 366%**：Redis 计数器按"指标导出次数"自增，口径完全失真（非按错误事件）。第十二轮改 H2 spans 真值计算，脱离 Redis 计数器。
+- **purge 假绿**：第十一轮 `void deleteByX` 派生删除 OOM/500 → 第十二轮改 `@Modifying` 批量删（不加载实体）→ 但**漏 `@Transactional`**，继承 `SimpleJpaRepository` 的 `readOnly=true` 事务，在只读事务里 DELETE 抛异常 → 被 `safeDelete` catch 返回 `-1`，老数据没删却 HTTP 200 → 第十三轮补 `@Transactional` 真正生效。
+
+**验证（2026-07-09 第十四轮，前台阻塞验收，遵守"主动监控拿到结果再汇报"）**：`verify_dashboard.py --purge --traffic --wait 120` → 8/8 全真 PASS：
+- #1 `spans=17120 / metrics_agg=185916 / snapshot=6644 / logs=4390`（**真实删除行数，非 -1**，证明 @Transactional 生效，假绿消除）
+- #2 TTFT P50=334 P95=514 P99=514 (ms)；#3 P95=1656ms；#4 errorRate=0.00%（2 位小数）；#5 转化率"暂无"；#6 dau=6；#7 online=6；#8 趋势 12 桶 / 387 请求 / 235318 Token
+
+**结论**：总览大屏 8 项人工验证问题全部真值化闭环；第十二~十三轮潜伏的 532000ms 误放大 + errorRate 366% + purge 假绿三处根因均已根除并运行时验证。
+
+## 8.13 Agent 分层调用数 L1 > L0 反向（第十五~十六轮，2026-07-09）
+- **现象**：总览大屏「Agent 调用 L0/L1/L2」显示 L0=1019、L1=1114（L1 反超 L0），不符合 L0 为顶层编排、L1 为其下子 Agent 的拓扑（应 L0 ≥ L1）。
+- **根因诊断**：L0/L1/L2 来自 Redis 计数器 `obs:metrics:agent_call:L0/L1/L2`，由 `OtlpParserService.incrementAgentRedis` 在**每个 `agent.*`/`llm.*` 指标 data point 摄入时 `incrAgentCall(+1)`**。指标是累积计数器、按 scrape 周期反复导出 → 每次导出都 +1，计数被放大 N 倍；且 L1 匹配名集（5 个：`intent.classif`/`agent.l1`/`l1.call`/`intent.l1`/`router.l1`）比 L0（2 个：`router.decision`/`intent.recognized`）更宽、每请求发射的 L1 类指标更多 → L1 累加速度 > L0，最终反超。**与 errorRate 366% 同源（按 OTLP 导出次数计数而非真实事件）**。
+- **澄清**：**清 H2 数据（purge）不是成因**。purge 只清 H2 表，不碰 Redis；实时 `redis-cli` 实测 L0=1035/L1=1132/L2=759 在 purge+重启后毫发无损保留，证明计数器独立于 H2。
+- **修复（第十六轮）**：
+  1. `SpanRepository` 新增 `countByOperationNamePrefixSince(prefix, from)`（原生 SQL `operation_name LIKE :prefix AND start_time >= :from`）。
+  2. `MetricsQueryService` 改为基于 H2 spans 真实计数：`getAgentCallCountsFromSpans()` 用 `L0:%`/`L1:%`/`L2:%` 前缀（'L1:' 天然排除 L1-LLM1/L1-LLM2 子调用），60s 节流缓存（沿用 errorRate 同模式），SET 进 Redis 供快照服务消费。
+  3. 删除 `OtlpParserService.incrementAgentRedis` 方法及其在指标摄入循环中的两处调用，根除 per-export 失真源头；旧回退里 `findDistinctOperationNames()`「数去重 opName 种类数」的次生 bug 一并消除。
+- **编译**：`mvnw -o compile` BUILD SUCCESS。待用户 `start-all.ps1` 重编部署后，L0/L1/L2 将显示 H2 真实调用数（L0 ≥ L1），不再随导出频率漂移。
+
+## 8.14 Core 埋点根治：消除 llm: 退化 span（第十七~十八轮，2026-07-10）
+
+### 背景与现象
+- 8.13 修复后端口径（H2 真实计数）后，实测 `L0=L1=L2=20` 而 `requestCount=36`：三者全等且远小于请求数，且 span 统计发现 **16 个 LLM span 退化为 `llm:qwen3.6-35b-a3b`**（`AgentSpanContext.get()==null` 时 ObsChatModel 退化命名），不被 `L0:/L1%/L2:` 前缀命中 → 漏计。
+- 退化命名体系实测（`debug/span-stats` 的 distinctOpNames）含正常 `L0:/L1:/L1-LLM1:/L1-LLM2:/L2:` 与异常 `llm:qwen3.6-35b-a3b` 并存 → 根因在 **Core 埋点不完整**，非后端查询 bug。
+
+### 根因
+1. **流式 + 裸 ThreadLocal 丢失（主因）**：`WealthInterpretGraphConfig.java:203` `AgentSpanContext.set("L2",...)` → `:206-209` `wealthInterpretChatClient.prompt().stream()` 返回惰性 Flux → `:211` `finally { clear() }` 立即清空 ThreadLocal → Flux 在 clear 之后的图执行器订阅阶段才真正执行 `ObsChatModel.stream()`，此时 `get()==null` → 退化 `llm:`。seed 中约 16 条理财解读走此流式路径。
+2. `AgentSpanContext` 为裸 `ThreadLocal`，全仓库仅 `DomainRouter` 一处 `set("L0",...)` 显式设置；其余模型（`paramExtractChatModel` 等）无任何 `set` 调用，调用即退化。
+
+### 修复（比"补 set 站点"更稳健）
+将**层级绑定到每个 ObsChatModel 实例**（每个 model 构造时即知所属层，天然跨线程/跨流式订阅）：
+- `ObsChatModel`：新增 `defaultAgentLayer`/`defaultAgentName` 字段 + 构造参数；新增 `ResolvedCtx resolve()`（ThreadLocal 有值优先，含 intent/sessionId 富属性；层级为空回退模型绑定层）；`call()/stream()/startBusinessSpan()` 改用 `resolve()`，span 名恒为 `层:模型`，**彻底消除 `llm:` 退化**。
+- `ModelConfig.wrapWithObsChatModel` 增加 2 参数，6 个 bean 注入：domain→L0/DomainRouter、context→L1-LLM1/ContextRouter、intent→L1-LLM2/SubGraphRouter、paramExtract→L2/ParamExtract、wealthInterpret→L2/WealthInterpret、chat→L1/ChatService。
+- 保留显式 `AgentSpanContext.set(...)`：同步路径仍提供富业务属性，仅在缺失时兜底。
+
+### 验证（2026-07-10，清 H2 + 前台 seed 36 条）
+- 操作：POST `/api/v1/admin/purge?days=-1` 全清 H2（deletedSpans=1006/metricsAgg=23622/snapshots=7588/logs=3433）→ 前台 PowerShell 跑 `test/seed_all.py` 36/36 全送达（DONE: 25/36 COMPLETED，其余 INTERRUPTED/ERROR/DISAMBIGUATION 正常分支）。
+- **核心结论：llm: 退化 span 彻底消失**。`distinctOpNames` 实测 `['L0:...','L1-LLM1:...','L1-LLM2:...','L1:...','L2:...','POST']`，**零 llm: 前缀**。
+- 层级关系正确：`L0=L1=L2=10`（trace 去重口径，满足 L0≥L1≥L2）。
+- 语义说明：`L0=10 < 36` 属正确可观测语义——36 条中仅 10 个 trace 真正调 LLM（财富咨询/解读+闲聊），其余走确定性规则/缓存/模板直接返回（未调 LLM，不产生 L0 span）。`requestCount=89` 为 Redis 累计值（purge 不清 Redis，混入前端轮询+curl 探测），不可与 H2 的 36 条 seed 比较。
+
+### 沙箱注意
+- PowerShell 后台 seed 任务会被 sandbox 清理（约 2 分钟中断）→ 改用**前台 PowerShell（timeout 8 分钟）**跑 seed 成功。
+- `purge?days=N` 中 N 为"保留最近 N 天"：N 越大保留越多；全清须用 `days=-1`（cutoff=明天，删所有历史）。
+
+## 8.15 待定项与后续决策（2026-07-10 第二十二轮）
+
+记录本轮主人提出、暂未拍板的两项设计决策，**仅记录、未改动代码**，待后续明确口径后实现。
+
+### 待定项 A：L0 是否覆盖"所有请求（含不调 LLM 的规则命中）"
+- **现状**：当前 L0 基于 H2 spans 中 `operation_name LIKE 'L0:%'` 的 `COUNT(DISTINCT trace_id)`，仅统计**真正调用 domain 层 LLM** 的请求。走确定性关键词命中 / 缓存 / 模板直接返回（不调 LLM）的请求不产生 L0 span → 不计入。实测 seed 36 条中仅 10 个 trace 产生 L0 span（L0=10），符合"真实 LLM 消耗"可观测语义。
+- **诉求**：主人希望 L0 能反映"所有请求接收数"（含规则命中、不调 LLM 的请求），使 L0 ≈ requestCount（请求总数）。
+- **待定（待主人确认口径后实现）**：
+  - 方案 (a)：引入独立"请求接收数"口径（如 Core 在请求入口统一打点 `request.received`，与"LLM 调用数"区分，互不覆盖）；
+  - 方案 (b)：把现有 L0 span 扩展到路由入口，使规则命中也产生 `L0:` span。
+  - 需主人选定方案与字段定义后再动手。本轮不改代码。
+
+### 待定项 B：reRoute（重新路由）是否包含原报文
+- **现状**：路由链 `DomainRouter → ContextRouter / SubGraphRouter → 子图` 存在因意图不清 / 置信度不足 / 升级转交等触发的"重新路由"（reRoute）路径；当前 reRoute 的埋点 / 事件未明确携带触发时的原请求报文（原报文）。
+- **诉求**：主人提出需确认 reRoute 是否应携带原报文（用于溯源、调试、复现）。
+- **待定（待主人明确两点后决定）**：
+  - (1) "reRoute" 的精确范围：哪几条路径算 reRoute（如意图升级转交、兜底重试、跨 Agent 移交等）；
+  - (2) "原报文"指哪些字段：原始 query / session 上下文 / 上游响应体。
+  - 本轮仅记录，未改动代码。
+
+### 待定项 C：是否引入 Langfuse 作为可观测 / LLM 追踪平台
+- **现状**：当前可观测栈 = Core（OTel javaagent）→ OTel Collector(4318) → Backend(9090) → H2（温层）+ Redis（热层）→ Vite/React 前端。LLM 调用经 `ObsChatModel` 打 OTel span（L0/L1/L2 层级）+ Micrometer `llm.*` 指标，后端 `SpanRepository` / `MetricsQueryService` 实时聚合。
+- **诉求**：主人提出评估是否引入 **Langfuse**（开源 LLM 工程平台，提供 trace/observation、prompt 管理、评估、token/cost 分析）作为补充或替代的可观测层。
+- **待定（待主人明确三点后决定）**：
+  - (1) 定位：与现有 OTel/H2 并存（前端接 Langfuse UI 做 LLM 专项分析），还是替代部分能力（如 token/cost 直接走 Langfuse）；
+  - (2) 接入方式：Langfuse 有 Spring AI 原生集成（`LangfuseObservationConvention`）与 OpenTelemetry 导出器两种，是否需改 Core 埋点；
+  - (3) 部署形态：自托管（Docker）还是云端 SaaS。
+  - 本轮仅记录，未改动代码。
+
+### 同步说明
+- 最近几轮修改（第十七~十八轮 / R17–R21）已同步刷新至本 V2 文档：8.12（总览大屏 8 项人工验收问题修复）、8.13（Agent 分层调用数 L1>L0 反向根因与 H2 真值化）、8.14（Core 埋点根治：消除 `llm:` 退化 span）均已落档，本轮 8.15 补充三项待定项。
+
+## 8.16 链路追踪列表为空（前端 Trace 列表不显示，2026-07-10 第二十三~二十四轮）
+
+### 现象
+主人反馈：H2 spans 表有值（379 条）、Redis 有值，但前端「链路追踪」页 Trace 列表为空（`TraceTable` 显示"暂无 Trace 数据"）。
+
+### 根因（先看接口数据再定位，非猜）
+- 前端 `fetchTraces` → `GET /api/v1/traces` → `TraceQueryController.listTracesPaginated` → `TraceQueryService`，旧逻辑**依赖"根 span"语义**当 trace 入口：
+  1. `findRootSpansByTimeRange`（parentSpanId IS NULL）→ 取根 span；
+  2. `hasBusinessRoot` 判断：根 span 的 `op` 若等于 `"POST"` 则视为"无业务根" → 走 fallback `findBusinessRootSpansByTimeRange`（`kind='SERVER' AND operation_name LIKE 'POST %'`，即需 `POST /api/bank/chat` 这类带路径的 SERVER span）。
+- **当前数据形态**：所有 `parentSpanId` 为空的根 span，实测（`debug/span-stats` 的 `rootSpanSamples`）全是 **Core OTel 导出器发往 Collector 的 OTLP 导出 span**（`op=POST, kind=CLIENT, status=UNSET`）——并非业务请求入口；而 `distinctOpNames` 只有 `['L0:..','L1-LLM1:..','L1-LLM2:..','L1:..','L2:..','POST']`，**根本没有** `POST /api/bank/chat` 这类 SERVER span。
+- 因此：`hasBusinessRoot=false` → fallback 要求 `POST %` 带路径的 SERVER span → 当前数据**不存在** → 返回 0 条 → `rootSpans` 变空 → 列表 `totalElements=0`。"靠根 span 当 trace 入口"的模型对此数据形态彻底失效。
+
+### 修复（第二十四轮）
+重写 `listTraces` / `listTracesPaginated`，改为**按 trace_id 去重枚举**（已有 `spanRepository.findDistinctTraceIdsSince(from)`，默认 7 天窗口），对每个 trace 的全部 spans 聚合出 `TraceListVO`（新增 `collectTraceListVOs` + `buildTraceListVOFromSpans`）：
+- **跳过无业务 span 的 trace**（无 L0/L1/L2/llm）→ 排除 OTLP 导出自 trace 噪声与无埋点的纯规则命中请求；
+- `timestamp` = 该 trace 最早 span 的 start；`durationMs` = 业务 span 首末时间差（E2E），兜底取根 span durationMs；
+- `statusCode` = 任一 span 为 ERROR → ERROR，否则首个非 UNSET 状态，否则 OK；
+- `sessionId/intent/userId` 从业务 span 属性（`extractSessionIdFromUrl` / `parseAttributes`）提取，回退 Session 表；
+- `agentChain / TTFT / tokenTotal` 复用既有聚合 helper（`buildAgentChainFromSpans` / `computeTTFT` / `aggregateTokenTotal`）。
+- 删除脆弱的"根 span 检测 + OTLP/actuator/health 跳过"逻辑（不再需要）。
+
+### 编译
+- `./mvnw.cmd -o compile` EXIT=0。需用户 `start-all.ps1` 重启 backend（9090）生效。
+
+### 预期结果（待重启验证）
+- Trace 列表将显示**真正调用过 LLM 的 trace**（含 L0–L2 span 者）。seed 36 条中约 10 个（与 L0=10 一致）。
+- 走规则命中、未调 LLM 的请求因**未产生任何 span** 仍不出现 → 属"待定项 A"范畴（是否引入"请求接收数"口径），非本次 bug。
+
+## 8.17 大屏展示层三项优化（trace Agents 链 / 意图链 / 会话回放执行智能体，2026-07-10 第二十六轮，R26）
+
+主人三项指令：① trace 表 Agents 列层级链展示修正；② trace 表意图列改为各层真实识别结果；③ 会话回放"执行智能体"按轮显示最终 L2 且与单 trace 的 Agents 链区分。
+
+### 背景与问题
+- 原 `agentChain` 显示 `L0 → L1-LLM1 → L1-LLM2 → L2`：业务视角下 2 个 LLM 调用在内部、对外始终还是 L1，不应把 L1-LLM1/L1-LLM2 并列暴露。
+- 原 `intent` 字段从 `Session.getIntentFlow()` 整条会话意图链**回退**取值（R25 已发现串味 bug），导致单 trace 显示约 20 个意图（"WEALTH → WEALTH → …"），违背"trace 是单轮对话"语义。
+- 会话回放"执行智能体"原直接复用 `intentFlow` 切分，一个会话含多个 L2 时只显示一个；多轮 `WEALTH → WEALTH → … → TRANSFER` 只显示 WEALTH。
+
+### 修复 #1 — trace 表 Agents 链（`buildAgentChainFromSpans` 重写）
+- 收集业务 span（L0/L1*/L2/llm）按 startTime 排序；**按 L0 边界切分多段**（reroute：一段 L0→L1→WEALTH 后接新 L0→L1→TRANSFER）。
+- 每段输出：`L0`(有则) + `L1`(有 L1/L1-LLM1/L1-LLM2 则合并为单一 L1) + `businessNameOf(L2 span)`(L2 业务名 WEALTH/TRANSFER/BILL)。
+- `businessNameOf`：优先 span 的 `intent` 属性推导（含 `GRAPH` 后缀去掉），回退 `agent.name`（WealthInterpret→WEALTH）。
+- 效果：`L0 → L1 → WEALTH`；reroute：`L0 → L1 → WEALTH → L0 → L1 → TRANSFER`。
+
+### 修复 #2 — trace 表意图链（`buildIntentChainFromSpans` 新增）
+- 同样按 L0 切段；每段取四层真实识别结果：`L0 intent + " Domain"` → `L1-LLM1 intent`(switch-new 等) → `L1-LLM2 intent`(wealth-filter 等) → `L2 intent`(XXX)，用 `→` 拼接。
+- L0 intent 缺失时回退：L2 业务名 → 该 session 的 `lastIntentOf(intentFlow)` → "未识别"。
+- **根治 R25 的整条 intentFlow 串味 bug**：`buildTraceListVOFromSpans` 不再回退 `session.getIntentFlow()` 整条链，改为纯 span 聚合。
+
+### 修复 #3 — 会话回放"执行智能体"（`SessionService.buildExecutingAgents` 新增）
+- 按 `turnNumber` 升序遍历 `session_turns`，每轮取 `t.getIntent()`：业务域（WEALTH/TRANSFER/BILL…）→ 该轮 L2 名；否则（CHAT/UNKNOWN/UNSUPPORTED，未达 L2）→ 显示 `L1`（代表意图识别/路由异常）。
+- `isBusinessDomain`：CHAT/UNKNOWN/UNSUPPORTED 视为非业务域。
+- 与 `Session.intentFlow` **刻意区分**：intentFlow 用于意图统计（保留在详情页 `agentChain`），本列表仅用于每轮实际执行的智能体；连续相同的 L2 由前端 `dedupAgents`（`→` 分隔 + 折叠）处理，如 `WEALTH → WEALTH → TRANSFER → WEALTH → TRANSFER` 折叠为 `WEALTH → TRANSFER → WEALTH → TRANSFER`。
+- `toSessionListVO` 的 `agents` 字段由 `buildExecutingAgents` 提供；`intent`(首意图)/`domainSwitches` 仍保留。
+
+### 数据约束（重要，影响 #2 完整语义）
+- 经静态核查 Core：`DomainRouter`/`ContextRouter`/`SubGraphRouter` 的 `AgentSpanContext.set(...)` 中 **L0 / L1-LLM1 / L1-LLM2 的 intent 参数全传 `null`**；且 L1-LLM1 的 routeType、L1-LLM2 的 intentName 在 LLM 调用**之后**才解析，而 `ObsChatModel.call()` 在 `finally` 里立即 `span.end()` → 这些识别结果**当前未写入 span 的 intent 属性**。
+- 故 #2 的 `switch-new` / `wealth-filter` 等 L1 层真实意图在当前数据中**大概率取不到**（仅 `WEALTH Domain` 段可见）；`L2` 业务名（WEALTH 等）**当前可由 intent/agent.name 推导**，显示正常。
+- 要让 #2 显示完整 L1 层意图，需后续 Core 改动：在 `AgentSpanContext.set` 或 `ObsChatModel` 把 ContextRouter/SubGraphRouter 的识别结果写入 span 的 intent 属性（已列为后续待定项，本轮未实施）。
+
+### 编译与验证
+- `./mvnw.cmd -o compile` EXIT=0（2026-07-10 第二轮编译验证通过）。
+- 待用户用 `start-all.ps1` 重启 backend(9090)；重启后前台跑 `seed_all.py` 并拉 `/api/v1/traces`（验证 #1 `L0→L1→WEALTH`、#2 单轮真实意图链）、`/api/v1/sessions`（验证 #3 每轮 L2 + 前端 `dedupAgents` 折叠）。

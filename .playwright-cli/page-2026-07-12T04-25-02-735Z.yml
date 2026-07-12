@@ -1,0 +1,39 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - option "AI 原生可观测 魏文第 阅读2534" [ref=e9]:
+      - generic [ref=e10]:
+        - generic [ref=e12]: AI 原生可观测
+        - generic [ref=e13]:
+          - img [ref=e14]
+          - generic [ref=e16]: 魏文第
+        - generic [ref=e18]: 阅读2534
+    - generic [ref=e19]:
+      - generic [ref=e21]:
+        - generic [ref=e22]: 8篇内容 · 连载中
+        - generic [ref=e26]: 倒序
+      - list [ref=e27]:
+        - listitem [ref=e28] [cursor=pointer]:
+          - link "，" [ref=e30]:
+            - generic [ref=e31]: AI原生可观测性系列-开篇：监控做了很多，故障还是靠猜
+        - listitem [ref=e32] [cursor=pointer]:
+          - link "，" [ref=e34]:
+            - generic [ref=e35]: AI 原生可观测性 02｜AI 不是替代自动化，而是补上运维系统的解释层
+        - listitem [ref=e36] [cursor=pointer]:
+          - link "，" [ref=e38]:
+            - generic [ref=e39]: AI 原生可观测性 03｜从静态告警到 SLO 影响分析，AIOps 到底怎么降噪？
+        - listitem [ref=e40] [cursor=pointer]:
+          - link "，" [ref=e42]:
+            - generic [ref=e43]: AI 原生可观测性 04｜一次云迁移之后，可观测性为什么会失控？时序折叠的AIOps落地路径
+        - listitem [ref=e44] [cursor=pointer]:
+          - link "，" [ref=e46]:
+            - generic [ref=e47]: 可观测性普惠化（上）：如何把日志、指标和 Trace 变成开发人员自助服务
+        - listitem [ref=e48] [cursor=pointer]:
+          - link "，" [ref=e50]:
+            - generic [ref=e51]: 可观测性普惠化（中）：把可观测性写成代码：模板、GitOps 和成熟度模型怎么落地
+        - listitem [ref=e52] [cursor=pointer]:
+          - link "，" [ref=e54]:
+            - generic [ref=e55]: AI接入开发者平台，应先观测后干活
+        - listitem [ref=e56] [cursor=pointer]:
+          - link "，" [ref=e58]:
+            - generic [ref=e59]: 可观测性民主化，不是多给几个仪表板
+  - button "开始阅读" [ref=e66]

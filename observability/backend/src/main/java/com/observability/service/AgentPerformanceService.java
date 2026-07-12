@@ -1,7 +1,11 @@
 package com.observability.service;
 
-import com.observability.model.AgentPerformance;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.observability.model.MetricsAgg;
+import com.observability.model.SpanEntity;
 import com.observability.repository.AgentPerformanceRepository;
+import com.observability.repository.MetricsAggRepository;
+import com.observability.repository.SpanRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -9,451 +13,342 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Agent 性能查询服务 — Agent/LLM 双维度分析
+ * Agent 性能查询服务 — 实时从 Span + metrics_agg 聚合。
+ *
+ * 此前实现读取 agent_performance 静态表，而该表全代码无任何写入方，导致页面永远为空。
+ * 现改为实时聚合:
+ *  - SpanEntity（每个 LLM 调用产生一条业务 span）: 精确调用次数、真实 operation 耗时分位、
+ *    ERROR 状态→错误率，以及 model/agent.name/agent.level 维度。
+ *  - metrics_agg（H2）:
+ *      llm.first_token.latency → TTFT 样本（修复 publishPercentileHistogram 后到达）
+ *      llm.token.per.output.time → TPOT 样本
+ *      llm.token.input / llm.token.output → Token 总量（cumulative，取窗口内 MAX）
  */
 @Slf4j
 @Service
 public class AgentPerformanceService {
 
+    // 保留构造参数以兼容 Controller（agent_performance 表已弃用，改为实时聚合）
     private final AgentPerformanceRepository agentPerformanceRepository;
+    private final SpanRepository spanRepository;
+    private final MetricsAggRepository metricsAggRepository;
+    private final ObjectMapper objectMapper;
 
-    public AgentPerformanceService(AgentPerformanceRepository agentPerformanceRepository) {
+    public AgentPerformanceService(AgentPerformanceRepository agentPerformanceRepository,
+                                   SpanRepository spanRepository,
+                                   MetricsAggRepository metricsAggRepository,
+                                   ObjectMapper objectMapper) {
         this.agentPerformanceRepository = agentPerformanceRepository;
+        this.spanRepository = spanRepository;
+        this.metricsAggRepository = metricsAggRepository;
+        this.objectMapper = objectMapper;
     }
 
-    /**
-     * 获取 Agent 性能数据
-     *
-     * @param from      开始时间
-     * @param to        结束时间
-     * @param dimension agent / llm（默认 agent）
-     */
+    // ==================== 对外接口 ====================
+
     public Map<String, Object> getPerformance(Instant from, Instant to, String dimension) {
         if (from == null) from = Instant.now().minusSeconds(86400);
         if (to == null) to = Instant.now();
         if (dimension == null || dimension.isBlank()) dimension = "agent";
 
-        List<AgentPerformance> records = agentPerformanceRepository.findByTimeRange(from, to);
+        Aggregates agg = computeAggregates(from, to);
+        Map<String, Agg> groups = "llm".equals(dimension) ? agg.byModel : agg.byAgent;
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("dimension", dimension);
+        result.put("kpis", buildKpis(groups));
+        result.put("tables", Map.of(dimension, buildTableRows(groups, "llm".equals(dimension))));
+        result.put("boxplots", Map.of(dimension, buildBoxplotEntries(groups)));
+        result.put("scatters", Map.of(dimension, buildScatterEntries(groups)));
+        result.put("categories", Map.of(dimension, new ArrayList<>(groups.keySet())));
+        return result;
+    }
+
+    public Map<String, Object> getBoxplotData(Instant from, Instant to, String dimension) {
+        if (from == null) from = Instant.now().minusSeconds(86400);
+        if (to == null) to = Instant.now();
+        if (dimension == null || dimension.isBlank()) dimension = "agent";
+
+        Aggregates agg = computeAggregates(from, to);
+        Map<String, Agg> groups = "llm".equals(dimension) ? agg.byModel : agg.byAgent;
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("dimension", dimension);
+        result.put("ttft", buildBoxplotSeries(groups, "ttft"));
+        result.put("tpot", buildBoxplotSeries(groups, "tpot"));
+        result.put("duration", buildBoxplotSeries(groups, "duration"));
+        return result;
+    }
+
+    public Map<String, Object> getScatterData(Instant from, Instant to, String dimension) {
+        if (from == null) from = Instant.now().minusSeconds(86400);
+        if (to == null) to = Instant.now();
+        if (dimension == null || dimension.isBlank()) dimension = "agent";
+
+        Aggregates agg = computeAggregates(from, to);
+        Map<String, Agg> groups = "llm".equals(dimension) ? agg.byModel : agg.byAgent;
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("dimension", dimension);
 
-        if ("llm".equals(dimension)) {
-            return buildLlmDimension(records);
-        } else {
-            return buildAgentDimension(records);
-        }
-    }
-
-    /**
-     * 获取箱线图数据
-     */
-    public Map<String, Object> getBoxplotData(Instant from, Instant to, String dimension) {
-        if (from == null) from = Instant.now().minusSeconds(86400);
-        if (to == null) to = Instant.now();
-
-        List<AgentPerformance> records = agentPerformanceRepository.findByTimeRange(from, to);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dimension", dimension != null ? dimension : "agent");
-
-        // 按 agentName 或 model 分组
-        Map<String, List<Double>> ttftGroups = new LinkedHashMap<>();
-        Map<String, List<Double>> tpotGroups = new LinkedHashMap<>();
-        Map<String, List<Double>> durationGroups = new LinkedHashMap<>();
-
-        for (AgentPerformance ap : records) {
-            String groupKey = "llm".equals(dimension) ? ap.getModel() : ap.getAgentName();
-            if (groupKey == null) groupKey = "unknown";
-
-            if (ap.getTtftP50Ms() != null) {
-                ttftGroups.computeIfAbsent(groupKey, k -> new ArrayList<>())
-                        .add(ap.getTtftP50Ms().doubleValue());
-            }
-            if (ap.getTpotP50Ms() != null) {
-                tpotGroups.computeIfAbsent(groupKey, k -> new ArrayList<>())
-                        .add(ap.getTpotP50Ms().doubleValue());
-            }
-            if (ap.getTotalDurationMs() != null && ap.getCallCount() != null && ap.getCallCount() > 0) {
-                durationGroups.computeIfAbsent(groupKey, k -> new ArrayList<>())
-                        .add(ap.getTotalDurationMs().doubleValue() / ap.getCallCount());
-            }
-        }
-
-        result.put("ttft", buildBoxplotSeries(ttftGroups));
-        result.put("tpot", buildBoxplotSeries(tpotGroups));
-        result.put("duration", buildBoxplotSeries(durationGroups));
-
-        return result;
-    }
-
-    /**
-     * 获取散点图数据
-     */
-    public Map<String, Object> getScatterData(Instant from, Instant to, String dimension) {
-        if (from == null) from = Instant.now().minusSeconds(86400);
-        if (to == null) to = Instant.now();
-
-        List<AgentPerformance> records = agentPerformanceRepository.findByTimeRange(from, to);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dimension", dimension != null ? dimension : "agent");
-
-        // 按组别构建散点：[x=callCount, y=avgDurationMs]
-        Map<String, List<double[]>> scatterGroups = new LinkedHashMap<>();
-        for (AgentPerformance ap : records) {
-            String groupKey = "llm".equals(dimension) ? ap.getModel() : ap.getAgentName();
-            if (groupKey == null) groupKey = "unknown";
-
-            double callCount = ap.getCallCount() != null ? ap.getCallCount().doubleValue() : 1.0;
-            double avgDuration = (ap.getTotalDurationMs() != null && ap.getCallCount() != null && ap.getCallCount() > 0)
-                    ? ap.getTotalDurationMs().doubleValue() / ap.getCallCount() : 0.0;
-
-            scatterGroups.computeIfAbsent(groupKey, k -> new ArrayList<>())
-                    .add(new double[]{callCount, avgDuration});
-        }
-
         List<Map<String, Object>> series = new ArrayList<>();
-        for (var entry : scatterGroups.entrySet()) {
+        for (var entry : groups.entrySet()) {
+            Agg g = entry.getValue();
+            double avgDuration = g.durations.isEmpty() ? 0.0
+                    : g.durations.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
             Map<String, Object> s = new LinkedHashMap<>();
             s.put("name", entry.getKey());
-            List<List<Double>> data = new ArrayList<>();
-            for (double[] pt : entry.getValue()) {
-                data.add(List.of(pt[0], pt[1]));
-            }
+            List<Map<String, Object>> data = new ArrayList<>();
+            Map<String, Object> point = new LinkedHashMap<>();
+            point.put("x", g.calls);
+            point.put("y", Math.round(avgDuration * 100.0) / 100.0);
+            data.add(point);
             s.put("data", data);
             series.add(s);
         }
         result.put("series", series);
-
         return result;
     }
 
-    // ── Builders ──
+    // ==================== 聚合核心 ====================
 
-    private Map<String, Object> buildAgentDimension(List<AgentPerformance> records) {
-        // 按 agentName 聚合
-        Map<String, List<AgentPerformance>> byAgent = new LinkedHashMap<>();
-        for (AgentPerformance ap : records) {
-            String key = ap.getAgentName() != null ? ap.getAgentName() : "unknown";
-            byAgent.computeIfAbsent(key, k -> new ArrayList<>()).add(ap);
-        }
+    private Aggregates computeAggregates(Instant from, Instant to) {
+        Aggregates agg = new Aggregates();
 
-        // 全局汇总变量
-        long totalCalls = 0;
-        long totalDurationMs = 0;
-        long totalErrorCount = 0;
-        long totalTokensIn = 0;
-        long totalTokensOut = 0;
+        // ── 1. 从 Span 构建调用次数 / 真实耗时分位 / 错误率（按 model 与 agent 双维度）──
+        try {
+            List<SpanEntity> spans = spanRepository.findByStartTimeBetweenOrderByStartTimeDesc(from, to);
+            for (SpanEntity s : spans) {
+                String model = extractModel(s);
+                String agent = extractAgent(s);
+                String level = extractLevel(s);
+                if (model == null) model = "unknown";
 
-        List<Map<String, Object>> tableRows = new ArrayList<>();
-        List<Map<String, Object>> boxplotEntries = new ArrayList<>();
-        List<Map<String, Object>> scatterSeries = new ArrayList<>();
-        List<String> categoryNames = new ArrayList<>();
+                Agg modelAgg = agg.byModel.computeIfAbsent(model, k -> new Agg());
+                modelAgg.calls++;
+                if (s.getDurationMs() != null) modelAgg.durations.add(s.getDurationMs().doubleValue());
+                if ("ERROR".equalsIgnoreCase(s.getStatusCode())) modelAgg.errors++;
 
-        for (var entry : byAgent.entrySet()) {
-            String agentName = entry.getKey();
-            List<AgentPerformance> agentRecords = entry.getValue();
-
-            long calls = agentRecords.stream().mapToLong(r -> r.getCallCount() != null ? r.getCallCount() : 0).sum();
-            long duration = agentRecords.stream().mapToLong(r -> r.getTotalDurationMs() != null ? r.getTotalDurationMs() : 0).sum();
-            long errors = agentRecords.stream().mapToLong(r -> r.getErrorCount() != null ? r.getErrorCount() : 0).sum();
-            long tokensIn = agentRecords.stream().mapToLong(r -> r.getTotalTokensIn() != null ? r.getTotalTokensIn() : 0).sum();
-            long tokensOut = agentRecords.stream().mapToLong(r -> r.getTotalTokensOut() != null ? r.getTotalTokensOut() : 0).sum();
-
-            totalCalls += calls;
-            totalDurationMs += duration;
-            totalErrorCount += errors;
-            totalTokensIn += tokensIn;
-            totalTokensOut += tokensOut;
-
-            String agentLevel = agentRecords.get(0).getAgentLevel();
-
-            // tables.agent 行
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("agent", agentName);
-            row.put("level", agentLevel);
-            row.put("calls", calls);
-            row.put("totalLatency", calls > 0 ? duration / calls : 0L);
-            row.put("ttftP50", medianOfP50s(agentRecords, "ttft"));
-            row.put("ttftP95", maxOfP95s(agentRecords, "ttft"));
-            row.put("tpotP50", medianOfP50s(agentRecords, "tpot"));
-            row.put("tpotP95", maxOfP95s(agentRecords, "tpot"));
-            row.put("totalTokens", tokensIn + tokensOut);
-            row.put("errorRate", calls > 0 ? errors * 100.0 / calls : 0.0);
-            tableRows.add(row);
-
-            // boxplots.agent — 从 ttft 分布构建
-            List<Double> ttftVals = new ArrayList<>();
-            for (AgentPerformance ap : agentRecords) {
-                if (ap.getTtftP50Ms() != null) {
-                    ttftVals.add(ap.getTtftP50Ms().doubleValue());
+                if (agent != null) {
+                    Agg agentAgg = agg.byAgent.computeIfAbsent(agent, k -> new Agg());
+                    agentAgg.level = level;
+                    agentAgg.calls++;
+                    if (s.getDurationMs() != null) agentAgg.durations.add(s.getDurationMs().doubleValue());
+                    if ("ERROR".equalsIgnoreCase(s.getStatusCode())) agentAgg.errors++;
                 }
             }
-            Map<String, Object> boxEntry = new LinkedHashMap<>(computeBoxplot(ttftVals));
-            boxEntry.put("name", agentName);
-            boxplotEntries.add(boxEntry);
-
-            // scatters.agent
-            Map<String, Object> scatterEntry = new LinkedHashMap<>();
-            scatterEntry.put("name", agentName);
-            double avgDurationMs = calls > 0 ? (double) duration / calls : 0.0;
-            List<Map<String, Object>> data = new ArrayList<>();
-            Map<String, Object> point = new LinkedHashMap<>();
-            point.put("x", calls);
-            point.put("y", avgDurationMs);
-            data.add(point);
-            scatterEntry.put("data", data);
-            scatterSeries.add(scatterEntry);
-
-            categoryNames.add(agentName);
+        } catch (Exception e) {
+            log.warn("[AgentPerformance] Span aggregation failed: {}", e.getMessage());
         }
 
-        // kpis
-        Map<String, Object> kpis = new LinkedHashMap<>();
-        kpis.put("totalCalls", totalCalls);
-        kpis.put("avgLatency", totalCalls > 0 ? (double) totalDurationMs / totalCalls : 0.0);
-        kpis.put("errorRate", totalCalls > 0 ? (double) totalErrorCount * 100.0 / totalCalls : 0.0);
-        kpis.put("totalTokens", totalTokensIn + totalTokensOut);
+        // ── 2. 从 metrics_agg 补充 TTFT / TPOT / Token 总量 ──
+        fillMetricSamples(agg, from, to, "llm.first_token.latency", true, false);
+        fillMetricSamples(agg, from, to, "llm.token.per.output.time", false, true);
+        fillTokenTotals(agg, from, to, "llm.token.input", true);
+        fillTokenTotals(agg, from, to, "llm.token.output", false);
 
-        // tables
-        Map<String, Object> tables = new LinkedHashMap<>();
-        tables.put("agent", tableRows);
-
-        // boxplots
-        Map<String, Object> boxplots = new LinkedHashMap<>();
-        boxplots.put("agent", boxplotEntries);
-
-        // scatters
-        Map<String, Object> scatters = new LinkedHashMap<>();
-        scatters.put("agent", scatterSeries);
-
-        // categories
-        Map<String, Object> categories = new LinkedHashMap<>();
-        categories.put("agent", categoryNames);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dimension", "agent");
-        result.put("kpis", kpis);
-        result.put("tables", tables);
-        result.put("boxplots", boxplots);
-        result.put("scatters", scatters);
-        result.put("categories", categories);
-
-        return result;
+        return agg;
     }
 
-    private Map<String, Object> buildLlmDimension(List<AgentPerformance> records) {
-        // 按 model 聚合
-        Map<String, List<AgentPerformance>> byModel = new LinkedHashMap<>();
-        for (AgentPerformance ap : records) {
-            String key = ap.getModel() != null ? ap.getModel() : "unknown";
-            byModel.computeIfAbsent(key, k -> new ArrayList<>()).add(ap);
-        }
-
-        // 全局汇总变量
-        long totalCalls = 0;
-        long totalDurationMs = 0;
-        long totalErrorCount = 0;
-        long totalTokensIn = 0;
-        long totalTokensOut = 0;
-
-        List<Map<String, Object>> tableRows = new ArrayList<>();
-        List<Map<String, Object>> boxplotEntries = new ArrayList<>();
-        List<Map<String, Object>> scatterSeries = new ArrayList<>();
-        List<String> categoryNames = new ArrayList<>();
-
-        for (var entry : byModel.entrySet()) {
-            String modelName = entry.getKey();
-            List<AgentPerformance> modelRecords = entry.getValue();
-
-            long calls = modelRecords.stream().mapToLong(r -> r.getCallCount() != null ? r.getCallCount() : 0).sum();
-            long duration = modelRecords.stream().mapToLong(r -> r.getTotalDurationMs() != null ? r.getTotalDurationMs() : 0).sum();
-            long errors = modelRecords.stream().mapToLong(r -> r.getErrorCount() != null ? r.getErrorCount() : 0).sum();
-            long tokensIn = modelRecords.stream().mapToLong(r -> r.getTotalTokensIn() != null ? r.getTotalTokensIn() : 0).sum();
-            long tokensOut = modelRecords.stream().mapToLong(r -> r.getTotalTokensOut() != null ? r.getTotalTokensOut() : 0).sum();
-
-            totalCalls += calls;
-            totalDurationMs += duration;
-            totalErrorCount += errors;
-            totalTokensIn += tokensIn;
-            totalTokensOut += tokensOut;
-
-            // tables.llm 行
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("model", modelName);
-            row.put("calls", calls);
-            row.put("totalLatency", calls > 0 ? duration / calls : 0L);
-            row.put("ttftP50", medianOfP50s(modelRecords, "ttft"));
-            row.put("ttftP95", maxOfP95s(modelRecords, "ttft"));
-            row.put("tpotP50", medianOfP50s(modelRecords, "tpot"));
-            row.put("tpotP95", maxOfP95s(modelRecords, "tpot"));
-            row.put("totalTokens", tokensIn + tokensOut);
-            row.put("errorRate", calls > 0 ? errors * 100.0 / calls : 0.0);
-            tableRows.add(row);
-
-            // boxplots.llm — 从 ttft 分布构建
-            List<Double> ttftVals = new ArrayList<>();
-            for (AgentPerformance ap : modelRecords) {
-                if (ap.getTtftP50Ms() != null) {
-                    ttftVals.add(ap.getTtftP50Ms().doubleValue());
+    /** 将 histogram 指标的 avg 样本按 model/agent 收集到对应 Agg 的 ttft/tpot 列表 */
+    private void fillMetricSamples(Aggregates agg, Instant from, Instant to,
+                                    String metricName, boolean isTtft, boolean isTpot) {
+        try {
+            List<MetricsAgg> list = metricsAggRepository
+                    .findByMetricNameAndTimestampBetweenOrderByTimestampAsc(metricName, from, to);
+            for (MetricsAgg m : list) {
+                if (m.getValue() == null) continue;
+                String model = extractTagValue(m.getTags(), "model");
+                String agent = extractTagValue(m.getTags(), "agent.name");
+                Agg g = agg.byModel.computeIfAbsent(model != null ? model : "unknown", k -> new Agg());
+                if (isTtft) g.ttft.add(m.getValue());
+                if (isTpot) g.tpot.add(m.getValue());
+                if (agent != null) {
+                    Agg ga = agg.byAgent.computeIfAbsent(agent, k -> new Agg());
+                    if (isTtft) ga.ttft.add(m.getValue());
+                    if (isTpot) ga.tpot.add(m.getValue());
                 }
             }
-            Map<String, Object> boxEntry = new LinkedHashMap<>(computeBoxplot(ttftVals));
-            boxEntry.put("name", modelName);
-            boxplotEntries.add(boxEntry);
-
-            // scatters.llm
-            Map<String, Object> scatterEntry = new LinkedHashMap<>();
-            scatterEntry.put("name", modelName);
-            double avgDurationMs = calls > 0 ? (double) duration / calls : 0.0;
-            List<Map<String, Object>> data = new ArrayList<>();
-            Map<String, Object> point = new LinkedHashMap<>();
-            point.put("x", calls);
-            point.put("y", avgDurationMs);
-            data.add(point);
-            scatterEntry.put("data", data);
-            scatterSeries.add(scatterEntry);
-
-            categoryNames.add(modelName);
+        } catch (Exception e) {
+            log.debug("[AgentPerformance] metric sample fill failed for {}: {}", metricName, e.getMessage());
         }
+    }
 
-        // kpis
+    /** Token 总量（cumulative 计数器，取窗口内 MAX） */
+    private void fillTokenTotals(Aggregates agg, Instant from, Instant to,
+                                 String metricName, boolean isInput) {
+        try {
+            List<MetricsAgg> list = metricsAggRepository
+                    .findByMetricNameAndTimestampBetweenOrderByTimestampAsc(metricName, from, to);
+            for (MetricsAgg m : list) {
+                if (m.getValue() == null) continue;
+                long v = m.getValue().longValue();
+                String model = extractTagValue(m.getTags(), "model");
+                String agent = extractTagValue(m.getTags(), "agent.name");
+                Agg g = agg.byModel.computeIfAbsent(model != null ? model : "unknown", k -> new Agg());
+                if (isInput) g.tokensIn = Math.max(g.tokensIn, v);
+                else g.tokensOut = Math.max(g.tokensOut, v);
+                if (agent != null) {
+                    Agg ga = agg.byAgent.computeIfAbsent(agent, k -> new Agg());
+                    if (isInput) ga.tokensIn = Math.max(ga.tokensIn, v);
+                    else ga.tokensOut = Math.max(ga.tokensOut, v);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[AgentPerformance] token total fill failed for {}: {}", metricName, e.getMessage());
+        }
+    }
+
+    // ==================== 结果构建 ====================
+
+    private Map<String, Object> buildKpis(Map<String, Agg> groups) {
+        long totalCalls = 0, totalErrors = 0;
+        double totalDuration = 0;
+        long totalTokens = 0;
+        for (Agg g : groups.values()) {
+            totalCalls += g.calls;
+            totalErrors += g.errors;
+            totalDuration += g.durations.stream().mapToDouble(Double::doubleValue).sum();
+            totalTokens += g.tokensIn + g.tokensOut;
+        }
         Map<String, Object> kpis = new LinkedHashMap<>();
         kpis.put("totalCalls", totalCalls);
-        kpis.put("avgLatency", totalCalls > 0 ? (double) totalDurationMs / totalCalls : 0.0);
-        kpis.put("errorRate", totalCalls > 0 ? (double) totalErrorCount * 100.0 / totalCalls : 0.0);
-        kpis.put("totalTokens", totalTokensIn + totalTokensOut);
-
-        // tables
-        Map<String, Object> tables = new LinkedHashMap<>();
-        tables.put("llm", tableRows);
-
-        // boxplots
-        Map<String, Object> boxplots = new LinkedHashMap<>();
-        boxplots.put("llm", boxplotEntries);
-
-        // scatters
-        Map<String, Object> scatters = new LinkedHashMap<>();
-        scatters.put("llm", scatterSeries);
-
-        // categories
-        Map<String, Object> categories = new LinkedHashMap<>();
-        categories.put("llm", categoryNames);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dimension", "llm");
-        result.put("kpis", kpis);
-        result.put("tables", tables);
-        result.put("boxplots", boxplots);
-        result.put("scatters", scatters);
-        result.put("categories", categories);
-
-        return result;
+        kpis.put("avgLatency", totalCalls > 0 ? Math.round(totalDuration / totalCalls * 100.0) / 100.0 : 0.0);
+        kpis.put("errorRate", totalCalls > 0 ? Math.round(totalErrors * 10000.0 / totalCalls) / 100.0 : 0.0);
+        kpis.put("totalTokens", totalTokens);
+        return kpis;
     }
 
-    private Map<String, Object> aggregateAgentRecords(String agentName, List<AgentPerformance> records) {
-        Map<String, Object> vo = new LinkedHashMap<>();
-        vo.put("agentName", agentName);
-
-        String agentLevel = records.get(0).getAgentLevel();
-        vo.put("agentLevel", agentLevel);
-
-        long totalCalls = records.stream().mapToLong(r -> r.getCallCount() != null ? r.getCallCount() : 0).sum();
-        long totalDuration = records.stream().mapToLong(r -> r.getTotalDurationMs() != null ? r.getTotalDurationMs() : 0).sum();
-        long totalError = records.stream().mapToLong(r -> r.getErrorCount() != null ? r.getErrorCount() : 0).sum();
-        long totalTokensIn = records.stream().mapToLong(r -> r.getTotalTokensIn() != null ? r.getTotalTokensIn() : 0).sum();
-        long totalTokensOut = records.stream().mapToLong(r -> r.getTotalTokensOut() != null ? r.getTotalTokensOut() : 0).sum();
-
-        vo.put("callCount", totalCalls);
-        vo.put("ttftP50Ms", medianOfP50s(records, "ttft"));
-        vo.put("ttftP95Ms", maxOfP95s(records, "ttft"));
-        vo.put("ttftP99Ms", maxOfP95s(records, "ttft")); // 用 P95 近似
-        vo.put("tpotP50Ms", medianOfP50s(records, "tpot"));
-        vo.put("tpotP95Ms", maxOfP95s(records, "tpot"));
-        vo.put("durationP50Ms", totalDuration > 0 && totalCalls > 0 ? totalDuration / totalCalls : 0);
-        vo.put("durationP95Ms", totalDuration > 0 && totalCalls > 0 ? (totalDuration / totalCalls) * 2 : 0);
-        vo.put("tokenAvgInput", totalCalls > 0 ? totalTokensIn / totalCalls : 0);
-        vo.put("tokenAvgOutput", totalCalls > 0 ? totalTokensOut / totalCalls : 0);
-        vo.put("errorCount", totalError);
-        vo.put("completionRate", totalCalls > 0 ? (totalCalls - totalError) * 100.0 / totalCalls : 100.0);
-
-        return vo;
-    }
-
-    private Map<String, Object> aggregateModelRecords(String modelName, List<AgentPerformance> records) {
-        Map<String, Object> vo = new LinkedHashMap<>();
-        vo.put("llmModel", modelName);
-
-        long totalCalls = records.stream().mapToLong(r -> r.getCallCount() != null ? r.getCallCount() : 0).sum();
-        long totalError = records.stream().mapToLong(r -> r.getErrorCount() != null ? r.getErrorCount() : 0).sum();
-        long totalTokensIn = records.stream().mapToLong(r -> r.getTotalTokensIn() != null ? r.getTotalTokensIn() : 0).sum();
-        long totalTokensOut = records.stream().mapToLong(r -> r.getTotalTokensOut() != null ? r.getTotalTokensOut() : 0).sum();
-
-        vo.put("callCount", totalCalls);
-        vo.put("ttftP50Ms", medianOfP50s(records, "ttft"));
-        vo.put("ttftP95Ms", maxOfP95s(records, "ttft"));
-        vo.put("tpotP50Ms", medianOfP50s(records, "tpot"));
-        vo.put("tpotP95Ms", maxOfP95s(records, "tpot"));
-        vo.put("tokenAvgInput", totalCalls > 0 ? totalTokensIn / totalCalls : 0);
-        vo.put("tokenAvgOutput", totalCalls > 0 ? totalTokensOut / totalCalls : 0);
-        vo.put("errorCount", totalError);
-
-        return vo;
-    }
-
-    // ── Stats Helpers ──
-
-    private double medianOfP50s(List<AgentPerformance> records, String field) {
-        List<Double> values = new ArrayList<>();
-        for (AgentPerformance r : records) {
-            Long val = "ttft".equals(field) ? r.getTtftP50Ms() : r.getTpotP50Ms();
-            if (val != null) values.add(val.doubleValue());
+    private List<Map<String, Object>> buildTableRows(Map<String, Agg> groups, boolean isLlm) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (var entry : groups.entrySet()) {
+            String key = entry.getKey();
+            Agg g = entry.getValue();
+            double avgDur = g.avgDuration();
+            Map<String, Object> row = new LinkedHashMap<>();
+            if (isLlm) {
+                row.put("agent", key);
+                row.put("model", key);
+            } else {
+                row.put("agent", key);
+                row.put("level", g.level != null ? g.level : "unknown");
+            }
+            row.put("calls", g.calls);
+            row.put("totalLatency", Math.round(avgDur));
+            row.put("ttftP50", Math.round(percentile(g.ttft, 0.50)));
+            row.put("ttftP95", Math.round(percentile(g.ttft, 0.95)));
+            row.put("tpotP50", Math.round(percentile(g.tpot, 0.50)));
+            row.put("tpotP95", Math.round(percentile(g.tpot, 0.95)));
+            long totalTok = g.tokensIn + g.tokensOut;
+            row.put("totalTokens", totalTok);
+            row.put("tokenDesc", g.tokensIn + "/" + g.tokensOut);
+            row.put("errorRate", g.calls > 0 ? Math.round(g.errors * 10000.0 / g.calls) / 100.0 : 0.0);
+            rows.add(row);
         }
-        if (values.isEmpty()) return 0.0;
-        Collections.sort(values);
-        int mid = values.size() / 2;
-        if (values.size() % 2 == 0) {
-            return (values.get(mid - 1) + values.get(mid)) / 2.0;
-        }
-        return values.get(mid);
+        return rows;
     }
 
-    private double maxOfP95s(List<AgentPerformance> records, String field) {
-        double max = 0.0;
-        for (AgentPerformance r : records) {
-            Long val = "ttft".equals(field) ? r.getTtftP95Ms() : r.getTpotP95Ms();
-            if (val != null && val > max) max = val.doubleValue();
+    private List<Map<String, Object>> buildBoxplotEntries(Map<String, Agg> groups) {
+        List<Map<String, Object>> entries = new ArrayList<>();
+        for (var entry : groups.entrySet()) {
+            Map<String, Object> box = computeBoxplot(entry.getValue().ttft);
+            Map<String, Object> e = new LinkedHashMap<>(box);
+            e.put("name", entry.getKey());
+            entries.add(e);
         }
-        return max;
+        return entries;
     }
 
-    private double computeP95FromRecords(List<AgentPerformance> records, boolean isTTFT) {
-        List<Double> values = new ArrayList<>();
-        for (AgentPerformance r : records) {
-            Long val = isTTFT ? r.getTtftP50Ms() : r.getTpotP50Ms();
-            if (val != null) values.add(val.doubleValue());
+    private List<Map<String, Object>> buildScatterEntries(Map<String, Agg> groups) {
+        List<Map<String, Object>> entries = new ArrayList<>();
+        for (var entry : groups.entrySet()) {
+            Agg g = entry.getValue();
+            double avgDuration = g.avgDuration();
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("name", entry.getKey());
+            List<Map<String, Object>> data = new ArrayList<>();
+            Map<String, Object> point = new LinkedHashMap<>();
+            point.put("x", g.calls);
+            point.put("y", Math.round(avgDuration * 100.0) / 100.0);
+            data.add(point);
+            e.put("data", data);
+            entries.add(e);
         }
-        if (values.isEmpty()) return 0.0;
-        Collections.sort(values);
-        int idx = (int) Math.ceil(0.95 * values.size()) - 1;
-        if (idx < 0) idx = 0;
-        if (idx >= values.size()) idx = values.size() - 1;
-        return values.get(idx);
+        return entries;
     }
 
-    // ── Boxplot ──
-
-    private Map<String, Object> buildBoxplotSeries(Map<String, List<Double>> groups) {
+    private Map<String, Object> buildBoxplotSeries(Map<String, Agg> groups, String field) {
         Map<String, Object> series = new LinkedHashMap<>();
         for (var entry : groups.entrySet()) {
-            series.put(entry.getKey(), computeBoxplot(entry.getValue()));
+            List<Double> vals;
+            if ("tpot".equals(field)) vals = entry.getValue().tpot;
+            else if ("duration".equals(field)) vals = entry.getValue().durations;
+            else vals = entry.getValue().ttft;
+            series.put(entry.getKey(), computeBoxplot(vals));
         }
         return series;
     }
 
+    // ==================== 维度提取 ====================
+
+    private String extractModel(SpanEntity s) {
+        String m = extractFromAttrs(s.getAttributes(), "model.name");
+        if (m == null && s.getOperationName() != null) {
+            int i = s.getOperationName().indexOf(':');
+            if (i >= 0 && i < s.getOperationName().length() - 1) {
+                m = s.getOperationName().substring(i + 1);
+            }
+        }
+        return m;
+    }
+
+    private String extractAgent(SpanEntity s) {
+        String a = extractFromAttrs(s.getAttributes(), "agent.name");
+        if (a == null && s.getOperationName() != null) {
+            int i = s.getOperationName().indexOf(':');
+            if (i > 0) a = s.getOperationName().substring(0, i);
+        }
+        return a;
+    }
+
+    private String extractLevel(SpanEntity s) {
+        String l = extractFromAttrs(s.getAttributes(), "agent.level");
+        if (l == null) {
+            String a = extractAgent(s);
+            if (a != null && (a.startsWith("L0") || a.startsWith("L1") || a.startsWith("L2"))) l = a;
+        }
+        return l;
+    }
+
+    private String extractFromAttrs(String attrsJson, String key) {
+        if (attrsJson == null || attrsJson.isBlank()) return null;
+        try {
+            Map<String, String> tags = objectMapper.readValue(attrsJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, String>>() {});
+            return tags.get(key);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String extractTagValue(String tagsJson, String key) {
+        return extractFromAttrs(tagsJson, key);
+    }
+
+    // ==================== 统计工具 ====================
+
+    private double percentile(List<Double> values, double p) {
+        if (values == null || values.isEmpty()) return 0.0;
+        List<Double> sorted = new ArrayList<>(values);
+        Collections.sort(sorted);
+        int idx = (int) Math.ceil(p * sorted.size()) - 1;
+        if (idx < 0) idx = 0;
+        if (idx >= sorted.size()) idx = sorted.size() - 1;
+        return sorted.get(idx);
+    }
+
     private Map<String, Object> computeBoxplot(List<Double> values) {
-        if (values.isEmpty()) {
+        if (values == null || values.isEmpty()) {
             return Map.of("min", 0.0, "q1", 0.0, "median", 0.0, "q3", 0.0, "max", 0.0);
         }
         List<Double> sorted = new ArrayList<>(values);
@@ -468,10 +363,26 @@ public class AgentPerformanceService {
         );
     }
 
-    private double percentile(List<Double> sorted, double p) {
-        int idx = (int) Math.ceil(p * sorted.size()) - 1;
-        if (idx < 0) idx = 0;
-        if (idx >= sorted.size()) idx = sorted.size() - 1;
-        return sorted.get(idx);
+    // ==================== 内部数据结构 ====================
+
+    private static class Agg {
+        long calls = 0;
+        long errors = 0;
+        String level;
+        List<Double> durations = new ArrayList<>();
+        List<Double> ttft = new ArrayList<>();
+        List<Double> tpot = new ArrayList<>();
+        long tokensIn = 0;
+        long tokensOut = 0;
+
+        double avgDuration() {
+            return durations.isEmpty() ? 0.0
+                    : durations.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+        }
+    }
+
+    private static class Aggregates {
+        Map<String, Agg> byModel = new LinkedHashMap<>();
+        Map<String, Agg> byAgent = new LinkedHashMap<>();
     }
 }

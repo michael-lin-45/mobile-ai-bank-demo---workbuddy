@@ -42,6 +42,11 @@ export function fetchMetricsHistory(from, to, step = '5m') {
   return client.get('/metrics/history', { params: { from, to, step } });
 }
 
+/** 请求 & Token 趋势 — GET /metrics/trend?hours=6（后端按 30min 分桶） */
+export function fetchMetricsTrend(hours = 6) {
+  return client.get('/metrics/trend', { params: { hours } });
+}
+
 // ── Trace API ──
 
 export function fetchTraces(params = {}) {
@@ -80,15 +85,6 @@ export function fetchLogs({ from, to, level, traceId, q, userId, sessionId, page
 
 export function fetchAIInsights(type, from, to) {
   return client.get('/ai/insights', { params: { type, from, to } });
-}
-
-export function fetchIntentDistribution(from, to) {
-  return client.get('/ai/intent-distribution', { params: { from, to } });
-}
-
-/** 意图识别准确率趋势 — GET /ai/intent-accuracy-trend */
-export function fetchIntentAccuracyTrend(params = {}) {
-  return client.get('/ai/intent-accuracy-trend', { params });
 }
 
 /** 意图混淆矩阵 — GET /ai/confusion-matrix */

@@ -2,6 +2,7 @@ package com.observability.controller;
 
 import com.observability.dto.ApiResponse;
 import com.observability.dto.RealtimeMetricsVO;
+import com.observability.dto.TrendVO;
 import com.observability.model.MetricsAgg;
 import com.observability.service.MetricsQueryService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -56,6 +57,18 @@ public class MetricsQueryController {
             return ApiResponse.ok(history);
         } catch (Exception e) {
             return ApiResponse.error(500, "Failed to fetch metrics history: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 请求 & Token 趋势（最近 hours 小时，按 30 分钟分桶）
+     */
+    @GetMapping("/trend")
+    public ApiResponse<TrendVO> getTrend(@RequestParam(defaultValue = "6") int hours) {
+        try {
+            return ApiResponse.ok(metricsQueryService.getTrend(hours));
+        } catch (Exception e) {
+            return ApiResponse.error(500, "Failed to fetch trend: " + e.getMessage());
         }
     }
 }

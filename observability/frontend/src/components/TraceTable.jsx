@@ -71,6 +71,7 @@ function TraceTable({ traces = [], onViewDetail, loading }) {
             <th style={TH_STYLE}>Trace</th>
             <th style={TH_STYLE}>Session</th>
             <th style={TH_STYLE}>User</th>
+            <th style={TH_STYLE}>意图</th>
             <th style={TH_STYLE}>Agents</th>
             <th style={TH_STYLE}>耗时</th>
             <th style={TH_STYLE}>TTFT</th>
@@ -98,6 +99,9 @@ function TraceTable({ traces = [], onViewDetail, loading }) {
               </td>
               <td style={TD_STYLE}>
                 <span style={{ ...MONO_STYLE, fontSize: 11 }}>{t.userId || '-'}</span>
+              </td>
+              <td style={TD_STYLE}>
+                <IntentBadge intent={t.intent} />
               </td>
               <td style={TD_STYLE}>
                 <span style={{ ...MONO_STYLE, fontSize: 11 }}>{dedupAgentChain(t.agentChain)}</span>

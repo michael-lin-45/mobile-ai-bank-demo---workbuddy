@@ -78,6 +78,50 @@ function WaterfallChart({ spans = [], ttftMs, totalMs }) {
         </div>
       )}
 
+      {/* E2E 总耗时条（占满整条时间轴） */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          height: 30,
+          marginBottom: 4,
+        }}
+      >
+        <span
+          style={{
+            width: 180,
+            fontSize: 12,
+            fontWeight: 600,
+            color: 'rgba(0,0,0,.85)',
+            paddingRight: 12,
+            textAlign: 'right',
+            flexShrink: 0,
+          }}
+        >
+          E2E 总耗时
+        </span>
+        <div style={{ flex: 1, position: 'relative', height: 18 }}>
+          <div
+            style={{
+              position: 'absolute',
+              left: '0%',
+              height: 18,
+              borderRadius: 3,
+              background: '#262626',
+              width: '100%',
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '0 6px',
+              fontSize: 10,
+              color: '#fff',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {Math.round(maxMs)}ms
+          </div>
+        </div>
+      </div>
+
       {sortedSpans.map((span, idx) => {
         const startPct = ((span.startOffsetMs || span.startMs || 0) / maxMs) * 100;
         const widthPct = ((span.durationMs || 0) / maxMs) * 100;

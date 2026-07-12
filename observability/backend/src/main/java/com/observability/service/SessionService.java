@@ -277,19 +277,47 @@ public class SessionService {
         vo.put("duration", durationMs);
         vo.put("tokens", tokenVal);
         vo.put("time", s.getStartTime() != null ? s.getStartTime().toString() : null);
-        // Extract first intent from agentChain (e.g. "TRANSFER → INQUIRY" → "TRANSFER")
+        // 意图（取首个，用于筛选/徽标）
         if (intentFlow != null) {
             String[] parts = intentFlow.split("\\s*→\\s*");
             vo.put("intent", parts.length > 0 ? parts[0] : intentFlow);
-            vo.put("agents", Arrays.asList(parts));
             vo.put("domainSwitches", countDomainSwitches(parts));
         } else {
             vo.put("intent", null);
-            vo.put("agents", Collections.emptyList());
             vo.put("domainSwitches", 0);
         }
+        // 执行智能体：每轮最终 L2 业务名（无 L2 则 L1），连续相同折叠交由前端 dedupAgents
+        vo.put("agents", buildExecutingAgents(s.getSessionId()));
 
         return vo;
+    }
+
+    /**
+     * 构建「执行智能体」列表（用于会话回放列表的「执行智能体」列）：
+     * - 每轮对话取该轮最终到达的业务智能体名称：
+     *   - 若本轮 intent 为业务领域（WEALTH/TRANSFER/BILL...）→ 即该轮的 L2 业务名
+     *   - 否则（CHAT/UNKNOWN 等，未到达 L2）→ 显示 "L1"（代表意图识别/路由异常）
+     * - 与 Session.intentFlow（原始意图流）区分：intentFlow 用于意图统计，
+     *   本列表用于展示每轮实际执行的智能体，连续相同由前端 dedupAgents 折叠。
+     */
+    private List<String> buildExecutingAgents(String sessionId) {
+        List<String> exec = new ArrayList<>();
+        try {
+            List<SessionTurn> turns = sessionTurnRepository.findBySessionIdOrderByTurnNumberAsc(sessionId);
+            for (var t : turns) {
+                String intent = t.getIntent();
+                exec.add(isBusinessDomain(intent) ? intent : "L1");
+            }
+        } catch (Exception e) {
+            log.debug("[Session] Failed to build executing agents for sessionId={}: {}", sessionId, e.getMessage());
+        }
+        return exec;
+    }
+
+    private boolean isBusinessDomain(String intent) {
+        if (intent == null || intent.isBlank()) return false;
+        String up = intent.toUpperCase();
+        return !up.equals("CHAT") && !up.equals("UNKNOWN") && !up.equals("UNSUPPORTED");
     }
 
     private Map<String, Object> toSessionDetailVO(Session s) {

@@ -45,36 +45,6 @@ public class AIInsightsController {
     }
 
     /**
-     * 获取意图分布
-     */
-    @GetMapping("/intent-distribution")
-    public ApiResponse<Map<String, Long>> getIntentDistribution(
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to) {
-        try {
-            Map<String, Long> distribution = aiInsightsService.getIntentDistribution(from, to);
-            return ApiResponse.ok(distribution);
-        } catch (Exception e) {
-            return ApiResponse.error(500, "Failed to fetch intent distribution: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 意图准确率趋势
-     */
-    @GetMapping("/intent-accuracy-trend")
-    public ApiResponse<Map<String, Object>> getIntentAccuracyTrend(
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to) {
-        try {
-            Map<String, Object> result = aiInsightsService.getIntentAccuracyTrend(from, to);
-            return ApiResponse.ok(result);
-        } catch (Exception e) {
-            return ApiResponse.error(500, "Failed to fetch intent accuracy trend: " + e.getMessage());
-        }
-    }
-
-    /**
      * 统一准确率分析报告（趋势 + 改写表 + 根因 TOP3 + 混淆矩阵）
      * 供前端 AccuracyTab 单端点消费，修复前后端契约错配。
      */

@@ -358,7 +358,7 @@ $coreJavaArgs = "$CORE_JVM_MEM $dnsJvmArgs"
 if (Test-Path $AGENT_PATH) {
   $coreJavaArgs = "$coreJavaArgs -javaagent:`"$AGENT_PATH`""
 }
-Add-Content -Path $coreBat -Value "java $coreJavaArgs -jar `"target\$CORE_JAR`" --server.port=$CORE_PORT"
+Add-Content -Path $coreBat -Value "java $coreJavaArgs -jar `"target\$CORE_JAR`" --server.port=$CORE_PORT >> `"$CORE_PROJECT_PATH\core.log`" 2>&1"
 $coreProc = Start-Process $coreBat -WindowStyle Hidden -PassThru
 if (Wait-Url "http://127.0.0.1:$CORE_PORT/actuator/health" -MaxTries 60 -SleepSec 3) {
   Write-Host "  核心系统启动成功, 端口: $CORE_PORT (OTel Agent 已注入)" -ForegroundColor Green

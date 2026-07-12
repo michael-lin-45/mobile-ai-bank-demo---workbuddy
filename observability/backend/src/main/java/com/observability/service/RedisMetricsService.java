@@ -292,7 +292,7 @@ public class RedisMetricsService {
 
     public void setOnlineUsers(long count) {
         safeOp(() -> {
-            redis.opsForValue().set(PREFIX + "online_users", String.valueOf(count), 30, TimeUnit.SECONDS);
+            redis.opsForValue().set(PREFIX + "online_users", String.valueOf(count), 300, TimeUnit.SECONDS);
         });
     }
 

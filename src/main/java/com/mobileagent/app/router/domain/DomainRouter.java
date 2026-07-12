@@ -94,7 +94,8 @@ public class DomainRouter {
             long startMs = System.currentTimeMillis();
 
             var llmSample = obsMetrics.startLlmTimer();
-            AgentSpanContext.set("L0", "DomainRouter", null, sessionId, null);
+            // 托管模式：domain 在 LLM 返回后才解析，需延迟回填到 span.intent
+            AgentSpanContext ctx = AgentSpanContext.setWithHeldSpan("L0", "DomainRouter", null, sessionId, null);
             String content;
             try {
                 content = domainChatClient.prompt()
@@ -102,8 +103,10 @@ public class DomainRouter {
                         .user(userInput)
                         .call()
                         .content();
-            } finally {
-                AgentSpanContext.clear();
+            } catch (Exception e) {
+                // LLM 调用失败：ObsChatModel 已在异常路径自行 end span；此处回填兜底领域(lastDomain/CHAT)并清理上下文
+                ctx.commitIntent(resolveFallbackDomain(sessionId, excludedDomains), java.util.Map.of());
+                throw e;
             }
             obsMetrics.stopLlmTimer(llmSample);
             long elapsedMs = System.currentTimeMillis() - startMs;
@@ -120,13 +123,19 @@ public class DomainRouter {
             if (!"CHAT".equals(result.domain()) && !result.isUnsupported()) {
                 updateLastDomain(sessionId, result.domain());
             }
+            // 回填真实领域识别结果到 span.intent（托管模式结束 span）
+            ctx.commitIntent(result.domain(), java.util.Map.of());
             return result;
 
         } catch (Exception e) {
-            log.error("[DomainRouter] LLM call failed, defaulting to CHAT", e);
+            String fallback = resolveFallbackDomain(sessionId, excludedDomains);
+            log.error("[DomainRouter] LLM call failed, falling back to '{}'", fallback, e);
             obsMetrics.recordRouterFail();
-            obsMetrics.recordRouterDecision("L0", "fail", "CHAT");
-            return new DomainResult("CHAT", null, 0.3, null);
+            obsMetrics.recordRouterDecision("L0", "fail", fallback);
+            return new DomainResult(fallback, null, 0.3, null);
+        } finally {
+            // 兜底：若上方未成功 commit（如埋点/状态更新异常），仍结束 held span 并清理 ThreadLocal，防止 span 泄漏
+            AgentSpanContext.clear();
         }
     }
 
@@ -200,6 +209,21 @@ public class DomainRouter {
 
     public void clearLastDomain(String sessionId) {
         globalSessionStore.getOrCreate(sessionId).clearLastDomain();
+    }
+
+    /**
+     * LLM 不可用时的兜底领域：优先沿用最近活跃领域(lastDomain)，否则退回 CHAT。
+     * 这样多轮追问（如「张三」）在 LLM 故障时仍能留在原流程，而非被踢进闲聊。
+     */
+    private String resolveFallbackDomain(String sessionId, Set<String> excludedDomains) {
+        String lastDomain = globalSessionStore.getOrCreate(sessionId).getLastDomain();
+        if (lastDomain != null && !"CHAT".equals(lastDomain) && !UNSUPPORTED_DOMAIN.equals(lastDomain)
+                && (excludedDomains == null || !excludedDomains.contains(lastDomain))) {
+            updateLastDomain(sessionId, lastDomain); // 续期，保持会话延续
+            log.warn("[DomainRouter] LLM unavailable, falling back to last domain: {}", lastDomain);
+            return lastDomain;
+        }
+        return "CHAT";
     }
 
     private String formatExcludedDomainsContext(Set<String> excludedDomains) {

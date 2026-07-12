@@ -47,84 +47,14 @@ public class TraceQueryService {
         if (from == null) from = Instant.now().minusSeconds(7 * 86400);
         if (limit <= 0) limit = 50;
 
-        // 从 H2 获取根 span（parentSpanId IS NULL）
-        var pageable = PageRequest.of(0, Math.min(Math.max(limit * 10, 500), 2000));
-        var rootSpans = spanRepository.findRootSpansByTimeRange(from, pageable);
-
-        // Business root span fallback: if all root spans are infrastructure (OTLP/health),
-        // use SERVER kind spans as trace entry points.
-        boolean hasBusinessRoot = false;
-        for (var s : rootSpans.getContent()) {
-            String op = s.getOperationName();
-            if (op != null && !op.equals("POST") && !op.contains("/actuator/")
-                && !op.contains("/health") && !op.contains("ResponseFacade")) {
-                hasBusinessRoot = true;
-                break;
-            }
-        }
-        if (!hasBusinessRoot) {
-            rootSpans = spanRepository.findBusinessRootSpansByTimeRange(from, pageable);
-        }
-
-        List<TraceListVO> results = new ArrayList<>();
-        for (var root : rootSpans) {
-            TraceListVO vo = buildTraceListVO(root);
-
-            // 意图过滤
-            if (intent != null && !intent.isBlank()) {
-                if (vo.getIntent() == null || !vo.getIntent().toUpperCase().contains(intent.toUpperCase())) {
-                    continue;
-                }
-            }
-            // sessionId 过滤
-            if (sessionId != null && !sessionId.isBlank()) {
-                if (vo.getSessionId() == null || !vo.getSessionId().contains(sessionId)) {
-                    continue;
-                }
-            }
-            // userId 过滤
-            if (userId != null && !userId.isBlank()) {
-                if (vo.getUserId() == null || !vo.getUserId().contains(userId)) {
-                    continue;
-                }
-            }
-            // statusCode 过滤
-            if (statusCode != null && !statusCode.isBlank()) {
-                if (vo.getStatusCode() == null || !vo.getStatusCode().equalsIgnoreCase(statusCode)) {
-                    continue;
-                }
-            }
-            // --- Filter infrastructure/OTLP spans ---
-            String opName = root.getOperationName();
-            String rootKind = root.getKind();
-            String rootAttrs = root.getAttributes();
-            // Skip actuator/health/metrics endpoints
-            if (opName != null && (opName.contains("/actuator/") || opName.contains("/health") || opName.contains("/metrics"))) {
-                continue;
-            }
-            // Skip OTLP export spans (POST + CLIENT + url pointing to collector port 4318)
-            if ("CLIENT".equals(rootKind) && "POST".equals(opName)) {
-                if (rootAttrs != null && (rootAttrs.contains("4318") || rootAttrs.contains("/v1/metrics") || rootAttrs.contains("/v1/traces") || rootAttrs.contains("/v1/logs"))) {
-                    continue;
-                }
-            }
-            // Skip ResponseFacade.sendError (error handling noise)
-            if (opName != null && opName.contains("ResponseFacade.sendError")) {
-                continue;
-            }
-            // Skip failed short requests (HTTP 4xx/5xx with duration < 500ms = not real business)
-            if (rootAttrs != null && rootAttrs.contains("\"http.response.status_code\":\"4") && root.getDurationMs() != null && root.getDurationMs() < 500) {
-                continue;
-            }
-            if (rootAttrs != null && rootAttrs.contains("\"http.response.status_code\":\"5") && root.getDurationMs() != null && root.getDurationMs() < 500) {
-                continue;
-            }
-            // Keep all remaining traces (business traces with or without intent/agentChain)
-            results.add(vo);
-            if (results.size() >= limit) break;
-        }
-
-        return results;
+        // 按 trace_id 去重枚举（不再依赖根 span 语义，规避 OTLP 导出 span 被误判为根导致列表为空）
+        List<TraceListVO> all = collectTraceListVOs(from, intent, sessionId, userId, statusCode, limit);
+        all.sort((a, b) -> {
+            if (a.getTimestamp() == null) return 1;
+            if (b.getTimestamp() == null) return -1;
+            return b.getTimestamp().compareTo(a.getTimestamp());
+        });
+        return all.size() > limit ? all.subList(0, limit) : all;
     }
 
     /**
@@ -137,93 +67,22 @@ public class TraceQueryService {
         if (size <= 0) size = 10;
         if (size > 200) size = 200;
         if (page < 0) page = 0;
-        // Calculate fetch size: (page+1)*size*5, capped at 500.
-        // buildTraceListVO does 2-3 DB queries per span, so keep bounded.
-        int neededAfterFilter = (page + 1) * size;
-        int fetchSize = Math.min(neededAfterFilter * 5, 500);
+        if (limit <= 0) limit = 500;
 
-        // 从 H2 获取根 span（parentSpanId IS NULL）
-        var pageable = PageRequest.of(0, fetchSize);
-        var rootSpans = spanRepository.findRootSpansByTimeRange(from, pageable);
+        // 按 trace_id 去重枚举（不再依赖根 span 语义，规避 OTLP 导出 span 被误判为根导致列表为空）
+        List<TraceListVO> all = collectTraceListVOs(from, intent, sessionId, userId, statusCode, limit);
+        all.sort((a, b) -> {
+            if (a.getTimestamp() == null) return 1;
+            if (b.getTimestamp() == null) return -1;
+            return b.getTimestamp().compareTo(a.getTimestamp());
+        });
 
-        // Business root span fallback: if all root spans are infrastructure (OTLP/health),
-        // use SERVER kind spans as trace entry points.
-        boolean hasBusinessRoot = false;
-        for (var s : rootSpans.getContent()) {
-            String op = s.getOperationName();
-            if (op != null && !op.equals("POST") && !op.contains("/actuator/")
-                && !op.contains("/health") && !op.contains("ResponseFacade")) {
-                hasBusinessRoot = true;
-                break;
-            }
-        }
-        if (!hasBusinessRoot) {
-            rootSpans = spanRepository.findBusinessRootSpansByTimeRange(from, pageable);
-        }
-
-        List<TraceListVO> allFiltered = new ArrayList<>();
-        for (var root : rootSpans) {
-            TraceListVO vo = buildTraceListVOFast(root);
-
-            // 意图过滤
-            if (intent != null && !intent.isBlank()) {
-                if (vo.getIntent() == null || !vo.getIntent().toUpperCase().contains(intent.toUpperCase())) {
-                    continue;
-                }
-            }
-            // sessionId 过滤
-            if (sessionId != null && !sessionId.isBlank()) {
-                if (vo.getSessionId() == null || !vo.getSessionId().contains(sessionId)) {
-                    continue;
-                }
-            }
-            // userId 过滤
-            if (userId != null && !userId.isBlank()) {
-                if (vo.getUserId() == null || !vo.getUserId().contains(userId)) {
-                    continue;
-                }
-            }
-            // statusCode 过滤
-            if (statusCode != null && !statusCode.isBlank()) {
-                if (vo.getStatusCode() == null || !vo.getStatusCode().equalsIgnoreCase(statusCode)) {
-                    continue;
-                }
-            }
-            // --- Filter infrastructure/OTLP spans ---
-            String opName = root.getOperationName();
-            String rootKind = root.getKind();
-            String rootAttrs = root.getAttributes();
-            // Skip actuator/health/metrics endpoints
-            if (opName != null && (opName.contains("/actuator/") || opName.contains("/health") || opName.contains("/metrics"))) {
-                continue;
-            }
-            // Skip OTLP export spans (POST + CLIENT + url pointing to collector port 4318)
-            if ("CLIENT".equals(rootKind) && "POST".equals(opName)) {
-                if (rootAttrs != null && (rootAttrs.contains("4318") || rootAttrs.contains("/v1/metrics") || rootAttrs.contains("/v1/traces") || rootAttrs.contains("/v1/logs"))) {
-                    continue;
-                }
-            }
-            // Skip ResponseFacade.sendError (error handling noise)
-            if (opName != null && opName.contains("ResponseFacade.sendError")) {
-                continue;
-            }
-            // Skip failed short requests (HTTP 4xx/5xx with duration < 500ms = not real business)
-            if (rootAttrs != null && rootAttrs.contains("\"http.response.status_code\":\"4") && root.getDurationMs() != null && root.getDurationMs() < 500) {
-                continue;
-            }
-            if (rootAttrs != null && rootAttrs.contains("\"http.response.status_code\":\"5") && root.getDurationMs() != null && root.getDurationMs() < 500) {
-                continue;
-            }
-            // Keep all remaining traces (business traces with or without intent/agentChain)
-            allFiltered.add(vo);
-        }
-
-        int total = allFiltered.size();
+        int total = all.size();
         int totalPages = (int) Math.ceil((double) total / size);
         int fromIdx = page * size;
         int toIdx = Math.min(fromIdx + size, total);
         List<TraceListVO> pageContent = (fromIdx < total)
-                ? allFiltered.subList(fromIdx, toIdx)
+                ? all.subList(fromIdx, toIdx)
                 : new ArrayList<>();
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -271,9 +130,10 @@ public class TraceQueryService {
                 }
             }
         }
-        long totalDurationMs = (chainStartMs > 0 && chainEndMs > chainStartMs)
-                ? chainEndMs - chainStartMs
-                : (firstSpan.getDurationMs() != null ? firstSpan.getDurationMs() : 0);
+        // E2E 总耗时 = HTTP 根 span 时长（与列表 durationMs 一致），业务链时长作为兜底
+        long totalDurationMs = (firstSpan.getDurationMs() != null && firstSpan.getDurationMs() > 0)
+                ? firstSpan.getDurationMs()
+                : ((chainStartMs > 0 && chainEndMs > chainStartMs) ? chainEndMs - chainStartMs : 0);
 
         String rootService = firstSpan.getServiceName() != null ? firstSpan.getServiceName() : "unknown";
 
@@ -425,22 +285,65 @@ public class TraceQueryService {
         for (SpanEntity s : spans) {
             spanMap.put(s.getSpanId(), s);
         }
-        // Use the first business span (L0) startTime as waterfall base,
-        // since the HTTP root span startTime may be stale (traceId reused across requests)
-        long traceStartMs = 0;
+        // 瀑布图基准 = 整条 trace 最早开始时间（通常是 HTTP 根 span），
+        // 使 E2E 条从 0 开始、其余 span 偏移为正，TTFT 虚线对齐。
+        long traceStartMs = Long.MAX_VALUE;
         for (var s : chainSpans) {
-            String opName = s.getOperationName();
-            if (opName != null && opName.startsWith("L0:") && s.getStartTime() != null) {
-                traceStartMs = s.getStartTime().toEpochMilli();
-                break;
+            if (s.getStartTime() != null) {
+                long st = s.getStartTime().toEpochMilli();
+                if (st < traceStartMs) traceStartMs = st;
             }
         }
-        if (traceStartMs == 0 && firstSpan.getStartTime() != null) {
-            traceStartMs = firstSpan.getStartTime().toEpochMilli();
+        if (traceStartMs == Long.MAX_VALUE) {
+            traceStartMs = (firstSpan.getStartTime() != null) ? firstSpan.getStartTime().toEpochMilli() : 0;
         }
         vo.setWaterfallSpans(buildWaterfallSpans(spanTree, spanMap, traceStartMs));
 
+        // ── 重路由 (reRoute) 检测 ──
+        // 一条 trace 内出现 >1 个 L0（领域路由）span → 发生过重路由。
+        // 生成完整分层路径（含回环），供前端显示 "↻ 重路由" 横幅。
+        int l0Count = 0;
+        for (var s : spans) {
+            String op = s.getOperationName();
+            if (op != null && (op.startsWith("L0:") || op.contains("DomainRouter"))) {
+                l0Count++;
+            }
+        }
+        if (l0Count > 1) {
+            vo.setRerouted(true);
+            vo.setReRoutePath(buildFullAgentChain(spans));
+        }
+
         return vo;
+    }
+
+    /**
+     * 构建一条 trace 内完整的分层路径（按时间顺序，含重路由回环）。
+     * 例如正常: "L0 → L1-LLM1 → L1-LLM2 → L2"
+     * 重路由:   "L0 → L1 → L2 ↻ L0 → L1 → L2"
+     */
+    private String buildFullAgentChain(List<SpanEntity> spans) {
+        List<String> layers = new ArrayList<>();
+        boolean lastWasL2 = false;
+        for (var s : spans) {
+            String name = s.getOperationName();
+            if (name == null) continue;
+            String layer = null;
+            if (name.startsWith("L0:") || name.contains("DomainRouter")) layer = "L0";
+            else if (name.startsWith("L1-LLM1")) layer = "L1-LLM1";
+            else if (name.startsWith("L1-LLM2")) layer = "L1-LLM2";
+            else if (name.startsWith("L1:") || name.startsWith("L1-")) layer = "L1";
+            else if (name.startsWith("L2:")) layer = "L2";
+            if (layer == null) continue;
+            // 在 L2 之后再次出现 L0 → 插入回环标记
+            if ("L0".equals(layer) && lastWasL2) {
+                layers.add("↻");
+                lastWasL2 = false;
+            }
+            layers.add(layer);
+            lastWasL2 = "L2".equals(layer);
+        }
+        return String.join(" → ", layers);
     }
 
     /**
@@ -502,75 +405,208 @@ public class TraceQueryService {
     }
 
     /**
-     * Compute TTFT = first LLM business span startTime - trace root startTime.
+     * Compute TTFT = startTime of the FINAL execution LLM (the one producing the
+     * user-visible answer) minus the trace root startTime.
+     *
+     * Rationale: the user only sees tokens streamed from the deepest execution agent
+     * (L2 if present, else L1, else L0). Measuring to that span's start approximates
+     * "time to first token of the answer" far better than measuring to the first
+     * routing LLM (L0), which would yield a near-zero, misleading value.
      */
     private Long computeTTFT(List<SpanEntity> spans) {
         if (spans == null || spans.isEmpty()) return null;
-        // Find the LAST L0 span
-        int lastL0Idx = -1;
-        for (int i = spans.size() - 1; i >= 0; i--) {
-            String opName = spans.get(i).getOperationName();
-            if (opName != null && (opName.startsWith("L0:") || opName.contains("DomainRouter"))) {
-                lastL0Idx = i;
-                break;
-            }
-        }
-        if (lastL0Idx < 0) return null;
 
-        SpanEntity firstLLMSpan = spans.get(lastL0Idx);
-        if (firstLLMSpan.getStartTime() == null) return null;
-
-        // Find the root HTTP span that is the PARENT of this L0 span
-        String l0ParentId = firstLLMSpan.getParentSpanId();
+        // Locate the HTTP root span (SERVER /api/bank/chat) as the time base.
         SpanEntity rootSpan = null;
-        if (l0ParentId != null && !l0ParentId.isEmpty()) {
-            for (var s : spans) {
-                if (l0ParentId.equals(s.getSpanId())) {
+        for (var s : spans) {
+            if (s.getParentSpanId() == null || s.getParentSpanId().isEmpty()) {
+                if ("SERVER".equals(s.getKind())
+                        || (s.getOperationName() != null && s.getOperationName().contains("/api/bank/chat"))) {
                     rootSpan = s;
                     break;
                 }
             }
         }
-        // Fallback: find SERVER span closest BEFORE the L0
-        if (rootSpan == null) {
-            for (int i = lastL0Idx; i >= 0; i--) {
-                var s = spans.get(i);
-                if ("SERVER".equals(s.getKind()) && (s.getParentSpanId() == null || s.getParentSpanId().isEmpty())) {
-                    rootSpan = s;
-                    break;
-                }
-            }
-        }
+        if (rootSpan == null) rootSpan = spans.get(0);
+        if (rootSpan.getStartTime() == null) return null;
+        long rootStart = rootSpan.getStartTime().toEpochMilli();
 
-        if (rootSpan == null || rootSpan.getStartTime() == null) return null;
-        long ttft = firstLLMSpan.getStartTime().toEpochMilli() - rootSpan.getStartTime().toEpochMilli();
+        // Pick the execution span with the highest layer rank (L2 > L1 > L0);
+        // tie-break by latest start time (the final answer-generating LLM).
+        SpanEntity bestExec = null;
+        int bestRank = -1;
+        for (var s : spans) {
+            String op = s.getOperationName();
+            if (op == null || s.getStartTime() == null) continue;
+            int rank = layerRank(op);
+            if (rank <= 0) continue;
+            long st = s.getStartTime().toEpochMilli();
+            if (rank > bestRank
+                    || (rank == bestRank && (bestExec == null || st > bestExec.getStartTime().toEpochMilli()))) {
+                bestRank = rank;
+                bestExec = s;
+            }
+        }
+        if (bestExec == null) return null;
+
+        long ttft = bestExec.getStartTime().toEpochMilli() - rootStart;
         // If TTFT is unreasonably large (> 60s), the root span startTime is stale
         // (instrumentation reused traceId across multiple HTTP requests).
-        // In this case, use the L0 startTime as the base (TTFT ≈ 0).
-        if (ttft > 60000) {
-            return 0L;
-        }
+        if (ttft > 60000) return 0L;
         return ttft > 0 ? ttft : null;
+    }
+
+    /**
+     * Layer rank for TTFT selection: L2=3, L1 / L1-LLM* / llm: =2, L0 / DomainRouter =1, else 0.
+     */
+    private int layerRank(String opName) {
+        if (opName.startsWith("L2:")) return 3;
+        if (opName.startsWith("L1") || opName.startsWith("llm:")) return 2;
+        if (opName.startsWith("L0:") || opName.contains("DomainRouter")) return 1;
+        return 0;
     }
 
     /**
      * Build agent chain from the LAST agent chain spans (not session.intentFlow).
      */
+    /**
+     * 构建 Agent 链（业务视角）：
+     * - L0 → 显示 "L0"
+     * - L1 / L1-LLM1 / L1-LLM2 → 合并显示为 "L1"（两个 LLM 调用在内部，对外仍是 L1）
+     * - L2 → 显示业务智能体名称（WEALTH / TRANSFER 等），从 span 的 intent/agent.name 推导
+     * - reroute 场景按 L0 边界切分为多段，拼接为 "L0 → L1 → WEALTH → L0 → L1 → TRANSFER"
+     */
     private String buildAgentChainFromSpans(List<SpanEntity> spans) {
-        List<SpanEntity> chainSpans = extractLastAgentChain(spans);
-        List<String> layers = new ArrayList<>();
-        for (var s : chainSpans) {
-            String name = s.getOperationName();
-            if (name == null) continue;
-            String layer = null;
-            if (name.startsWith("L0:") || name.contains("DomainRouter")) layer = "L0";
-            else if (name.startsWith("L1-LLM1")) layer = "L1-LLM1";
-            else if (name.startsWith("L1-LLM2")) layer = "L1-LLM2";
-            else if (name.startsWith("L1:") || name.startsWith("L1-")) layer = "L1";
-            else if (name.startsWith("L2:")) layer = "L2";
-            if (layer != null && !layers.contains(layer)) layers.add(layer);
+        List<SpanEntity> biz = new ArrayList<>();
+        for (var s : spans) {
+            String op = s.getOperationName();
+            if (op != null && (op.startsWith("L0:") || op.startsWith("L1") || op.startsWith("L2:") || op.startsWith("llm:"))) {
+                biz.add(s);
+            }
         }
-        return layers.isEmpty() ? null : String.join(" → ", layers);
+        if (biz.isEmpty()) return null;
+        biz.sort(Comparator.comparing(s -> s.getStartTime() == null ? Instant.EPOCH : s.getStartTime()));
+
+        // 按 L0 边界切分多个子链路（reroute 场景）
+        List<List<SpanEntity>> segments = new ArrayList<>();
+        List<SpanEntity> cur = null;
+        for (var s : biz) {
+            String op = s.getOperationName();
+            boolean isL0 = op.startsWith("L0:") || op.contains("DomainRouter");
+            if (isL0 && cur != null && !cur.isEmpty()) {
+                segments.add(cur);
+                cur = new ArrayList<>();
+            }
+            if (cur == null) cur = new ArrayList<>();
+            cur.add(s);
+        }
+        if (cur != null && !cur.isEmpty()) segments.add(cur);
+
+        List<String> chain = new ArrayList<>();
+        for (var seg : segments) {
+            boolean hasL0 = false, hasL1 = false;
+            String l2Biz = null;
+            for (var s : seg) {
+                String op = s.getOperationName();
+                if (op.startsWith("L0:") || op.contains("DomainRouter")) hasL0 = true;
+                else if (op.startsWith("L1")) hasL1 = true;
+                else if (op.startsWith("L2:")) l2Biz = businessNameOf(s);
+            }
+            if (hasL0) chain.add("L0");
+            if (hasL1) chain.add("L1");
+            if (l2Biz != null && !l2Biz.isBlank()) chain.add(l2Biz);
+        }
+        return chain.isEmpty() ? null : String.join(" → ", chain);
+    }
+
+    /** L2 业务 span 的业务智能体名称（如 WEALTH / TRANSFER），优先用 intent，回退 agent.name */
+    private String businessNameOf(SpanEntity s) {
+        Map<String, String> attrs = parseAttributes(s.getAttributes());
+        String intent = attrs.get("intent");
+        if (intent != null && !intent.isBlank()) {
+            String up = intent.toUpperCase();
+            if (up.contains("WEALTH")) return "WEALTH";
+            if (up.contains("TRANSFER")) return "TRANSFER";
+            if (up.contains("BILL")) return "BILL";
+            if (up.endsWith("GRAPH")) return intent.substring(0, intent.length() - 5).toUpperCase();
+            return intent.toUpperCase();
+        }
+        String an = attrs.get("agent.name");
+        if (an != null && an.contains("WealthInterpret")) return "WEALTH";
+        return an != null ? an : "L2";
+    }
+
+    /**
+     * 构建意图链（业务视角，单轮 trace 只取本 trace 各层的真实识别结果）：
+     * - L0 意图 = 领域（WEALTH 等），追加 " Domain" 后缀便于区分
+     * - L1-LLM1 意图 = 上下文路由结果（switch-new 等）
+     * - L1-LLM2 意图 = 意图识别结果（wealth-filter 等）
+     * - L2 意图 = 工作流意图
+     * 拼接为 "WEALTH Domain → switch-new → wealth-filter → XXX"
+     */
+    private String buildIntentChainFromSpans(List<SpanEntity> spans, String sessionDomain) {
+        List<SpanEntity> biz = new ArrayList<>();
+        for (var s : spans) {
+            String op = s.getOperationName();
+            if (op != null && (op.startsWith("L0:") || op.startsWith("L1") || op.startsWith("L2:") || op.startsWith("llm:"))) biz.add(s);
+        }
+        if (biz.isEmpty()) return null;
+        biz.sort(Comparator.comparing(s -> s.getStartTime() == null ? Instant.EPOCH : s.getStartTime()));
+
+        // 按 L0 边界切分
+        List<List<SpanEntity>> segments = new ArrayList<>();
+        List<SpanEntity> cur = null;
+        for (var s : biz) {
+            String op = s.getOperationName();
+            boolean isL0 = op.startsWith("L0:") || op.contains("DomainRouter");
+            if (isL0 && cur != null && !cur.isEmpty()) {
+                segments.add(cur);
+                cur = new ArrayList<>();
+            }
+            if (cur == null) cur = new ArrayList<>();
+            cur.add(s);
+        }
+        if (cur != null && !cur.isEmpty()) segments.add(cur);
+
+        List<String> parts = new ArrayList<>();
+        for (var seg : segments) {
+            String l0Intent = null, l1a = null, l1b = null, l2Intent = null, l2Biz = null;
+            for (var s : seg) {
+                String op = s.getOperationName();
+                Map<String, String> a = parseAttributes(s.getAttributes());
+                String it = a.get("intent");
+                if (op.startsWith("L0:") || op.contains("DomainRouter")) {
+                    if (it != null && !it.isBlank()) l0Intent = it;
+                } else if (op.startsWith("L1-LLM1")) {
+                    l1a = it;
+                } else if (op.startsWith("L1-LLM2")) {
+                    l1b = it;
+                } else if (op.startsWith("L1:")) {
+                    if (l1a == null && it != null && !it.isBlank()) l1a = it;
+                } else if (op.startsWith("L2:")) {
+                    l2Intent = it;
+                    l2Biz = businessNameOf(s);
+                }
+            }
+            String domain = l0Intent;
+            if (domain == null || domain.isBlank()) domain = l2Biz;
+            if (domain == null || domain.isBlank()) domain = sessionDomain;
+            if (domain == null || domain.isBlank()) domain = "未识别";
+            parts.add(domain + " Domain");
+            if (l1a != null && !l1a.isBlank()) parts.add(l1a);
+            if (l1b != null && !l1b.isBlank()) parts.add(l1b);
+            if (l2Intent != null && !l2Intent.isBlank()) parts.add(l2Intent);
+        }
+        return parts.isEmpty() ? null : String.join(" → ", parts);
+    }
+
+    private String lastIntentOf(String flow) {
+        if (flow == null || flow.isBlank()) return null;
+        String[] parts = flow.split("\\s*→\\s*");
+        for (int i = parts.length - 1; i >= 0; i--) {
+            if (!parts[i].isBlank()) return parts[i].trim();
+        }
+        return null;
     }
 
     // ==================== Span 树构建算法 ====================
@@ -687,11 +723,13 @@ public class TraceQueryService {
         try {
             Map<String, String> attrs = objectMapper.readValue(attributesJson,
                     new TypeReference<Map<String, String>>() {});
+            // Core 实际 emit 的是 ai.token.input / ai.token.output
             int sys = parseIntSafe(attrs.get("ai.token.system"));
             int ctx = parseIntSafe(attrs.get("ai.token.context"));
+            int in = parseIntSafe(attrs.get("ai.token.input"));
             int out = parseIntSafe(attrs.get("ai.token.output"));
-            if (sys > 0 || ctx > 0 || out > 0) {
-                return new TokenBreakdownVO(sys, ctx, out);
+            if (sys > 0 || ctx > 0 || in > 0 || out > 0) {
+                return new TokenBreakdownVO(sys, ctx, in, out);
             }
         } catch (Exception e) {
             log.debug("[TraceQuery] Failed to parse token breakdown: {}", e.getMessage());
@@ -702,6 +740,26 @@ public class TraceQueryService {
     private int parseIntSafe(String s) {
         if (s == null) return 0;
         try { return Integer.parseInt(s); } catch (NumberFormatException e) { return 0; }
+    }
+
+    /**
+     * 聚合一条 trace 内所有业务 span（L0:/L1-/L2:/llm:）的 token 总量。
+     * 业务 token 由 Core 在 LLM span 上以 ai.token.input / ai.token.output 注入。
+     */
+    private long aggregateTokenTotal(List<SpanEntity> spans) {
+        long total = 0;
+        for (var s : spans) {
+            String op = s.getOperationName();
+            if (op == null) continue;
+            if (op.startsWith("L0:") || op.startsWith("L1") || op.startsWith("L2:") || op.startsWith("llm:")) {
+                Map<String, String> a = parseAttributes(s.getAttributes());
+                total += parseIntSafe(a.get("ai.token.input"));
+                total += parseIntSafe(a.get("ai.token.output"));
+                total += parseIntSafe(a.get("ai.token.system"));
+                total += parseIntSafe(a.get("ai.token.context"));
+            }
+        }
+        return total;
     }
 
     // ==================== 列表 VO 构建 ====================
@@ -757,19 +815,29 @@ public class TraceQueryService {
         vo.setUserId(userId);
         vo.setSessionId(sessionId);
         // Build agentChain from trace spans (not session.intentFlow)
-        String traceAgentChain = buildAgentChainFromSpans(
-                spanRepository.findByTraceIdOrderByStartTimeAsc(traceId));
+        List<SpanEntity> traceSpans = spanRepository.findByTraceIdOrderByStartTimeAsc(traceId);
+        String traceAgentChain = buildAgentChainFromSpans(traceSpans);
         vo.setAgentChain(traceAgentChain);
 
-        // TTFT and tokens from root span attributes only (no SessionTurn fallback)
-        String ttftStr = attrs.get("llm.first_token_time");
-        if (ttftStr != null) {
-            try { vo.setTtftMs(Long.parseLong(ttftStr)); } catch (NumberFormatException e) { /* ignore */ }
+        // TTFT — 从 span 链计算（与详情一致），仅兜底读根 span 属性
+        Long ttftVal = computeTTFT(traceSpans);
+        if (ttftVal != null) {
+            vo.setTtftMs(ttftVal);
+        } else {
+            String ttftStr = attrs.get("llm.first_token_time");
+            if (ttftStr != null) {
+                try { vo.setTtftMs(Long.parseLong(ttftStr)); } catch (NumberFormatException e) { /* ignore */ }
+            }
         }
-        int sysToken = parseIntSafe(attrs.get("ai.token.system"));
-        int ctxToken = parseIntSafe(attrs.get("ai.token.context"));
-        int outToken = parseIntSafe(attrs.get("ai.token.output"));
-        long tokenTotal = (long) sysToken + ctxToken + outToken;
+
+        // Token 总量 — 聚合业务 span（L0:/L1-/L2:/llm:）的 ai.token.input/output
+        long tokenTotal = aggregateTokenTotal(traceSpans);
+        if (tokenTotal <= 0) {
+            int sysToken = parseIntSafe(attrs.get("ai.token.system"));
+            int ctxToken = parseIntSafe(attrs.get("ai.token.context"));
+            int outToken = parseIntSafe(attrs.get("ai.token.output"));
+            tokenTotal = (long) sysToken + ctxToken + outToken;
+        }
         vo.setTokenTotal(tokenTotal > 0 ? tokenTotal : null);
 
         // Status code normalization
@@ -779,6 +847,136 @@ public class TraceQueryService {
             sc = "OK";
         }
         vo.setStatusDot("ERROR".equalsIgnoreCase(sc) ? "ERR" : "OK");
+
+        return vo;
+    }
+
+    /**
+     * 按 trace_id 去重枚举 trace 列表（核心修复：不再依赖"根 span"语义）。
+     * 当前数据形态：真实请求入口的 HTTP SERVER span 未被导出/命名，
+     * 所有 parentSpanId 为空的"根 span"都是 Core OTel 导出器发往 Collector 的 OTLP 导出 span，
+     * 导致旧逻辑 findRootSpansByTimeRange + findBusinessRootSpansByTimeRange 全部落空 → 列表为空。
+     * 改为枚举去重 trace_id，对每个 trace 的 spans 聚合出列表 VO。
+     */
+    private List<TraceListVO> collectTraceListVOs(Instant from, String intent, String sessionId,
+                                                  String userId, String statusCode, int limit) {
+        int cap = Math.min(Math.max(limit * 4, 500), 2000);
+        List<String> traceIds = spanRepository.findDistinctTraceIdsSince(from);
+        if (traceIds.size() > cap) traceIds = traceIds.subList(0, cap);
+
+        List<TraceListVO> result = new ArrayList<>();
+        for (String tid : traceIds) {
+            List<SpanEntity> spans = spanRepository.findByTraceIdOrderByStartTimeAsc(tid);
+            if (spans.isEmpty()) continue;
+            TraceListVO vo = buildTraceListVOFromSpans(spans);
+            if (vo == null) continue; // 无业务 span（OTLP 导出自 trace / 无埋点请求）→ 跳过
+
+            // 意图过滤
+            if (intent != null && !intent.isBlank()) {
+                if (vo.getIntent() == null || !vo.getIntent().toUpperCase().contains(intent.toUpperCase())) continue;
+            }
+            // sessionId 过滤
+            if (sessionId != null && !sessionId.isBlank()) {
+                if (vo.getSessionId() == null || !vo.getSessionId().contains(sessionId)) continue;
+            }
+            // userId 过滤
+            if (userId != null && !userId.isBlank()) {
+                if (vo.getUserId() == null || !vo.getUserId().contains(userId)) continue;
+            }
+            // statusCode 过滤
+            if (statusCode != null && !statusCode.isBlank()) {
+                if (vo.getStatusCode() == null || !vo.getStatusCode().equalsIgnoreCase(statusCode)) continue;
+            }
+            result.add(vo);
+        }
+        return result;
+    }
+
+    /**
+     * 从一个 trace 的全部 spans 聚合出列表 VO（不依赖根 span）。
+     * 仅当 trace 含至少一条业务 span（L0/L1/L2/llm）时才返回，否则返回 null（排除 OTLP 导出自 trace）。
+     */
+    private TraceListVO buildTraceListVOFromSpans(List<SpanEntity> spans) {
+        if (spans == null || spans.isEmpty()) return null;
+        String traceId = spans.get(0).getTraceId();
+
+        // 必须有业务 span，否则是 OTLP 导出自 trace / 无埋点请求 → 跳过
+        boolean hasBusiness = false;
+        SpanEntity firstBiz = null;
+        for (var s : spans) {
+            String op = s.getOperationName();
+            if (op != null && (op.startsWith("L0:") || op.startsWith("L1") || op.startsWith("L2:") || op.startsWith("llm:"))) {
+                hasBusiness = true;
+                if (firstBiz == null) firstBiz = s;
+            }
+        }
+        if (!hasBusiness) return null;
+
+        TraceListVO vo = new TraceListVO();
+        vo.setTraceId(traceId);
+
+        SpanEntity first = spans.get(0);
+        vo.setTimestamp(first.getStartTime());
+
+        // E2E 耗时：业务 span 首末时间差；无则取首 span durationMs
+        long startMs = Long.MAX_VALUE, endMs = Long.MIN_VALUE;
+        for (var s : spans) {
+            String op = s.getOperationName();
+            if (op != null && (op.startsWith("L0:") || op.startsWith("L1") || op.startsWith("L2:") || op.startsWith("llm:"))) {
+                if (s.getStartTime() != null) startMs = Math.min(startMs, s.getStartTime().toEpochMilli());
+                if (s.getEndTime() != null) endMs = Math.max(endMs, s.getEndTime().toEpochMilli());
+            }
+        }
+        long duration = (startMs != Long.MAX_VALUE && endMs > startMs) ? (endMs - startMs)
+                : (first.getDurationMs() != null ? first.getDurationMs() : 0);
+        vo.setDurationMs(duration);
+
+        // 状态码：有 ERROR span → ERROR；否则取首个非 UNSET 状态；否则 OK
+        String status = "OK";
+        for (var s : spans) {
+            String sc = s.getStatusCode();
+            if ("ERROR".equalsIgnoreCase(sc)) { status = "ERROR"; break; }
+        }
+        if (!"ERROR".equalsIgnoreCase(status)) {
+            for (var s : spans) {
+                String sc = s.getStatusCode();
+                if (sc != null && !sc.isBlank() && !"UNSET".equalsIgnoreCase(sc)) { status = sc; break; }
+            }
+        }
+        vo.setStatusCode(status);
+        vo.setStatusDot("ERROR".equalsIgnoreCase(status) ? "ERR" : "OK");
+
+        // sessionId / userId：优先业务 span 属性，回退 Session 表
+        SpanEntity biz = firstBiz != null ? firstBiz : first;
+        String sessionId = extractSessionIdFromUrl(biz.getAttributes());
+        Map<String, String> attrs = parseAttributes(biz.getAttributes());
+        if (sessionId == null || sessionId.isBlank()) sessionId = attrs.getOrDefault("session_id", attrs.getOrDefault("sessionId", null));
+        String userId = attrs.getOrDefault("user_id", attrs.getOrDefault("userId", null));
+        String sessionDomain = null;
+
+        if (sessionId != null && !sessionId.isBlank()) {
+            try {
+                var sessionOpt = sessionRepository.findBySessionId(sessionId);
+                if (sessionOpt.isPresent()) {
+                    var session = sessionOpt.get();
+                    if (userId == null || userId.isBlank()) userId = session.getUserId();
+                    sessionDomain = lastIntentOf(session.getIntentFlow());
+                }
+            } catch (Exception e) {
+                log.debug("[TraceQuery] collect: Failed to lookup session for traceId={}: {}", traceId, e.getMessage());
+            }
+        }
+
+        // intent / agentChain 由 trace 自身的业务 span 聚合得出（不再回退 Session.intentFlow 整条链）
+        vo.setIntent(buildIntentChainFromSpans(spans, sessionDomain));
+        vo.setUserId(userId);
+        vo.setSessionId(sessionId);
+
+        vo.setAgentChain(buildAgentChainFromSpans(spans));
+        Long ttft = computeTTFT(spans);
+        vo.setTtftMs(ttft != null ? ttft : null);
+        long tokens = aggregateTokenTotal(spans);
+        vo.setTokenTotal(tokens > 0 ? tokens : null);
 
         return vo;
     }
@@ -1104,11 +1302,10 @@ public class TraceQueryService {
             if (opName.startsWith("L0:") || opName.startsWith("L1") || opName.startsWith("L2:") || opName.startsWith("llm:")) {
                 isBusiness = true;
             }
-            // HTTP root span (SERVER kind)
-            if ("SERVER".equals(node.getKind()) || opName.contains("/api/bank/chat")) {
-                isBusiness = true;
-            }
         }
+        // NOTE: the HTTP root span (SERVER /api/bank/chat) is intentionally excluded here.
+        // The E2E 总耗时 bar is rendered by the frontend WaterfallChart from totalMs,
+        // so including the HTTP root would create a duplicate, mislabeled E2E row.
         if (!isBusiness) {
             // Still recurse into children to find business spans
             if (node.getChildren() != null) {
@@ -1156,10 +1353,10 @@ public class TraceQueryService {
         if (opName == null) return "unknown";
         // Extract model name from operation name (e.g. "L0:qwen3-8b" -> "qwen3-8b")
         String model = opName.contains(":") ? opName.substring(opName.indexOf(":") + 1) : "";
-        if ("L0".equals(layer)) return "L0 领域路由" + (model.isEmpty() ? "" : " / " + model);
-        if ("L1-LLM1".equals(layer)) return "L1-LLM1 会话分类" + (model.isEmpty() ? "" : " / " + model);
-        if ("L1-LLM2".equals(layer)) return "L1-LLM2 改写+识别" + (model.isEmpty() ? "" : " / " + model);
-        if ("L1".equals(layer)) return "L1 路由" + (model.isEmpty() ? "" : " / " + model);
+        if ("L0".equals(layer)) return "L0 领域路由 · LLM选L1" + (model.isEmpty() ? "" : " / " + model);
+        if ("L1-LLM1".equals(layer)) return "L1-LLM1 上下文分类" + (model.isEmpty() ? "" : " / " + model);
+        if ("L1-LLM2".equals(layer)) return "L1-LLM2 意图改写+识别" + (model.isEmpty() ? "" : " / " + model);
+        if ("L1".equals(layer)) return "L1 业务路由" + (model.isEmpty() ? "" : " / " + model);
         if ("L2".equals(layer)) return "L2 业务执行" + (model.isEmpty() ? "" : " / " + model);
         if (opName.contains("/api/bank/chat")) return "总耗时 / HTTP 入口";
         return opName;

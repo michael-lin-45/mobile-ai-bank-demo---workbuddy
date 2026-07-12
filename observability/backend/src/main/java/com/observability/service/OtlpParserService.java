@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -83,16 +84,19 @@ public class OtlpParserService {
                                 String dpTags = extractDataPointTags(dp.getAttributes());
                                 double count = parseCount(dp.getCount());
                                 double avg = count > 0 ? dp.getSum() / count : 0;
+                                // 单位归一为「毫秒」：OTel 标准 http.*.request.duration 由 Micrometer OTLP 以「秒」导出 → ×1000；
+                                // 自定义 llm.* Timer 用 MILLISECONDS 记录 → avg 本就是毫秒，直接使用。
+                                double valueMs = isSecondsUnitMetric(metricName) ? avg * 1000 : avg;
 
-                                // Redis 热层
+                                // Redis 热层：valueMs 已是毫秒（见上方单位归一），直接写入时延 ZSET
                                 if (isLatencyMetric(metricName)) {
-                                    redisMetricsService.recordLatency("1m", avg);
-                                    redisMetricsService.recordLatency("5m", avg);
-                                    redisMetricsService.recordLatency("15m", avg);
+                                    redisMetricsService.recordLatency("1m", valueMs);
+                                    redisMetricsService.recordLatency("5m", valueMs);
+                                    redisMetricsService.recordLatency("15m", valueMs);
                                 }
                                 // TTFT: �?Token 延迟指标 �?写入独立 ZSET
                                 if (metricName.contains("first_token") || metricName.contains("first.token") || metricName.contains("ttft")) {
-                                    redisMetricsService.recordTTFT((long) avg);
+                                    redisMetricsService.recordTTFT((long) (valueMs));
                                 }
                                 // H2 温层
                                 saveMetric(metricName, dpTags, avg, "1m", now);
@@ -138,14 +142,6 @@ public class OtlpParserService {
                                         redisMetricsService.incrTokenCountDelta("5m", tokenType, (long) value, metricName);
                                     }
                                 }
-                                // ── agent.* �?Redis 实时�?──
-                                if (metricName.startsWith("agent.")) {
-                                    incrementAgentRedis(metricName, dpTags, (long) value);
-                                }
-                                if (metricName.startsWith("llm.")) {
-                                    incrementAgentRedis(metricName, dpTags, (long) value);
-                                }
-
                                 saveMetric(metricName, dpTags, value, "1m", now);
                                 parsed++;
                             } catch (Exception e) {
@@ -226,7 +222,7 @@ public class OtlpParserService {
                             entity.setStatusCode("UNSET");
                         }
 
-                        entity.setAttributes(span.extractAttributesJson());
+                        entity.setAttributes(buildAttributesJson(span.getAttributes()));
                         spanRepository.save(entity);
                         parsed++;
 
@@ -310,6 +306,28 @@ public class OtlpParserService {
 
     // ==================== Helpers ====================
 
+    /**
+     * 安全地将 span 属性序列化为 JSON 字符串。
+     * 手写拼接会因未转义换行/控制字符产生非法 JSON，导致后端解析失败、
+     * 自定义属性（ai.io.prompt / ai.token.* / model.name 等）全部丢失。
+     * 改用 ObjectMapper 序列化保证输出为合法 JSON。
+     */
+    private String buildAttributesJson(List<OtlpMetricPayload.Attribute> attrs) {
+        if (attrs == null || attrs.isEmpty()) return "{}";
+        Map<String, String> map = new LinkedHashMap<>();
+        for (var a : attrs) {
+            if (a.getKey() == null) continue;
+            String v = a.getValue() != null ? a.getValue().getStringValue() : "";
+            map.put(a.getKey(), v != null ? v : "");
+        }
+        try {
+            return objectMapper.writeValueAsString(map);
+        } catch (Exception e) {
+            log.debug("[OtlpParser] Failed to serialize span attributes: {}", e.getMessage());
+            return "{}";
+        }
+    }
+
     private void saveMetric(String name, String tags, double value, String window, Instant ts) {
         try {
             MetricsAgg agg = new MetricsAgg(name, tags, value, window, ts);
@@ -320,8 +338,21 @@ public class OtlpParserService {
     }
 
     private boolean isLatencyMetric(String name) {
+        // 排除 JVM/Tomcat/系统/进程内部时长指标（如 jvm.gc.duration），避免污染「系统时延」P95
+        if (name.startsWith("jvm.") || name.startsWith("tomcat.") || name.startsWith("system.") || name.startsWith("process.")) {
+            return false;
+        }
         return name.contains("latency") || name.contains("duration") || name.contains("response.time")
                 || name.contains("http.server.request.duration");
+    }
+
+    /**
+     * OTel 标准 http 时长指标由 Micrometer OTLP 导出器以「秒」为单位，
+     * 需 ×1000 转为毫秒；自定义 llm.* Timer 已是毫秒，无需换算。
+     */
+    private boolean isSecondsUnitMetric(String name) {
+        return "http.server.request.duration".equals(name)
+                || "http.client.request.duration".equals(name);
     }
 
     /** Extract tags JSON from a dataPoint's attribute list */
@@ -379,31 +410,6 @@ public class OtlpParserService {
         return s.length() <= maxLen ? s : s.substring(0, maxLen);
     }
 
-    /** �?agent.* / llm.* 指标同步�?Redis 热层 */
-    private void incrementAgentRedis(String metricName, String tags, long value) {
-        try {
-            // L0: router decisions and intent recognition
-            if (metricName.contains("router.decision") || metricName.contains("intent.recognized")) {
-                redisMetricsService.incrAgentCall("L0");
-            }
-            // L2: workflow execution / interrupt
-            if (metricName.contains("workflow.execution") || metricName.contains("workflow.interrupt")) {
-                redisMetricsService.incrAgentCall("L2");
-            }
-            // L1: 意图分类 / L1 Agent 调用阶段的实时计数（修复 GAP-A6/N4）。
-            // 仅当 Core 显式发射 L1 指标（如 intent.classify / agent.l1 / router.l1 等）时计入；
-            // 在此之前 L1 仍由 MetricsQueryService 的 Span operationName 启发式回退兜底。
-            if (metricName.contains("intent.classif") || metricName.contains("agent.l1")
-                    || metricName.contains("l1.call") || metricName.contains("intent.l1")
-                    || metricName.contains("router.l1")) {
-                redisMetricsService.incrAgentCall("L1");
-            }
-            // 注意：intent.accuracy / rewrite.accuracy 是校验类指标（高频），
-            // 不是调用计数，绝不能映射到 L1 调用。
-        } catch (Exception e) {
-            log.debug("[OtlpParser] incrementAgentRedis failed for {}: {}", metricName, e.getMessage());
-        }
-    }
 
 }
 

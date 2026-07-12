@@ -49,6 +49,12 @@ public class TraceDetailVO {
     /** 展平后的瀑布图 Span 列表 */
     private List<Object> waterfallSpans;
 
+    // ── 重路由 (reRoute) ──
+    /** 是否发生重路由：一条 trace 内出现 >1 个 L0（领域路由）span */
+    private boolean reRouted;
+    /** 重路由分层路径，如 "L0 → L1 → L2 ↻ L0 → L1 → L2" */
+    private String reRoutePath;
+
     public TraceDetailVO() {}
 
     public TraceDetailVO(String traceId, List<SpanNodeVO> spanTree,
@@ -115,4 +121,11 @@ public class TraceDetailVO {
 
     public List<Object> getWaterfallSpans() { return waterfallSpans; }
     public void setWaterfallSpans(List<Object> waterfallSpans) { this.waterfallSpans = waterfallSpans; }
+
+    // ── 重路由 Getters/Setters ──
+
+    public boolean isRerouted() { return reRouted; }
+    public void setRerouted(boolean reRouted) { this.reRouted = reRouted; }
+    public String getReRoutePath() { return reRoutePath; }
+    public void setReRoutePath(String reRoutePath) { this.reRoutePath = reRoutePath; }
 }

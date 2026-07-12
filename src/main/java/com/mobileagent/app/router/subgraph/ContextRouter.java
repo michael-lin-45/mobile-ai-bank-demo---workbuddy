@@ -66,7 +66,8 @@ public class ContextRouter {
                     sessionState, templatePath, domainName, chatHistory, lastQuestion);
 
             long startMs = System.currentTimeMillis();
-            AgentSpanContext.set("L1-LLM1", "ContextRouter", null, sessionId, null);
+            // 托管模式：routeType 在 LLM 返回后才解析，需延迟回填到 span.intent
+            AgentSpanContext ctx = AgentSpanContext.setWithHeldSpan("L1-LLM1", "ContextRouter", null, sessionId, null);
             String content;
             try {
                 content = chatClient.prompt()
@@ -74,8 +75,10 @@ public class ContextRouter {
                         .user(userInput)
                         .call()
                         .content();
-            } finally {
-                AgentSpanContext.clear();
+            } catch (Exception e) {
+                // LLM 调用失败：ObsChatModel 已在异常路径自行 end span；此处回填兜底 routeType 并清理
+                ctx.commitIntent(resolveFallbackRouteType(currentAgent, lastQuestion), java.util.Map.of());
+                throw e;
             }
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[ContextRouter] LLM call completed in {}ms | sessionId={}, template={}, domain={}",
@@ -87,14 +90,20 @@ public class ContextRouter {
                     result.getRouteType(), result.getConfidence());
             // 埋点：L1 上下文路由调用计数（解锁 P0-5/P1-2 backend agent_call:L1 聚合）
             obsMetrics.recordL1Call(result.getRouteType(), domainName);
+            // 回填真实 routeType 到 span.intent（托管模式结束 span）
+            ctx.commitIntent(result.getRouteType(), java.util.Map.of());
             return result;
 
         } catch (Exception e) {
-            log.error("[ContextRouter] LLM call failed, defaulting to SWITCH", e);
+            String fallback = resolveFallbackRouteType(currentAgent, lastQuestion);
+            log.error("[ContextRouter] LLM call failed, defaulting to '{}'", fallback, e);
             return RoutingResult.builder()
-                    .routeType("SWITCH")
+                    .routeType(fallback)
                     .confidence(0.3)
                     .build();
+        } finally {
+            // 兜底：若上方未成功 commit（如埋点/状态更新异常），仍结束 held span 并清理 ThreadLocal，防止 span 泄漏
+            AgentSpanContext.clear();
         }
     }
 
@@ -199,5 +208,18 @@ public class ContextRouter {
 
     private String loadTemplate(String path) {
         return TemplateUtils.loadTemplate(path);
+    }
+
+    /**
+     * LLM 不可用时的兜底路由类型：若已存在活跃意图且子智能体正在等待回答，
+     * 则假定用户在回答该问题(FOLLOW)，继续当前 agent；否则 SWITCH。
+     * 仅在 LLM 异常路径生效，正常 LLM 路径不受影响。
+     */
+    private String resolveFallbackRouteType(String currentAgent, String lastQuestion) {
+        if (currentAgent != null && !"无".equals(currentAgent)
+                && lastQuestion != null && !lastQuestion.isBlank()) {
+            return "FOLLOW";
+        }
+        return "SWITCH";
     }
 }

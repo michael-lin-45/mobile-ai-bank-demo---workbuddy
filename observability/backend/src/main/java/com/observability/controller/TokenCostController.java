@@ -6,7 +6,6 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -41,8 +40,8 @@ public class TokenCostController {
         try {
             Map<String, Object> data;
             if ("detail".equals(type)) {
-                List<Map<String, Object>> table = tokenCostService.getDetailTable(from, to);
-                data = Map.of("content", table);
+                // getDetailTable 已返回 {content: [...]} 结构，前端读取 value.content
+                data = tokenCostService.getDetailTable(from, to);
             } else if ("breakdown".equals(type)) {
                 data = tokenCostService.getBreakdown(from, to);
             } else {

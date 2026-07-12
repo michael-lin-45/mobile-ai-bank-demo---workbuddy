@@ -11,7 +11,7 @@ import React, { useState } from 'react';
  * Agent header 有"详情"按钮 → 展开 Agent IO 面板
  * LLM row 有"详情"按钮 → 展开 LLM Prompt/Response 面板
  */
-function SpanTree({ nodes, level = 0, onIOOpen }) {
+function SpanTree({ nodes, reRouted, reRoutePath }) {
   const agents = buildAgentTree(nodes);
 
   if (agents.length === 0) {
@@ -24,6 +24,30 @@ function SpanTree({ nodes, level = 0, onIOOpen }) {
 
   return (
     <div>
+      {reRouted && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 12px',
+          marginBottom: 12,
+          borderRadius: 6,
+          background: '#fff7e6',
+          border: '1px solid #ffd591',
+          fontSize: 12,
+          color: '#d46b08',
+        }}>
+          <span style={{ fontWeight: 700 }}>↻ 重路由 (reRoute)</span>
+          <span style={{ color: 'rgba(0,0,0,.65)' }}>
+            L0 / L1 选择有误，L1 / L2 已将请求退回 L0 重新路由。
+            {reRoutePath ? (
+              <span style={{ fontFamily: '"JetBrains Mono", monospace', marginLeft: 6 }}>
+                路径：{reRoutePath}
+              </span>
+            ) : null}
+          </span>
+        </div>
+      )}
       {agents.map((agent, idx) => (
         <React.Fragment key={idx}>
           {idx > 0 && <AgentConnector />}
@@ -106,6 +130,22 @@ function AgentBlock({ agent }) {
           {agent.layer}
         </span>
 
+        {/* follow-up 徽标：L1 未经过 L1-LLM2 */}
+        {agent.isFollowUp && (
+          <span style={{
+            display: 'inline-block',
+            padding: '2px 8px',
+            borderRadius: 4,
+            fontSize: 10,
+            fontWeight: 600,
+            background: '#fff7e6',
+            color: '#d46b08',
+            border: '1px solid #ffd591',
+          }}>
+            FOLLOW-UP ↪ 跳过 L1-LLM2
+          </span>
+        )}
+
         {/* Agent 名称 */}
         <span style={{ fontWeight: 600, fontSize: 13, color: 'rgba(0,0,0,.88)' }}>
           {agent.name}
@@ -129,34 +169,55 @@ function AgentBlock({ agent }) {
           {(agent.totalDurationMs || agent.durationMs || 0)}ms
         </span>
 
-        {/* 详情按钮 */}
-        {(agent.ioPrompt || agent.ioResponse) && (
-          <span
-            onClick={(e) => {
-              e.stopPropagation();
-              setIoOpen(!ioOpen);
-            }}
-            style={{
-              display: 'inline-block',
-              padding: '2px 8px',
-              borderRadius: 4,
-              fontSize: 10,
-              fontWeight: 600,
-              border: '1px solid #1677ff',
-              color: '#1677ff',
-              background: ioOpen ? '#e6f4ff' : '#fff',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-              transition: '.15s',
-            }}
-          >
-            详情
-          </span>
-        )}
+        {/* token 小参数 */}
+        {(() => {
+          const a = agent.attributes || {};
+          const inT = a['ai.token.input'];
+          const outT = a['ai.token.output'];
+          if (inT != null || outT != null) {
+            return (
+              <span style={{
+                fontFamily: '"JetBrains Mono", monospace',
+                fontSize: 10,
+                color: 'rgba(0,0,0,.55)',
+                background: '#fff',
+                border: '1px solid #f0f0f0',
+                borderRadius: 4,
+                padding: '1px 6px',
+              }}>
+                🪙 {inT != null ? inT : '?'} / {outT != null ? outT : '?'}
+              </span>
+            );
+          }
+          return null;
+        })()}
+
+        {/* 详情按钮（始终显示） */}
+        <span
+          onClick={(e) => {
+            e.stopPropagation();
+            setIoOpen(!ioOpen);
+          }}
+          style={{
+            display: 'inline-block',
+            padding: '2px 8px',
+            borderRadius: 4,
+            fontSize: 10,
+            fontWeight: 600,
+            border: '1px solid #1677ff',
+            color: '#1677ff',
+            background: ioOpen ? '#e6f4ff' : '#fff',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            transition: '.15s',
+          }}
+        >
+          详情
+        </span>
       </div>
 
       {/* Agent IO 面板 */}
-      {ioOpen && (agent.ioPrompt || agent.ioResponse) && (
+      {ioOpen && (
         <div style={{
           background: '#fafafa',
           borderRadius: 6,
@@ -164,7 +225,7 @@ function AgentBlock({ agent }) {
           margin: '6px 0 10px',
           border: '1px solid #f0f0f0',
         }}>
-          {agent.ioPrompt && (
+          {agent.ioPrompt ? (
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: '#1677ff', marginBottom: 4 }}>
                 INPUT — Agent 接收上下文
@@ -185,8 +246,12 @@ function AgentBlock({ agent }) {
                 {agent.ioPrompt}
               </div>
             </div>
+          ) : (
+            <div style={{ fontSize: 11, color: 'rgba(0,0,0,.4)', marginBottom: 12 }}>
+              （无 INPUT 记录）
+            </div>
           )}
-          {agent.ioResponse && (
+          {agent.ioResponse ? (
             <div>
               <div style={{ fontSize: 11, fontWeight: 600, color: '#52c41a', marginBottom: 4 }}>
                 OUTPUT — Agent 处理结果
@@ -206,6 +271,10 @@ function AgentBlock({ agent }) {
               }}>
                 {agent.ioResponse}
               </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: 'rgba(0,0,0,.4)' }}>
+              （无 OUTPUT 记录）
             </div>
           )}
         </div>
@@ -240,7 +309,14 @@ function LLMCallRow({ llm }) {
         fontSize: 12,
       }}>
         <span>🧠</span>
-        <span style={{ fontWeight: 600 }}>{llm.name || 'LLM'}</span>
+        <span style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600 }}>{llm.name || 'LLM'}</span>
+          {llm.desc && (
+            <span style={{ fontSize: 10, color: 'rgba(0,0,0,.5)', fontWeight: 400 }}>
+              {llm.desc}
+            </span>
+          )}
+        </span>
         <span style={{ fontSize: 11, color: 'rgba(0,0,0,.65)', fontFamily: '"JetBrains Mono", monospace' }}>
           {llm.model}
         </span>
@@ -258,33 +334,31 @@ function LLMCallRow({ llm }) {
             {llm.tokenInfo}
           </span>
         )}
-        {(llm.ioPrompt || llm.ioResponse) && (
-          <span
-            onClick={(e) => {
-              e.stopPropagation();
-              setIoOpen(!ioOpen);
-            }}
-            style={{
-              display: 'inline-block',
-              padding: '2px 8px',
-              borderRadius: 4,
-              fontSize: 10,
-              fontWeight: 600,
-              border: '1px solid #1677ff',
-              color: '#1677ff',
-              background: ioOpen ? '#e6f4ff' : '#fff',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-              transition: '.15s',
-            }}
-          >
-            详情
-          </span>
-        )}
+        <span
+          onClick={(e) => {
+            e.stopPropagation();
+            setIoOpen(!ioOpen);
+          }}
+          style={{
+            display: 'inline-block',
+            padding: '2px 8px',
+            borderRadius: 4,
+            fontSize: 10,
+            fontWeight: 600,
+            border: '1px solid #1677ff',
+            color: '#1677ff',
+            background: ioOpen ? '#e6f4ff' : '#fff',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            transition: '.15s',
+          }}
+        >
+          详情
+        </span>
       </div>
 
       {/* LLM IO 面板 */}
-      {ioOpen && (llm.ioPrompt || llm.ioResponse) && (
+      {ioOpen && (
         <div style={{
           background: '#fafafa',
           borderRadius: 6,
@@ -292,7 +366,7 @@ function LLMCallRow({ llm }) {
           margin: '4px 0 10px',
           border: '1px solid #f0f0f0',
         }}>
-          {llm.ioPrompt && (
+          {llm.ioPrompt ? (
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: '#1677ff', marginBottom: 4 }}>
                 Prompt
@@ -313,8 +387,12 @@ function LLMCallRow({ llm }) {
                 {llm.ioPrompt}
               </div>
             </div>
+          ) : (
+            <div style={{ fontSize: 11, color: 'rgba(0,0,0,.4)', marginBottom: 12 }}>
+              （无 Prompt 记录）
+            </div>
           )}
-          {llm.ioResponse && (
+          {llm.ioResponse ? (
             <div>
               <div style={{ fontSize: 11, fontWeight: 600, color: '#52c41a', marginBottom: 4 }}>
                 Response
@@ -335,6 +413,10 @@ function LLMCallRow({ llm }) {
                 {llm.ioResponse}
               </div>
             </div>
+          ) : (
+            <div style={{ fontSize: 11, color: 'rgba(0,0,0,.4)' }}>
+              （无 Response 记录）
+            </div>
           )}
         </div>
       )}
@@ -344,69 +426,80 @@ function LLMCallRow({ llm }) {
 
 /**
  * 将扁平 spanTree 重组为 Agent→LLM 嵌套结构
- * 业务 span（L0:/L1-LLM1:/L1-LLM2:/L2: 前缀）识别为 Agent
- * 其子 HTTP span（POST to LLM API）识别为 LLM 调用
+ *
+ * 业务 span 按层级聚合为 Agent（遵循用户定义的路由架构）：
+ * - L0 Agent（领域路由）：含 1 个 LLM，用于找到合适的 L1（银行业务领域）
+ * - L1 Agent（业务路由）：含 2 个 LLM =
+ *     · L1-LLM1 上下文分类（识别 FOLLOW-UP / SWITCH-NEW / RESUME）
+ *     · L1-LLM2 意图改写 + 意图识别（选 L2，follow-up 时跳过）
+ * - L2 Agent（业务执行）：内部含 1~N 个 LLM
+ *
+ * 特殊场景：
+ * - follow-up：L1 块不含 L1-LLM2 → 标 FOLLOW-UP 徽标
+ * - reRoute：由 TraceDetailModal 透传 reRouted 标志，顶部显示横幅
  */
 function buildAgentTree(nodes) {
   if (!nodes || nodes.length === 0) return [];
 
   const allSpans = flattenSpans(nodes);
-
-  // Group business spans into agents:
-  // - L0: spans with opName starting "L0:" -> one L0 Agent with 1 LLM call
-  // - L1: spans with opName starting "L1:" or "L1-" -> one L1 Agent with 1-2 LLM calls (L1-LLM1, L1-LLM2)
-  // - L2: spans with opName starting "L2:" -> one L2 Agent with 1+ LLM calls
   const agents = [];
-  let l0Agent = null;
-  let l1Agent = null;
-  let l2Agent = null;
+  let cur = null;
 
   for (const span of allSpans) {
     const opName = span.operationName || '';
-    const layer = detectLayer(span);
 
-    if (opName.startsWith('L0:')) {
-      // L0 Agent - create if not exists, or add as LLM call
-      if (!l0Agent) {
-        l0Agent = createAgent('L0', 'DomainRouter', 'L1领域路由', span);
-        agents.push(l0Agent);
-      }
-      addLLMCall(l0Agent, 'L0-LLM', opName, span);
-    } else if (opName.startsWith('L1-LLM1')) {
-      // L1-LLM1 is an LLM call within the L1 Agent
-      if (!l1Agent) {
-        l1Agent = createAgent('L1', 'ContextRouter', '会话分类 + L2选择', span);
-        agents.push(l1Agent);
-      }
-      addLLMCall(l1Agent, 'L1-LLM1', opName, span);
-    } else if (opName.startsWith('L1-LLM2')) {
-      // L1-LLM2 is an LLM call within the L1 Agent
-      if (!l1Agent) {
-        l1Agent = createAgent('L1', 'ContextRouter', '会话分类 + L2选择', span);
-        agents.push(l1Agent);
-      }
-      addLLMCall(l1Agent, 'L1-LLM2', opName, span);
-    } else if (opName.startsWith('L1:') || opName.startsWith('L1-')) {
-      // Generic L1 span (not LLM1 or LLM2)
-      if (!l1Agent) {
-        l1Agent = createAgent('L1', 'L1 Router', 'L1路由', span);
-        agents.push(l1Agent);
-      }
-      addLLMCall(l1Agent, 'L1-LLM', opName, span);
-    } else if (opName.startsWith('L2:')) {
-      // L2 Agent - may have multiple LLM calls
-      if (!l2Agent) {
-        l2Agent = createAgent('L2', getL2AgentName(opName), '业务执行', span);
-        agents.push(l2Agent);
-      }
-      addLLMCall(l2Agent, 'L2-LLM', opName, span);
+    // 计算该 span 所属的 Agent 层级（L0/L1/L2）
+    let agentLayer = null;
+    if (opName.startsWith('L0:')) agentLayer = 'L0';
+    else if (opName.startsWith('L1')) agentLayer = 'L1';
+    else if (opName.startsWith('L2:')) agentLayer = 'L2';
+    else continue; // 非业务 span（HTTP / POST CLIENT 等）跳过
+
+    // 是否开启一个新的 Agent 分组（同一层级只合并到一个 Agent）
+    const isNewAgent = !cur || cur.layer !== agentLayer;
+    if (isNewAgent) {
+      cur = createAgent(agentLayer, opName, span);
+      agents.push(cur);
     }
+
+    // 追加 LLM 调用（带角色说明）
+    if (opName.startsWith('L0:')) {
+      addLLMCall(cur, 'L0-LLM', opName, span, '领域路由 LLM — 选择 L1 业务领域');
+    } else if (opName.startsWith('L1-LLM1')) {
+      addLLMCall(cur, 'L1-LLM1', opName, span, '上下文分类 — 识别 FOLLOW-UP / SWITCH-NEW / RESUME');
+    } else if (opName.startsWith('L1-LLM2')) {
+      addLLMCall(cur, 'L1-LLM2', opName, span, '意图改写 + 意图识别 — 选择 L2（follow-up 时跳过）');
+      cur.hasLLM2 = true;
+    } else if (opName.startsWith('L1:') || opName.startsWith('L1-')) {
+      addLLMCall(cur, 'L1-LLM', opName, span, 'L1 路由 LLM');
+    } else if (opName.startsWith('L2:')) {
+      addLLMCall(cur, 'L2-LLM', opName, span, '业务执行 LLM');
+    }
+  }
+
+  // follow-up 判定：L1 Agent 未经过 L1-LLM2
+  for (const a of agents) {
+    if (a.layer === 'L1' && !a.hasLLM2) a.isFollowUp = true;
   }
 
   return agents;
 }
 
-function createAgent(layer, name, desc, span) {
+function createAgent(layer, opName, span) {
+  let name, desc;
+  if (layer === 'L0') {
+    name = 'L0 · 领域路由';
+    desc = '含 1 个 LLM，用于找到合适的 L1（银行业务领域）';
+  } else if (layer === 'L1') {
+    name = 'L1 · 业务路由';
+    desc = '含 2 个 LLM：L1-LLM1 上下文分类 + L1-LLM2 意图改写与识别（选 L2）';
+  } else if (layer === 'L2') {
+    name = getL2AgentName(opName);
+    desc = '业务执行 · 内部含 1~N 个 LLM';
+  } else {
+    name = opName;
+    desc = '';
+  }
   return {
     layer: layer,
     name: name,
@@ -415,30 +508,40 @@ function createAgent(layer, name, desc, span) {
     statusCode: span.statusCode,
     ioPrompt: span.ioPrompt || '',
     ioResponse: span.ioResponse || '',
+    attributes: span.attributes || {},
     llmCalls: [],
     totalDurationMs: 0,
+    hasLLM2: false,
+    isFollowUp: false,
   };
 }
 
-function addLLMCall(agent, llmName, opName, span) {
+function addLLMCall(agent, llmName, opName, span, desc) {
   const modelName = opName.includes(':') ? opName.split(':').slice(1).join(':') : 'unknown';
   // Find child POST CLIENT span for duration/token info
   let childDuration = span.durationMs || 0;
-  let tokenInfo = '';
   if (span.children) {
     for (const child of span.children) {
       if (child.kind === 'CLIENT' && child.operationName === 'POST') {
         childDuration = child.durationMs || childDuration;
-        const attrs = child.attributes || {};
         break;
       }
     }
+  }
+  // Token 数：从 span 属性 ai.token.input / ai.token.output 读取（Core 注入）
+  const attrs = span.attributes || {};
+  const inT = attrs['ai.token.input'];
+  const outT = attrs['ai.token.output'];
+  let tokenInfo = '';
+  if (inT != null || outT != null) {
+    tokenInfo = `in:${inT != null ? inT : '?'} out:${outT != null ? outT : '?'}`;
   }
   agent.llmCalls.push({
     name: llmName,
     model: modelName,
     durationMs: childDuration,
     tokenInfo: tokenInfo,
+    desc: desc,
     ioPrompt: span.ioPrompt || '',
     ioResponse: span.ioResponse || '',
   });

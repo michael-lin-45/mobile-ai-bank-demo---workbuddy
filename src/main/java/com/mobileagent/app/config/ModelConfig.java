@@ -54,7 +54,7 @@ public class ModelConfig {
             @Value("${models.domain.api-key}") String apiKey,
             @Value("${models.domain.model}") String model) {
         log.info("[ModelConfig] domainChatModel: baseUrl={}, model={}", baseUrl, model);
-        return wrapWithObsChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model, "L0", "DomainRouter");
     }
 
     @Bean("domainChatClient")
@@ -70,7 +70,7 @@ public class ModelConfig {
             @Value("${models.context.api-key}") String apiKey,
             @Value("${models.context.model}") String model) {
         log.info("[ModelConfig] contextChatModel: baseUrl={}, model={}", baseUrl, model);
-        return wrapWithObsChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model, "L1-LLM1", "ContextRouter");
     }
 
     @Bean("contextChatClient")
@@ -86,7 +86,7 @@ public class ModelConfig {
             @Value("${models.intent.api-key}") String apiKey,
             @Value("${models.intent.model}") String model) {
         log.info("[ModelConfig] intentChatModel: baseUrl={}, model={}", baseUrl, model);
-        return wrapWithObsChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model, "L1-LLM2", "SubGraphRouter");
     }
 
     @Bean("intentChatClient")
@@ -102,7 +102,7 @@ public class ModelConfig {
             @Value("${models.param-extract.api-key}") String apiKey,
             @Value("${models.param-extract.model}") String model) {
         log.info("[ModelConfig] paramExtractChatModel: baseUrl={}, model={}", baseUrl, model);
-        return wrapWithObsChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model, "L2", "ParamExtract");
     }
 
     @Bean("paramExtractChatClient")
@@ -118,7 +118,7 @@ public class ModelConfig {
             @Value("${models.wealth-interpret.api-key}") String apiKey,
             @Value("${models.wealth-interpret.model}") String model) {
         log.info("[ModelConfig] wealthInterpretChatModel: baseUrl={}, model={}", baseUrl, model);
-        return wrapWithObsChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model, "L2", "WealthInterpret");
     }
 
     @Bean("wealthInterpretChatClient")
@@ -134,7 +134,7 @@ public class ModelConfig {
             @Value("${models.chat.api-key}") String apiKey,
             @Value("${models.chat.model}") String model) {
         log.info("[ModelConfig] chatChatModel: baseUrl={}, model={}", baseUrl, model);
-        return wrapWithObsChatModel(baseUrl, apiKey, model);
+        return wrapWithObsChatModel(baseUrl, apiKey, model, "L1", "ChatService");
     }
 
     @Bean("chatChatClient")
@@ -149,8 +149,12 @@ public class ModelConfig {
      *
      * streamUsage=true 使 OpenAI 在流式响应的最后一个 chunk 中返回 usage 信息，
      * ObsChatModel 优先使用精确 usage，拿不到则走 content.length()/1.5 估算兜底。
+     *
+     * @param defaultAgentLayer 该模型所属业务层级 (L0/L1-LLM1/L1-LLM2/L1/L2)，ThreadLocal 缺失时兜底
+     * @param defaultAgentName  该模型业务名称 (DomainRouter/ContextRouter/...)，ThreadLocal 缺失时兜底
      */
-    private ChatModel wrapWithObsChatModel(String baseUrl, String apiKey, String model) {
+    private ChatModel wrapWithObsChatModel(String baseUrl, String apiKey, String model,
+                                           String defaultAgentLayer, String defaultAgentName) {
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
@@ -162,6 +166,6 @@ public class ModelConfig {
                         .extraBody(Map.of("enable_thinking", false))
                         .build())
                 .build();
-        return new ObsChatModel(originalModel, meterRegistry, model);
+        return new ObsChatModel(originalModel, meterRegistry, model, defaultAgentLayer, defaultAgentName);
     }
 }

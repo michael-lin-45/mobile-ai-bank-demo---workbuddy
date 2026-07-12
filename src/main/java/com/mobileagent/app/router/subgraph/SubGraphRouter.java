@@ -71,7 +71,8 @@ public class SubGraphRouter {
                     domainIntentScopeList);
 
             long startMs = System.currentTimeMillis();
-            AgentSpanContext.set("L1-LLM2", "SubGraphRouter", null, sessionId, null);
+            // 托管模式：intentName 在 LLM 返回后才解析，需延迟回填到 span.intent
+            AgentSpanContext ctx = AgentSpanContext.setWithHeldSpan("L1-LLM2", "SubGraphRouter", null, sessionId, null);
             String content;
             try {
                 content = chatClient.prompt()
@@ -79,8 +80,10 @@ public class SubGraphRouter {
                         .user(userInput)
                         .call()
                         .content();
-            } finally {
-                AgentSpanContext.clear();
+            } catch (Exception e) {
+                // LLM 调用失败：ObsChatModel 已在异常路径自行 end span；此处回填兜底意图(沿用当前活跃意图)并清理
+                ctx.commitIntent(currentAgent != null ? currentAgent : "UNKNOWN", java.util.Map.of());
+                throw e;
             }
             long elapsedMs = System.currentTimeMillis() - startMs;
             log.info("[SubGraphRouter] LLM call completed in {}ms | sessionId={}, userInput={}", elapsedMs, sessionId, userInput);
@@ -97,18 +100,24 @@ public class SubGraphRouter {
             // 埋点：L1 意图识别调用计数（解锁 P0-5/P1-2 backend agent_call:L1 聚合）
             obsMetrics.recordL1Call("intent_identify", result.getIntentName());
 
+            // 回填真实 intentName 到 span.intent（托管模式结束 span）
+            ctx.commitIntent(result.getIntentName(), java.util.Map.of());
             return result;
 
         } catch (Exception e) {
-            log.error("[SubGraphRouter] LLM call failed", e);
+            String fbIntent = (currentAgent != null && !"无".equals(currentAgent)) ? currentAgent : "UNKNOWN";
+            log.error("[SubGraphRouter] LLM call failed, degrading to current intent: {}", fbIntent, e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
-                    .refinedRouteType("SWITCH")
-                    .intentName("UNKNOWN")
+                    .refinedRouteType(phase1Result.getRouteType())
+                    .intentName(fbIntent)
                     .rewrittenInput(userInput)
                     .confidence(0.3)
-                    .reasoning("LLM调用失败,降级处理")
+                    .reasoning("LLM调用失败,降级沿用当前意图: " + fbIntent)
                     .build();
+        } finally {
+            // 兜底：若上方未成功 commit（如埋点/状态更新异常），仍结束 held span 并清理 ThreadLocal，防止 span 泄漏
+            AgentSpanContext.clear();
         }
     }
 

@@ -172,29 +172,6 @@ public class AIInsightsService {
         return result;
     }
 
-    /**
-     * 获取意图分布（从 Redis）
-     */
-    public Map<String, Long> getIntentDistribution(Instant from, Instant to) {
-        // 从 H2 查询意图相关指标
-        List<String> intentNames = List.of(
-                "agent.intent.recognized", "agent.intent.confidence");
-        Map<String, Long> distribution = new LinkedHashMap<>();
-
-        for (String name : intentNames) {
-            List<MetricsAgg> metrics = metricsAggRepository
-                    .findByMetricNameAndTimestampBetweenOrderByTimestampAsc(name, from, to);
-            for (var m : metrics) {
-                String intent = extractTag(m.getTags(), "intent");
-                if (intent == null) intent = extractTag(m.getTags(), "domain");
-                if (intent != null) {
-                    distribution.merge(intent, 1L, Long::sum);
-                }
-            }
-        }
-        return distribution;
-    }
-
     // ==================== Helpers ====================
 
     private String extractTag(String tagsJson, String key) {
@@ -211,65 +188,6 @@ public class AIInsightsService {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    // ==================== 新增：意图准确率趋势 ====================
-
-    /**
-     * 获取意图准确率趋势
-     * 返回各意图的准确率时间序列
-     */
-    public Map<String, Object> getIntentAccuracyTrend(Instant from, Instant to) {
-        if (from == null) from = Instant.now().minusSeconds(604800); // 7天
-        if (to == null) to = Instant.now();
-
-        List<MetricsAgg> accuracyMetrics = metricsAggRepository
-                .findByMetricNameAndTimestampBetweenOrderByTimestampAsc(
-                        "agent.intent.accuracy", from, to);
-
-        // 按 intent + 日期分组
-        Map<String, Map<String, List<Double>>> byIntentByDate = new LinkedHashMap<>();
-
-        for (MetricsAgg m : accuracyMetrics) {
-            String intent = extractTag(m.getTags(), "intent");
-            if (intent == null) intent = "OVERALL";
-            String date = m.getTimestamp().toString().substring(0, 10); // YYYY-MM-DD
-
-            byIntentByDate
-                    .computeIfAbsent(intent, k -> new LinkedHashMap<>())
-                    .computeIfAbsent(date, k -> new ArrayList<>())
-                    .add(m.getValue());
-        }
-
-        // 构建系列
-        List<Map<String, Object>> series = new ArrayList<>();
-        for (var intentEntry : byIntentByDate.entrySet()) {
-            String intent = intentEntry.getKey();
-            Map<String, List<Double>> dateMap = intentEntry.getValue();
-
-            List<Map<String, Object>> dataPoints = new ArrayList<>();
-            for (var dateEntry : dateMap.entrySet()) {
-                double avg = dateEntry.getValue().stream()
-                        .mapToDouble(Double::doubleValue).average().orElse(0.0);
-                dataPoints.add(Map.of("time", dateEntry.getKey(), "value",
-                        Math.round(avg * 10000.0) / 10000.0));
-            }
-
-            Map<String, Object> s = new LinkedHashMap<>();
-            s.put("name", intent + "准确率");
-            s.put("data", dataPoints);
-            series.add(s);
-        }
-
-        // 如果没有数据，返回默认系列
-        if (series.isEmpty()) {
-            Map<String, Object> s = new LinkedHashMap<>();
-            s.put("name", "总体准确率");
-            s.put("data", List.of());
-            series.add(s);
-        }
-
-        return Map.of("series", series);
     }
 
     /**
@@ -428,6 +346,51 @@ public class AIInsightsService {
         if (to == null) to = Instant.now();
         double total = latestCounterTotal("agent.reroute.count", from, to);
         return (double) Math.round(total);
+    }
+
+    /**
+     * 计算业务成功率（完成率 / 转化率，百分比 0-100）。
+     * 数据源：H2 的 agent.business.outcome（Micrometer Counter，
+     *   tag: outcome=success / outcome=fail，来自 GraphExecutionEngine 子图完成判定）。
+     * 成功率 = success / (success + fail) × 100。
+     * 解锁 GAP-C4（businessCompletionRate）/ D1（conversionRate）：
+     * 原两者读 Redis business_completion / conversion（全库无写入方 → null）。
+     * 注意：Core 另发 agent.business.outcome{intent,result}（来自 AbstractDomainService，
+     *   不带 outcome 键），不参与本聚合，避免污染 success/fail 计数。
+     * Counter 单调累计，按 tag 组合取窗口内最新累计值求和。无数据返回 null。
+     */
+    public Double computeBusinessSuccessRate(Instant from, Instant to) {
+        if (from == null) from = Instant.now().minusSeconds(6 * 3600);
+        if (to == null) to = Instant.now();
+        List<MetricsAgg> list = metricsAggRepository
+                .findByMetricNameAndTimestampBetweenOrderByTimestampAsc("agent.business.outcome", from, to);
+        if (list.isEmpty()) return null;
+
+        // 业务成功/失败判定：兼容 Core 两套埋点
+        //  - GraphExecutionEngine: agent.business.outcome{outcome=success|fail}
+        //    （注意：streaming 成功路径当前未发射 outcome=success，已知限制）
+        //  - AbstractDomainService: agent.business.outcome{intent=*,result=success}
+        //    （每次 L2 子图 COMPLETE 都发射，是真实高频的成功信号；无 result=fail 分支）
+        // 为避免"假 0%"，success 以 result=success 为主源，outcome=success 为辅源。
+        Map<String, Double> successLatest = new LinkedHashMap<>();
+        Map<String, Double> failLatest = new LinkedHashMap<>();
+        for (MetricsAgg m : list) {
+            String outcome = extractTag(m.getTags(), "outcome");
+            String result = extractTag(m.getTags(), "result");
+            boolean isSuccess = "success".equals(outcome) || "success".equals(result);
+            boolean isFail = "fail".equals(outcome) || "fail".equals(result);
+            if (isSuccess) {
+                successLatest.put(m.getTags(), m.getValue());
+            } else if (isFail) {
+                failLatest.put(m.getTags(), m.getValue());
+            }
+        }
+        double success = successLatest.values().stream().mapToDouble(Double::doubleValue).sum();
+        double fail = failLatest.values().stream().mapToDouble(Double::doubleValue).sum();
+        double total = success + fail;
+        // 无任何业务结果数据 → 返回 null（前端显示"暂无"），严禁把"无数据"误显示成 0%
+        if (total <= 0) return null;
+        return Math.round(success / total * 10000.0) / 100.0;
     }
 
     /**

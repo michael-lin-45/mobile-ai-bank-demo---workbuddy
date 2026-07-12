@@ -163,7 +163,11 @@ function TraceDetailModal({ trace, visible, onClose }) {
             </div>
             <div style={{ padding: '12px 0' }}>
               {trace.spanTree && trace.spanTree.length > 0 ? (
-                <SpanTree nodes={trace.spanTree} />
+                <SpanTree
+                  nodes={trace.spanTree}
+                  reRouted={trace.reRouted}
+                  reRoutePath={trace.reRoutePath}
+                />
               ) : (
                 <div style={{
                   textAlign: 'center',
