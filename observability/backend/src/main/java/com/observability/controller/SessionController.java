@@ -30,8 +30,8 @@ public class SessionController {
      */
     @GetMapping
     public ApiResponse<Map<String, Object>> listSessions(
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
             @RequestParam(required = false) String intent,
             @RequestParam(required = false) String agentLevel,
             @RequestParam(required = false) String status,
@@ -41,8 +41,10 @@ public class SessionController {
             @RequestParam(required = false, defaultValue = "0") int page,
             @RequestParam(required = false, defaultValue = "10") int size) {
         try {
+            Instant fromInstant = parseInstantOrNull(from);
+            Instant toInstant = parseInstantOrNull(to);
             Map<String, Object> result = sessionService.listSessions(
-                    from, to, intent, agentLevel, status,
+                    fromInstant, toInstant, intent, agentLevel, status,
                     sessionId, userId, channel, page, size);
             return ApiResponse.ok(result);
         } catch (Exception e) {
@@ -76,6 +78,15 @@ public class SessionController {
             return ApiResponse.ok(Map.of("status", "ok"));
         } catch (Exception e) {
             return ApiResponse.error(500, "Failed to upsert session: " + e.getMessage());
+        }
+    }
+
+    private Instant parseInstantOrNull(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Instant.parse(value);
+        } catch (Exception e) {
+            return null;
         }
     }
 }

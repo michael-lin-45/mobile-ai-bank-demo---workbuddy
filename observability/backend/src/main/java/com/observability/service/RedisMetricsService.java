@@ -102,7 +102,24 @@ public class RedisMetricsService {
     }
 
     /**  P50/P95/ */
+    /**
+     * 系统时延 P50/P95 — 优先返回 OtlpParserService 从直方图桶估算并写入 Hash 的分位数（准确）；
+     * 若热层未命中，则回退到 ZSET 中时延样本的分位数（旧逻辑兜底）。
+     */
     public Map<String, Double> getLatencyStats(String window) {
+        try {
+            String key = PREFIX + "latency:stats:" + window;
+            var hash = redis.opsForHash().entries(key);
+            if (hash != null && hash.containsKey("p95")) {
+                double p50 = toDouble(hash.get("p50"));
+                double p95 = toDouble(hash.get("p95"));
+                double avg = hash.containsKey("avg") ? toDouble(hash.get("avg")) : ((p50 + p95) / 2.0);
+                return Map.of("avg", avg, "p50", p50, "p95", p95);
+            }
+        } catch (Exception e) {
+            log.debug("[RedisMetrics] Failed to read latency percentiles for {}: {}", window, e.getMessage());
+        }
+        // 兜底：ZSET 时延样本
         List<Double> values = getLatencyValues(window);
         if (values.isEmpty()) {
             return Map.of("avg", 0.0, "p50", 0.0, "p95", 0.0);
@@ -115,6 +132,27 @@ public class RedisMetricsService {
         double p95 = percentile(sorted, 0.95);
 
         return Map.of("avg", avg, "p50", p50, "p95", p95);
+    }
+
+    /** 写入从直方图桶估算的时延分位数（OtlpParserService 调用） */
+    public void setLatencyPercentiles(String window, double p50, double p95, double avg) {
+        safeOp(() -> {
+            String key = PREFIX + "latency:stats:" + window;
+            redis.opsForHash().put(key, "p50", p50);
+            redis.opsForHash().put(key, "p95", p95);
+            redis.opsForHash().put(key, "avg", avg);
+            redis.expire(key, WINDOW_TTL.getOrDefault(window, 120), TimeUnit.SECONDS);
+        });
+    }
+
+    private double toDouble(Object o) {
+        if (o == null) return 0.0;
+        if (o instanceof Number n) return n.doubleValue();
+        try {
+            return Double.parseDouble(o.toString());
+        } catch (Exception e) {
+            return 0.0;
+        }
     }
 
     // ==================== Section ====================
@@ -370,7 +408,25 @@ public class RedisMetricsService {
     }
 
     /**  TTFT  (P50/P95/P99) */
+    /**
+     * TTFT 首 Token 时延 (P50/P95/P99) — 优先返回 OtlpParserService 从直方图桶估算并写入 Hash 的分位数（准确）；
+     * 若热层未命中，则回退到 ZSET 中 TTFT 样本的分位数（旧逻辑兜底）。
+     */
     public Map<String, Long> getTTFTStats(String window) {
+        try {
+            String key = PREFIX + "ttft:stats:" + window;
+            var hash = redis.opsForHash().entries(key);
+            if (hash != null && hash.containsKey("p99")) {
+                return Map.of(
+                        "p50", Math.round(toDouble(hash.get("p50"))),
+                        "p95", Math.round(toDouble(hash.get("p95"))),
+                        "p99", Math.round(toDouble(hash.get("p99")))
+                );
+            }
+        } catch (Exception e) {
+            log.debug("[RedisMetrics] Failed to read TTFT percentiles for {}: {}", window, e.getMessage());
+        }
+        // 兜底：ZSET TTFT 样本
         try {
             String key = PREFIX + "ttft:" + window;
             var tuples = redis.opsForZSet().rangeWithScores(key, 0, -1);
@@ -387,6 +443,17 @@ public class RedisMetricsService {
             log.warn("[RedisMetrics] Failed to get TTFT stats: {}", e.getMessage());
             return Map.of("p50", 0L, "p95", 0L, "p99", 0L);
         }
+    }
+
+    /** 写入从直方图桶估算的 TTFT 分位数（OtlpParserService 调用，仅 1m 实时窗口） */
+    public void setTTFTPercentiles(double p50, double p95, double p99) {
+        safeOp(() -> {
+            String key = PREFIX + "ttft:stats:1m";
+            redis.opsForHash().put(key, "p50", p50);
+            redis.opsForHash().put(key, "p95", p95);
+            redis.opsForHash().put(key, "p99", p99);
+            redis.expire(key, 120, TimeUnit.SECONDS);
+        });
     }
 
     /**  */

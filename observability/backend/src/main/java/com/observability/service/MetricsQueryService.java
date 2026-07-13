@@ -428,7 +428,7 @@ public class MetricsQueryService {
         try {
             Instant from = Instant.now().minusSeconds(2 * 86400L); // 最近 2d，与 H2 保留期一致
             long l0 = spanRepository.countDistinctTraceByOpNamePrefixSince("L0:%", from);
-            long l1 = spanRepository.countDistinctTraceByOpNamePrefixSince("L1%", from);
+            long l1 = spanRepository.countDistinctTraceByOpNamePrefixSince("L1:%", from);
             long l2 = spanRepository.countDistinctTraceByOpNamePrefixSince("L2:%", from);
             cachedL0 = l0; cachedL1 = l1; cachedL2 = l2;
             return new long[]{l0, l1, l2};

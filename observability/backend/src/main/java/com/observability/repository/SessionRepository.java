@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -45,6 +46,27 @@ public interface SessionRepository extends JpaRepository<Session, Long> {
                                             @Param("to") Instant to,
                                             @Param("status") String status,
                                             Pageable pageable);
+
+    /**
+     * 按时间范围查询（不分页，用于内存全量筛选）
+     */
+    @Query("SELECT s FROM Session s WHERE " +
+           "(s.startTime >= :from OR :from IS NULL) " +
+           "AND (s.startTime <= :to OR :to IS NULL) " +
+           "ORDER BY s.startTime DESC")
+    List<Session> findAllByTimeRange(@Param("from") Instant from, @Param("to") Instant to);
+
+    /**
+     * 按时间和状态查询（不分页）
+     */
+    @Query("SELECT s FROM Session s WHERE " +
+           "(s.startTime >= :from OR :from IS NULL) " +
+           "AND (s.startTime <= :to OR :to IS NULL) " +
+           "AND (s.status = :status OR :status IS NULL) " +
+           "ORDER BY s.startTime DESC")
+    List<Session> findAllByTimeRangeAndStatus(@Param("from") Instant from,
+                                              @Param("to") Instant to,
+                                              @Param("status") String status);
 
     /**
      * 按 userId 查询会话

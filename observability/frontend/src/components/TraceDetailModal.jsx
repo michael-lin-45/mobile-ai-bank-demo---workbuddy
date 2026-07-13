@@ -24,7 +24,7 @@ function TraceDetailModal({ trace, visible, onClose }) {
   const rawInput = trace.ioInput || trace.input || { content: trace.inputText || '' };
   const rawOutput = trace.ioOutput || trace.output || { content: trace.outputText || '' };
   const input = {
-    label: rawInput.label || '原始输入',
+    label: rawInput.label || '用户原始请求',
     content: rawInput.content || '-',
   };
   const output = {

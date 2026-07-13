@@ -452,8 +452,9 @@ public class ObsChatModel implements ChatModel {
             // Set business attributes (null 由 setSpanAttribute 内部兜底跳过)
             setSpanAttribute(span, "agent.layer", rc.layer);
             setSpanAttribute(span, "intent", rc.intent);
-            setSpanAttribute(span, "session_id", rc.sessionId);
-            setSpanAttribute(span, "user_id", rc.userId);
+            // 写入 span 前强制 trim session_id / user_id：杜绝入口未清洗导致的 \n 污染存储
+            setSpanAttribute(span, "session_id", rc.sessionId != null ? rc.sessionId.trim() : null);
+            setSpanAttribute(span, "user_id", rc.userId != null ? rc.userId.trim() : null);
             log.info("[ObsChatModel] Business span created: name={}, layer={}, agentName={}, intent={}, sessionId={}, span={}",
                 spanName, rc.layer, rc.name, rc.intent, rc.sessionId, span);
 
@@ -461,7 +462,7 @@ public class ObsChatModel implements ChatModel {
             io.opentelemetry.api.baggage.Baggage baggage = io.opentelemetry.api.baggage.Baggage.builder()
                     .put("agent.layer", rc.layer != null ? rc.layer : "")
                     .put("intent", rc.intent != null ? rc.intent : "")
-                    .put("session_id", rc.sessionId != null ? rc.sessionId : "")
+                    .put("session_id", rc.sessionId != null ? rc.sessionId.trim() : "")
                     .build();
             io.opentelemetry.context.Context.current().with(baggage).makeCurrent();
 

@@ -14,7 +14,9 @@ const INTENT_BADGE = {
   TRANSFER: { bg: '#f9f0ff', color: '#722ed1', border: '#d3adf7' },
   WEALTH: { bg: '#fffbe6', color: '#faad14', border: '#ffe58f' },
   BILL_QUERY: { bg: '#e6f4ff', color: '#1677ff', border: '#91caff' },
+  BILL: { bg: '#e6f4ff', color: '#1677ff', border: '#91caff' },
   CHAT: { bg: '#e6f4ff', color: '#1677ff', border: '#91caff' },
+  UNSUPPORTED: { bg: '#f5f5f5', color: 'rgba(0,0,0,.65)', border: '#d9d9d9' },
 };
 
 const STATUS_META = {

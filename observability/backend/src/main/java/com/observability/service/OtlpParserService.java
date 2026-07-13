@@ -88,15 +88,18 @@ public class OtlpParserService {
                                 // 自定义 llm.* Timer 用 MILLISECONDS 记录 → avg 本就是毫秒，直接使用。
                                 double valueMs = isSecondsUnitMetric(metricName) ? avg * 1000 : avg;
 
-                                // Redis 热层：valueMs 已是毫秒（见上方单位归一），直接写入时延 ZSET
+                                // Redis 热层：从直方图桶估算分位数写入 Hash（准确），不再把 sum/count 均值当作单样本写入 ZSET 污染分位
+                                double unitScale = isSecondsUnitMetric(metricName) ? 1000.0 : 1.0;
+                                double p50 = histogramPercentile(dp, 0.50) * unitScale;
+                                double p95 = histogramPercentile(dp, 0.95) * unitScale;
+                                double p99 = histogramPercentile(dp, 0.99) * unitScale;
                                 if (isLatencyMetric(metricName)) {
-                                    redisMetricsService.recordLatency("1m", valueMs);
-                                    redisMetricsService.recordLatency("5m", valueMs);
-                                    redisMetricsService.recordLatency("15m", valueMs);
+                                    redisMetricsService.setLatencyPercentiles("1m", p50, p95, valueMs);
+                                    redisMetricsService.setLatencyPercentiles("5m", p50, p95, valueMs);
+                                    redisMetricsService.setLatencyPercentiles("15m", p50, p95, valueMs);
                                 }
-                                // TTFT: �?Token 延迟指标 �?写入独立 ZSET
                                 if (metricName.contains("first_token") || metricName.contains("first.token") || metricName.contains("ttft")) {
-                                    redisMetricsService.recordTTFT((long) (valueMs));
+                                    redisMetricsService.setTTFTPercentiles(p50, p95, p99);
                                 }
                                 // H2 温层
                                 saveMetric(metricName, dpTags, avg, "1m", now);
@@ -376,6 +379,47 @@ public class OtlpParserService {
     }
 
     /** �?tags JSON 中提取意图并更新 Redis 分布 */
+    /**
+     * 从直方图桶估算分位数（线性插值）。
+     * OTLP histogram: bucketCounts 有 N+1 个桶，explicitBounds 有 N 个上界；
+     * bucketCounts[0] 覆盖 (-inf, bounds[0]]，bucketCounts[i] 覆盖 (bounds[i-1], bounds[i]]，
+     * 最后一个桶覆盖 (bounds[N-1], +inf)。对非负时延取 0 为下界。
+     */
+    private double histogramPercentile(OtlpMetricPayload.HistogramDataPoint dp, double p) {
+        List<Integer> bucketCounts = dp.getBucketCounts();
+        List<Double> explicitBounds = dp.getExplicitBounds();
+        if (bucketCounts == null || bucketCounts.isEmpty()) return 0.0;
+
+        long total = 0;
+        for (Integer c : bucketCounts) total += (c != null ? c : 0);
+        if (total == 0) return 0.0;
+
+        double rank = p * total;
+        long cum = 0;
+        double lowerBound = 0.0;
+        for (int i = 0; i < bucketCounts.size(); i++) {
+            int count = bucketCounts.get(i) != null ? bucketCounts.get(i) : 0;
+            double upperBound = (explicitBounds != null && i < explicitBounds.size())
+                    ? (explicitBounds.get(i) != null ? explicitBounds.get(i) : Double.POSITIVE_INFINITY)
+                    : Double.POSITIVE_INFINITY;
+            long nextCum = cum + count;
+            if (nextCum >= rank) {
+                if (count == 0) {
+                    return upperBound;
+                }
+                if (Double.isInfinite(upperBound)) {
+                    double step = lowerBound == 0.0 ? 1.0 : lowerBound * 0.1;
+                    return lowerBound + step;
+                }
+                double fraction = (rank - cum) / count;
+                return lowerBound + fraction * (upperBound - lowerBound);
+            }
+            cum = nextCum;
+            lowerBound = upperBound;
+        }
+        return lowerBound;
+    }
+
     private void extractAndUpdateIntent(String tags) {
         try {
             var node = objectMapper.readTree(tags);

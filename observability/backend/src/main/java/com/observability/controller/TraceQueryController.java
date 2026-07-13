@@ -44,7 +44,7 @@ public class TraceQueryController {
      */
     @GetMapping
     public ApiResponse<Map<String, Object>> listTraces(
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
+            @RequestParam(required = false) String from,
             @RequestParam(required = false) String intent,
             @RequestParam(required = false) String sessionId,
             @RequestParam(required = false) String userId,
@@ -53,8 +53,9 @@ public class TraceQueryController {
             @RequestParam(required = false, defaultValue = "0") int page,
             @RequestParam(required = false, defaultValue = "10") int size) {
         try {
+            Instant fromInstant = parseInstantOrNull(from);
             Map<String, Object> result = traceQueryService.listTracesPaginated(
-                    from, intent, sessionId, userId, statusCode, limit, page, size);
+                    fromInstant, intent, sessionId, userId, statusCode, limit, page, size);
             return ApiResponse.ok(result);
         } catch (Exception e) {
             return ApiResponse.error(500, "Failed to list traces: " + e.getMessage());
@@ -114,6 +115,15 @@ public class TraceQueryController {
             result.put("stackTrace", Arrays.toString(e.getStackTrace()));
         }
         return ApiResponse.ok(result);
+    }
+
+    private Instant parseInstantOrNull(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Instant.parse(value);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
 }

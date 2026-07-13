@@ -59,81 +59,76 @@ public class SessionService {
         if (size > 200) size = 200;
         if (page < 0) page = 0;
 
-        PageRequest pageable = PageRequest.of(page, size);
-        Page<Session> result;
+        // 归一化筛选入参（去除首尾空白/换行，兼容 trace 携带的 sessionId 末尾 \n）
+        String sidFilter = (sessionId != null && !sessionId.isBlank()) ? sessionId.trim() : null;
+        String uidFilter = (userId != null && !userId.isBlank()) ? userId.trim() : null;
+        String chFilter  = (channel != null && !channel.isBlank()) ? channel.trim() : null;
+        String intentFilter = (intent != null && !intent.isBlank()) ? intent.trim() : null;
+        String lvlFilter = (agentLevel != null && !agentLevel.isBlank()) ? agentLevel.trim() : null;
+        String statusFilter = (status != null && !status.isBlank()) ? status.trim() : null;
 
-        if (status != null && !status.isBlank()) {
-            result = sessionRepository.findByTimeRangeAndStatus(from, to, status, pageable);
-        } else {
-            result = sessionRepository.findByTimeRange(from, to, pageable);
+        // 全量拉取时间范围内的会话（不分页），再在内存做多条件筛选，避免只筛当前页导致漏数据
+        List<Session> all = (statusFilter != null)
+                ? sessionRepository.findAllByTimeRangeAndStatus(from, to, statusFilter)
+                : sessionRepository.findAllByTimeRange(from, to);
+
+        List<Session> filtered = new ArrayList<>();
+        for (Session s : all) {
+            String sSid = s.getSessionId() != null ? s.getSessionId().trim() : null;
+            if (sidFilter != null && !sidFilter.equals(sSid)) continue;
+            if (uidFilter != null) {
+                String sid = s.getUserId() != null ? s.getUserId().trim() : null;
+                if (sid == null || !uidFilter.equals(sid)) continue;
+            }
+            if (chFilter != null) {
+                String ch = s.getChannel() != null ? s.getChannel().trim() : null;
+                if (ch == null || !chFilter.equals(ch)) continue;
+            }
+            if (intentFilter != null) {
+                String flow = s.getIntentFlow();
+                if (flow == null || !flow.toUpperCase().contains(intentFilter.toUpperCase())) continue;
+            }
+            if (lvlFilter != null) {
+                String flow = s.getIntentFlow();
+                if (flow == null || !flow.contains(lvlFilter)) continue;
+            }
+            filtered.add(s);
         }
 
-        // Batch load token aggregates from session_turns for all sessions on this page
-        // Falls back to span attributes (ai.token.system/context/output) when session_turns tokens are 0
+        long totalElements = filtered.size();
+        int totalPages = (int) Math.ceil((double) totalElements / size);
+        if (totalPages < 1) totalPages = 1;
+
+        int fromIdx = Math.min(page * size, filtered.size());
+        int toIdx = Math.min(fromIdx + size, filtered.size());
+        List<Session> pageSlice = filtered.subList(fromIdx, toIdx);
+
+        // 批量加载 token（仅当前页切片）
         Map<String, Long> sessionTokenMap = new HashMap<>();
-        for (Session s : result.getContent()) {
+        for (Session s : pageSlice) {
             long totalTokens = sessionTurnRepository.findBySessionIdOrderByTurnNumberAsc(s.getSessionId())
                     .stream()
                     .mapToLong(t -> t.getTokens() != null ? t.getTokens() : 0)
                     .sum();
-            // Fallback: if session_turns tokens are 0, try to sum from span attributes
             if (totalTokens == 0) {
                 totalTokens = sumTokensFromSpans(s.getSessionId());
             }
             sessionTokenMap.put(s.getSessionId(), totalTokens);
         }
 
-        // 内存筛选 intent、agentLevel、sessionId、userId、channel（因为 H2 不支持复杂的 JSON/LIKE 过滤优化）
         List<Map<String, Object>> content = new ArrayList<>();
-        for (Session s : result.getContent()) {
-            // sessionId 精确筛选
-            if (sessionId != null && !sessionId.isBlank()) {
-                if (!sessionId.equals(s.getSessionId())) {
-                    continue;
-                }
-            }
-            // userId 筛选
-            if (userId != null && !userId.isBlank()) {
-                String sid = s.getUserId();
-                if (sid == null || !sid.equals(userId)) {
-                    continue;
-                }
-            }
-            // channel 筛选
-            if (channel != null && !channel.isBlank()) {
-                String ch = s.getChannel();
-                if (ch == null || !ch.equals(channel)) {
-                    continue;
-                }
-            }
-            // intent 筛选
-            if (intent != null && !intent.isBlank()) {
-                String flow = s.getIntentFlow();
-                if (flow == null || !flow.toUpperCase().contains(intent.toUpperCase())) {
-                    continue;
-                }
-            }
-            // agentLevel 筛选（通过 intentFlow 中的 L0/L1/L2 判断）
-            if (agentLevel != null && !agentLevel.isBlank()) {
-                String flow = s.getIntentFlow();
-                if (flow == null || !flow.contains(agentLevel)) {
-                    continue;
-                }
-            }
+        for (Session s : pageSlice) {
             content.add(toSessionListVO(s, sessionTokenMap.get(s.getSessionId())));
         }
 
         return Map.of(
                 "content", content,
-                "totalElements", result.getTotalElements(),
-                "totalPages", result.getTotalPages(),
+                "totalElements", totalElements,
+                "totalPages", totalPages,
                 "number", page
         );
     }
 
-    /**
-     * 会话详情 — session + turns 列表
-     */
     public Map<String, Object> getSessionDetail(String sessionId) {
         Session session = sessionRepository.findBySessionId(sessionId)
                 .orElse(null);
@@ -161,6 +156,7 @@ public class SessionService {
      */
     public void upsertSession(Map<String, Object> body) {
         String sessionId = (String) body.get("sessionId");
+        if (sessionId != null) sessionId = sessionId.trim();
         if (sessionId == null || sessionId.isBlank()) {
             log.warn("[SessionBridge] upsertSession: sessionId is empty");
             return;

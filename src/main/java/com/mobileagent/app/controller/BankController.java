@@ -79,6 +79,7 @@ public class BankController {
                        @RequestBody Map<String, String> req,
                        @RequestHeader(value = "Accept", defaultValue = MediaType.APPLICATION_JSON_VALUE) String accept,
                        HttpServletResponse response) {
+        if (sessionId != null) sessionId = sessionId.trim();
         String userInput = req.get("message");
         log.info("[BankController] >>> chat: sessionId={}, message={}", sessionId, userInput);
 
@@ -202,6 +203,7 @@ public class BankController {
 
     @GetMapping("/state")
     public Map<String, Object> getState(@RequestParam String sessionId) {
+        if (sessionId != null) sessionId = sessionId.trim();
         Map<String, Object> state = new java.util.LinkedHashMap<>();
         state.put("sessionId", sessionId);
         for (Map.Entry<String, DomainHandler> entry : domainServiceRegistry.getDomainNames()
@@ -216,6 +218,7 @@ public class BankController {
 
     @DeleteMapping("/session")
     public Map<String, String> clearSession(@RequestParam String sessionId) {
+        if (sessionId != null) sessionId = sessionId.trim();
         for (String domain : domainServiceRegistry.getDomainNames()) {
             DomainHandler handler = domainServiceRegistry.getHandler(domain);
             if (handler instanceof com.mobileagent.app.domain.AbstractDomainService ads) {

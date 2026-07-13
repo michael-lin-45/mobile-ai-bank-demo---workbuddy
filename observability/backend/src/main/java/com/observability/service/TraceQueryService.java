@@ -139,26 +139,22 @@ public class TraceQueryService {
 
         TraceDetailVO vo = new TraceDetailVO(traceId, spanTree, totalDurationMs, rootService);
 
-        // ── 增强字段：从根 Span url.query 提取 sessionId，并关联 Session 表 ──
+        // ── 增强字段：从根 Span url.query 提取 sessionId，仅关联 Session 表取 userId ──
         String sessionId = extractSessionIdFromUrl(firstSpan.getAttributes());
         String userId = null;
-        String intent = null;
-        String agentChain = null;
         if (sessionId != null && !sessionId.isBlank()) {
             try {
                 var sessionOpt = sessionRepository.findBySessionId(sessionId);
                 if (sessionOpt.isPresent()) {
                     var session = sessionOpt.get();
                     userId = session.getUserId();
-                    intent = session.getIntentFlow();
-                    agentChain = session.getIntentFlow();
                 }
             } catch (Exception e) {
                 log.debug("[TraceQuery] Failed to lookup session for traceId={}: {}", traceId, e.getMessage());
             }
         }
 
-        // 兜底：从跨 Span 属性提取
+        // 兜底：从跨 Span 属性提取 userId / sessionId
         Map<String, String> attrs = extractBusinessAttributes(traceId, firstSpan.getAttributes());
         if (userId == null || userId.isBlank()) {
             userId = attrs.getOrDefault("user_id", attrs.getOrDefault("userId", "未采集"));
@@ -166,15 +162,15 @@ public class TraceQueryService {
         if (sessionId == null || sessionId.isBlank()) {
             sessionId = attrs.getOrDefault("session_id", attrs.getOrDefault("sessionId", "未采集"));
         }
-        if (intent == null || intent.isBlank()) {
-            intent = attrs.getOrDefault("intent", attrs.getOrDefault("domain", "未识别"));
-        }
 
         vo.setUserId(userId);
         vo.setSessionId(sessionId);
-        vo.setIntent(intent);
-        String traceAgentChain = buildAgentChainFromSpans(spans);
-        vo.setAgentChain(traceAgentChain != null ? traceAgentChain : (agentChain != null && !agentChain.isBlank() ? agentChain : buildAgentChain(traceId)));
+
+        // 单请求视角：意图与 Agent 路径取该 trace 内「最后一段」业务链，
+        // 避免把被多轮复用同一个 traceId 的整段会话当成一次请求（表现为"session 内容"）。
+        String[] summary = buildTraceSummaryFromSpans(spans);
+        vo.setIntent(summary[0] != null ? summary[0] : "未识别");
+        vo.setAgentChain(summary[1]);
 
         // TTFT — compute from first LLM span startTime vs trace root startTime
         Long ttftVal = computeTTFT(spans);
@@ -208,14 +204,17 @@ public class TraceQueryService {
         // 时长别名
         vo.setDurationMs(totalDurationMs);
 
-        // ── IO 卡片数据：从 Span 树中查找第一个有 IO 数据的节点 ──
-        // Enrich business spans from SessionTurn table
+        // ── IO 卡片数据：优先使用 SessionTurn 的 userMessage / aiResponse ──
+        // 这是「用户原始请求」与「Agent 最终输出」，而非某层 LLM 的内部 prompt/response。
         com.observability.model.SessionTurn matchedTurn = null;
         try {
             // Strategy 1: match by traceId (most accurate, works for new traces)
             var turnsByTrace = sessionTurnRepository.findByTraceId(traceId);
             if (turnsByTrace != null && !turnsByTrace.isEmpty()) {
-                matchedTurn = turnsByTrace.get(0);
+                // traceId 可能被多轮对话复用 → 取轮次最靠后的一条，对齐列表展示的「最后一段意图」
+                matchedTurn = turnsByTrace.stream()
+                        .max(Comparator.comparing(t -> t.getTurnNumber() != null ? t.getTurnNumber() : 0))
+                        .orElse(turnsByTrace.get(0));
             }
             // Strategy 2: match by sessionId + timestamp proximity (fallback for old traces with empty traceId)
             if (matchedTurn == null && sessionId != null && !sessionId.isBlank()) {
@@ -244,7 +243,7 @@ public class TraceQueryService {
             log.debug("[TraceQuery] Failed to enrich business spans from SessionTurn: {}", e.getMessage());
         }
 
-        // Set trace-level ioInput/ioOutput from SessionTurn if not already set
+        // 优先用 SessionTurn：请求概要 = 用户原始输入；最终输出 = Agent 最终回答
         if (matchedTurn != null) {
             if (matchedTurn.getUserMessage() != null && !matchedTurn.getUserMessage().isBlank()) {
                 Map<String, String> ioInput = new LinkedHashMap<>();
@@ -262,21 +261,27 @@ public class TraceQueryService {
             }
         }
 
-        SpanNodeVO iosSpan = findFirstSpanWithIO(spanTree);
-        if (iosSpan != null) {
-            if (iosSpan.getIoPrompt() != null && !iosSpan.getIoPrompt().isBlank()) {
-                Map<String, String> ioInput = new LinkedHashMap<>();
-                ioInput.put("type", "text");
-                ioInput.put("content", iosSpan.getIoPrompt());
-                vo.setIoInput(ioInput);
-                vo.setInputText(iosSpan.getIoPrompt());
-            }
-            if (iosSpan.getIoResponse() != null && !iosSpan.getIoResponse().isBlank()) {
-                Map<String, String> ioOutput = new LinkedHashMap<>();
-                ioOutput.put("type", "text");
-                ioOutput.put("content", iosSpan.getIoResponse());
-                vo.setIoOutput(ioOutput);
-                vo.setOutputText(iosSpan.getIoResponse());
+        // 兜底：仅当 SessionTurn 缺失对应字段时，才从 Span 树取。
+        // 优先最终执行层（L2）的输出，避免把 L0 领域路由器的内部 prompt/response 当成请求/回答。
+        boolean needInput = (vo.getInputText() == null || vo.getInputText().isBlank());
+        boolean needOutput = (vo.getOutputText() == null || vo.getOutputText().isBlank());
+        if (needInput || needOutput) {
+            SpanNodeVO finalSpan = findL2OrLastSpanWithIO(spanTree);
+            if (finalSpan != null) {
+                if (needInput && finalSpan.getIoPrompt() != null && !finalSpan.getIoPrompt().isBlank()) {
+                    Map<String, String> ioInput = new LinkedHashMap<>();
+                    ioInput.put("type", "text");
+                    ioInput.put("content", finalSpan.getIoPrompt());
+                    vo.setIoInput(ioInput);
+                    vo.setInputText(finalSpan.getIoPrompt());
+                }
+                if (needOutput && finalSpan.getIoResponse() != null && !finalSpan.getIoResponse().isBlank()) {
+                    Map<String, String> ioOutput = new LinkedHashMap<>();
+                    ioOutput.put("type", "text");
+                    ioOutput.put("content", finalSpan.getIoResponse());
+                    vo.setIoOutput(ioOutput);
+                    vo.setOutputText(finalSpan.getIoResponse());
+                }
             }
         }
 
@@ -600,6 +605,132 @@ public class TraceQueryService {
         return parts.isEmpty() ? null : String.join(" → ", parts);
     }
 
+    /**
+     * 从 trace 的 spans 推导「单请求视角」的意图与 Agent 路径。
+     *
+     * 一条 trace 的 traceId 可能被多轮对话复用（历史数据缺陷），
+     * 此时按 L0 边界切分为多段，取【最后一段】作为该 trace 所代表的那一次用户请求。
+     *
+     * @return String[2] — [0]=意图(单一领域/业务标识), [1]=Agent 路径(如 "L0 → L1 → WEALTH")
+     */
+    private String[] buildTraceSummaryFromSpans(List<SpanEntity> spans) {
+        List<SpanEntity> biz = new ArrayList<>();
+        for (var s : spans) {
+            String op = s.getOperationName();
+            if (op != null && (op.startsWith("L0:") || op.startsWith("L1") || op.startsWith("L2:") || op.startsWith("llm:"))) {
+                biz.add(s);
+            }
+        }
+        if (biz.isEmpty()) return new String[]{ "未识别", null };
+        biz.sort(Comparator.comparing(s -> s.getStartTime() == null ? Instant.EPOCH : s.getStartTime()));
+
+        // 按 L0 边界切分为多段（reroute / 多轮复用）
+        List<List<SpanEntity>> segments = new ArrayList<>();
+        List<SpanEntity> cur = null;
+        for (var s : biz) {
+            String op = s.getOperationName();
+            boolean isL0 = op.startsWith("L0:") || op.contains("DomainRouter");
+            if (isL0 && cur != null && !cur.isEmpty()) {
+                segments.add(cur);
+                cur = new ArrayList<>();
+            }
+            if (cur == null) cur = new ArrayList<>();
+            cur.add(s);
+        }
+        if (cur != null && !cur.isEmpty()) segments.add(cur);
+        if (segments.isEmpty()) segments.add(biz);
+
+        // 取最后一段（最近一次用户请求）
+        List<SpanEntity> seg = segments.get(segments.size() - 1);
+
+        // 意图：优先 L2 业务名，其次 L0 领域
+        String intent = null;
+        String l0Domain = null;
+        for (var s : seg) {
+            String op = s.getOperationName();
+            Map<String, String> a = parseAttributes(s.getAttributes());
+            if (op.startsWith("L0:") || op.contains("DomainRouter")) {
+                String it = a.get("intent");
+                if (it != null && !it.isBlank()) l0Domain = normalizeDomain(it);
+            }
+            if (op.startsWith("L2:")) {
+                String bizName = businessNameOf(s);
+                if (bizName != null && !bizName.isBlank()) intent = normalizeDomain(bizName);
+            }
+        }
+        if (intent == null) intent = l0Domain != null ? l0Domain : "未识别";
+
+        // Agent 路径：L0 → L1 → (L2 业务名)
+        boolean hasL0 = false, hasL1 = false;
+        String l2Biz = null;
+        for (var s : seg) {
+            String op = s.getOperationName();
+            if (op.startsWith("L0:") || op.contains("DomainRouter")) hasL0 = true;
+            else if (op.startsWith("L1")) hasL1 = true;
+            else if (op.startsWith("L2:")) l2Biz = businessNameOf(s);
+        }
+        List<String> chain = new ArrayList<>();
+        if (hasL0) chain.add("L0");
+        if (hasL1) chain.add("L1");
+        if (l2Biz != null && !l2Biz.isBlank()) chain.add(l2Biz);
+        String agentChain = chain.isEmpty() ? null : String.join(" → ", chain);
+
+        return new String[]{ intent, agentChain };
+    }
+
+    /** 将任意 intent / 业务名归一为单一领域标识（与前端意图 Badge 取值一致） */
+    private String normalizeDomain(String intent) {
+        if (intent == null || intent.isBlank()) return "未识别";
+        String up = intent.toUpperCase();
+        if (up.contains("WEALTH")) return "WEALTH";
+        if (up.contains("TRANSFER")) return "TRANSFER";
+        if (up.contains("BILL")) return "BILL_QUERY";
+        if (up.contains("CHAT")) return "CHAT";
+        if (up.contains("UNSUPPORTED")) return "UNSUPPORTED";
+        return "未识别";
+    }
+
+    /**
+     * 在 Span 树中查找用于兜底「最终输出」的节点：
+     * 优先返回最深层的、带 ioResponse 的业务 span（L2 > L1 > L0），
+     * 避免把 L0 路由器的内部响应当成回答。
+     */
+    private SpanNodeVO findL2OrLastSpanWithIO(List<SpanNodeVO> tree) {
+        SpanNodeVO best = null;
+        int bestRank = -1;
+        for (var node : tree) {
+            SpanNodeVO f = findL2OrLastSpanWithIORec(node);
+            if (f != null) {
+                int rank = nodeLayerRank(f);
+                if (rank > bestRank) { bestRank = rank; best = f; }
+            }
+        }
+        return best;
+    }
+
+    private SpanNodeVO findL2OrLastSpanWithIORec(SpanNodeVO node) {
+        SpanNodeVO found = null;
+        if (node.getChildren() != null) {
+            for (var c : node.getChildren()) {
+                SpanNodeVO f = findL2OrLastSpanWithIORec(c);
+                if (f != null) found = f;
+            }
+        }
+        if (found != null) return found;
+        boolean hasIo = (node.getIoPrompt() != null && !node.getIoPrompt().isBlank())
+                || (node.getIoResponse() != null && !node.getIoResponse().isBlank());
+        return hasIo ? node : null;
+    }
+
+    private int nodeLayerRank(SpanNodeVO node) {
+        String op = node.getOperationName();
+        if (op == null) return 0;
+        if (op.startsWith("L2:")) return 3;
+        if (op.startsWith("L1")) return 2;
+        if (op.startsWith("L0:") || op.contains("DomainRouter")) return 1;
+        return 0;
+    }
+
     private String lastIntentOf(String flow) {
         if (flow == null || flow.isBlank()) return null;
         String[] parts = flow.split("\\s*→\\s*");
@@ -711,7 +842,19 @@ public class TraceQueryService {
     private Map<String, String> parseAttributes(String attributesJson) {
         if (attributesJson == null || attributesJson.isBlank()) return Map.of();
         try {
-            return objectMapper.readValue(attributesJson, new TypeReference<Map<String, String>>() {});
+            Map<String, String> raw = objectMapper.readValue(attributesJson, new TypeReference<Map<String, String>>() {});
+            // 清洗：session_id / sessionId / user_id / userId 可能携带换行或首尾空白
+            // （Core 早期未在入口 trim，导致 span 属性带 \n）。读取时统一 trim，
+            // 避免 trace 列表/详情显示 test3\n 以及 trace→session 关联失败。
+            for (String key : new String[]{"session_id", "sessionId", "user_id", "userId"}) {
+                String v = raw.get(key);
+                if (v != null) {
+                    String t = v.trim();
+                    if (t.isEmpty()) raw.remove(key);
+                    else if (!t.equals(v)) raw.put(key, t);
+                }
+            }
+            return raw;
         } catch (Exception e) {
             log.debug("[TraceQuery] Failed to parse attributes: {}", e.getMessage());
             return Map.of();
@@ -967,12 +1110,14 @@ public class TraceQueryService {
             }
         }
 
-        // intent / agentChain 由 trace 自身的业务 span 聚合得出（不再回退 Session.intentFlow 整条链）
-        vo.setIntent(buildIntentChainFromSpans(spans, sessionDomain));
         vo.setUserId(userId);
         vo.setSessionId(sessionId);
 
-        vo.setAgentChain(buildAgentChainFromSpans(spans));
+        // 单请求视角：意图与 Agent 路径取该 trace 内「最后一段」业务链，
+        // 避免把被多轮复用同一个 traceId 的整段会话当成一次请求（表现为"session 内容"）。
+        String[] summary = buildTraceSummaryFromSpans(spans);
+        vo.setIntent(summary[0] != null ? summary[0] : "未识别");
+        vo.setAgentChain(summary[1]);
         Long ttft = computeTTFT(spans);
         vo.setTtftMs(ttft != null ? ttft : null);
         long tokens = aggregateTokenTotal(spans);

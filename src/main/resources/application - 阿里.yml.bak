@@ -51,8 +51,8 @@ management:
 models:
   # L0 领域路由 - qwen2.5-7b-instruct 指令遵循更强
   domain:
-    base-url: ${DOMAIN_BASE_URL:https://token.sensenova.cn}    # L0 领域路由模型API地址
-    api-key: ${DOMAIN_API_KEY:sk-H7SWCDVdSXXSg12LGU5fzNKbdblyg5hz}                  # L0 领域路由模型API密钥
+    base-url: ${DOMAIN_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode}    # L0 领域路由模型API地址
+    api-key: ${DOMAIN_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                  # L0 领域路由模型API密钥
     model: ${DOMAIN_MODEL:qwen3.6-35b-a3b}                                                 # L0 领域路由模型名称
   # L1 上下文路由 (FOLLOW/SWITCH/RESUME)
   context:
