@@ -104,37 +104,54 @@ routing:
   # 意图注册表 — 新增意图只需在此添加,无需改Java代码
   # 每个意图对应一个L2子Graph, 由SubGraphRegistry在启动时读取
   intents:
+    # ★ domain + graph-bean 同时服务 L0/L1/Orchestration 三层 ★（domain/graph-bean 合并自主分支A）
     - name: TRANSFER             # 意图名(大写, 与GraphConfig中bindGraph()的名称一致)
+      domain: TRANSFER           # ← 所属领域 — Orchestration自动推导 domainAgent 的默认工具
+      graph-bean: transferGraph  # ← L2 CompiledGraph Bean — Orchestration自动绑定 L2GraphTool
       description: "转账给他人"   # 意图描述(LLM可见,用于意图识别)
       param-schema: "收款人名称, 转账金额, 用途(可选)"   # 参数schema(LLM可见,用于提参)
       is-write-op: true          # 是否为写操作(写操作需确认)
       intent-type: OPERATION     # 意图类型: OPERATION(操作) / QUERY(查询) / CONSULTATION(咨询)
       scope: "资金转账操作，将钱转给他人或理财产品等"      # 处理范围描述(供SubGraphRouter判断belongs_to_domain)
     - name: BILL_QUERY
+      domain: BILL
+      graph-bean: billQueryGraph
       description: "查询账单明细"
       param-schema: "时间范围, 支出/收入类型(可选)"
       is-write-op: false
       intent-type: QUERY
       scope: "账单/消费/收支明细查询"
     - name: WEALTH_CONSULT
+      domain: WEALTH
+      graph-bean: wealthConsultGraph
       description: "理财咨询/推荐"
       param-schema: "风险偏好(激进/稳健/保守), 关注领域(科技/能源/汽车/银行/工业/饮食/娱乐/全部, 可选, 默认全部)"
       is-write-op: false
       intent-type: CONSULTATION
       scope: "理财咨询与推荐，基于风险偏好推荐理财产品"
     - name: WEALTH_INTERPRET
+      domain: WEALTH
+      graph-bean: wealthInterpretGraph
       description: "理财产品解读"
       param-schema: "理财产品名称"
       is-write-op: false
       intent-type: CONSULTATION
       scope: "理财产品/标的解读，分析具体理财产品的详情"
+    - name: WEALTH_PURCHASE      # ← 合并自主分支A：理财产品购买
+      domain: WEALTH
+      graph-bean: wealthPurchaseGraph
+      description: "购买理财产品"
+      param-schema: "理财产品名称, 购买份额数"
+      is-write-op: true
+      intent-type: OPERATION
+      scope: "理财产品购买操作，买入指定理财产品的指定份额"
 
   # 意图消歧组 — 多个意图共享关键词时需要消歧追问
   # 当LLM无法区分具体意图时, 系统向用户追问以明确意图
   intent-groups:
     - group-id: WEALTH                          # 组ID(大写, L1可能返回此组名而非具体意图)
       display-name: "理财"                       # 组显示名(消歧追问时使用)
-      intent-names: [WEALTH_CONSULT, WEALTH_INTERPRET]   # 组内意图列表
+      intent-names: [WEALTH_CONSULT, WEALTH_INTERPRET, WEALTH_PURCHASE]   # 组内意图列表（合并自A: 新增WEALTH_PURCHASE）
       disambiguation-question: "请问您需要理财咨询还是理财产品解读？"  # 消歧追问话术
 
   # 领域关键词 — DomainRouter确定性路由使用
@@ -145,7 +162,7 @@ routing:
     BILL:
       keywords: ["账单", "明细", "消费", "支出", "收入", "收支", "开销", "流水", "开支"]                     # 账单领域关键词
     WEALTH:
-      keywords: ["理财", "投资", "收益", "基金", "推荐", "咨询", "解读", "股票"]                             # 理财领域关键词
+      keywords: ["理财", "投资", "收益", "基金", "推荐", "咨询", "解读", "股票", "购买", "买入", "买理财"]                             # 理财领域关键词（合并自A: 新增购买/买入/买理财）
     UNSUPPORTED:
       keywords: ["贷款", "信用卡", "活动", "积分", "开户", "挂失", "存款", "保险"]                           # 不支持的领域关键词(触发UNSUPPORTED回复)
 
@@ -192,3 +209,59 @@ memory:
 logging:
   level:
     com.mobileagent: DEBUG    # 项目日志级别: DEBUG / INFO / WARN / ERROR
+
+# ==================== 编排Agent配置 ====================
+# 新增域只需修改此段yml，无需改Java代码（合并自主分支A）
+orchestration:
+  # ★ routing.intents 是唯一真相源 ★
+  # agents 只需声明 domain → 本域工具从 routing.intents 自动推导
+  # tools 段仅用于跨域或额外工具
+  agents:
+    - name: transfer_agent
+      domain: TRANSFER          # ← 自动推导: routing.intents 中 domain=TRANSFER → transferGraph → 1个L2GraphTool
+      instruction: |
+        你是转账领域专家。根据用户输入，选择合适的工具执行转账相关操作。
+        可用工具：transfer（转账操作）。
+        当用户确认转账时，使用transfer工具。
+        注意：工具调用会返回"工具调用中"的占位字符串，这是正常的，不需要重复调用。
+        【L1上下文合并规则】当用户输入中包含"L1上下文"时，你必须将其中的信息（如收款人、金额等）与当前任务合并改写后再调用工具。例如：当前任务"转9000元" + L1上下文用户输入"给我妈转账一笔家用费用" → 合并为"转给我妈9000元"再调用transfer工具。
+      output-key: transfer_result
+
+    - name: bill_agent
+      domain: BILL              # ← 自动推导: routing.intents 中 domain=BILL → billQueryGraph → 1个L2GraphTool
+      instruction: |
+        你是账单查询专家。根据用户输入，使用工具查询账单信息。
+        可用工具：bill_query（查询账单）。
+        注意：工具调用会返回"工具调用中"的占位字符串，这是正常的，不需要重复调用。
+        【L1上下文合并规则】当用户输入中包含"L1上下文"时，你必须其中的信息与当前任务合并改写后再调用工具。
+      output-key: bill_result
+
+    - name: wealth_agent
+      domain: WEALTH            # ← 自动推导: routing.intents 中 domain=WEALTH → wealthConsultGraph+wealthInterpretGraph+wealthPurchaseGraph → 3个L2GraphTool
+      instruction: |
+        你是理财领域专家。根据用户输入，选择合适的工具执行理财相关操作。
+        可用工具：wealth_consult（理财咨询推荐）、wealth_interpret（理财产品解读）、wealth_purchase（购买理财产品）。
+        注意：工具调用会返回"工具调用中"的占位字符串，这是正常的，不需要重复调用。
+        【L1上下文合并规则】当用户输入中包含"L1上下文"时，你必须将其中的信息与当前任务合并改写后，再选择合适的工具调用。
+      # 如需跨域工具（如查询余额辅助理财决策），在此添加:
+      # tools:
+      #   - name: bill_query
+      #     graph-bean: billQueryGraph
+      #     description: 查询余额（跨域辅助工具）
+      output-key: wealth_result
+
+  # ★ 不再需要 routing 段 — domain→agent 映射从 agents[].domain + agents[].name 自动推导 ★
+
+  global:
+    recursion-limit: 50
+    timeout-seconds: 300
+    orch-max-messages: 6
+
+# ==================== 转账HTTP API配置 ====================
+# 转账L2子图改造为HTTP代理模式，通过此配置指定后端API地址和请求参数（合并自主分支A）
+transfer:
+  api:
+    url: ${TRANSFER_API_URL:http://localhost:8080/api/transfer}
+    params:
+      environment: "111-小红_积分转账通用账户.json"
+      node_check: "NO"
