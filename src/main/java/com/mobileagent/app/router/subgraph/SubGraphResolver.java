@@ -8,7 +8,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * 意图决议器 - 封装Phase2(改写+识别) + 消歧 + 模糊匹配
@@ -18,6 +17,8 @@ import java.util.Map;
  * - Controller不需要知道消歧细节，只看RoutingResolution.status
  * - 消歧1次追问，回答仍模糊则直接拒绝
  * - 不依赖AgentStateManager，消歧状态由WealthService自管，通过参数传入
+ *
+ * RESUME决策不在本层: 本层只输出SWITCH，由executeRoute根据suspendedAgents状态决定是否resume。
  *
  * 置信度增强消歧:
  * - 不完全依赖LLM的is_ambiguous自标记，结合confidence量化判断
@@ -55,8 +56,6 @@ public class SubGraphResolver {
     public RoutingResolution resolve(String sessionId, String userInput, RoutingResult phase1Result,
                                       String chatHistory,
                                       boolean inDisambiguation, String disambiguationGroupId,
-                                      boolean hasSuspendedAgents,
-                                      Map<String, ?> suspendedAgents,
                                       String intentRoutingTemplatePath,
                                       String domainIntentScopeList) {
         if (inDisambiguation) {
@@ -65,44 +64,36 @@ public class SubGraphResolver {
                 return RoutingResolution.cancelled();
             }
             return handleDisambiguationAnswer(sessionId, userInput, phase1Result, chatHistory,
-                    disambiguationGroupId, hasSuspendedAgents, suspendedAgents, intentRoutingTemplatePath,
+                    disambiguationGroupId, intentRoutingTemplatePath,
                     domainIntentScopeList);
         }
         return resolveNewIntention(sessionId, userInput, phase1Result, chatHistory,
-                hasSuspendedAgents, suspendedAgents, intentRoutingTemplatePath,
-                domainIntentScopeList);
+                intentRoutingTemplatePath, domainIntentScopeList);
     }
 
     private RoutingResolution resolveNewIntention(String sessionId, String userInput, RoutingResult phase1Result,
                                                     String chatHistory,
-                                                    boolean hasSuspendedAgents,
-                                                    Map<String, ?> suspendedAgents,
                                                     String intentRoutingTemplatePath,
                                                     String domainIntentScopeList) {
         String currentAgent = phase1Result.getRouteType() != null ? phase1Result.getRouteType() : "无";
-        String pendingAgents = hasSuspendedAgents
-                ? String.join(", ", suspendedAgents.keySet())
-                : "无";
-        String sessionState = "Phase1路由: " + phase1Result.getRouteType();
-        String disambigContext = "无";
 
         RoutingResult phase2 = subGraphRouter.rewriteAndIdentify(sessionId, userInput, phase1Result,
-                currentAgent, pendingAgents, sessionState, disambigContext,
+                currentAgent, null, null,
                 intentRoutingTemplatePath, chatHistory, domainIntentScopeList);
         log.info("[SubGraphResolver] Phase2: intent={}, ambiguous={}, confidence={}, candidates={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence(), phase2.getCandidateIntents());
 
         if (phase2.isAmbiguous() && phase2.getCandidateIntents() != null && !phase2.getCandidateIntents().isEmpty()) {
-            if (phase2.getConfidence() < highConfidenceBypass) {
-                String groupId = resolveGroupId(phase2.getGroupId(), phase2.getCandidateIntents());
-                if (groupId != null && subGraphRegistry.getGroup(groupId) != null) {
-                    log.info("[SubGraphResolver] Disambiguation: ambiguous + low confidence ({}) < bypass ({})",
-                            phase2.getConfidence(), highConfidenceBypass);
-                    return triggerDisambiguation(groupId, phase2);
-                }
+            // 模型主动标了is_ambiguous=true且有候选意图 → 直接触发消歧，不信任confidence
+            String groupId = resolveGroupId(phase2.getCandidateIntents());
+            if (groupId != null && subGraphRegistry.getGroup(groupId) != null) {
+                log.info("[SubGraphResolver] Disambiguation: model flagged ambiguous, candidates={}, confidence={} (bypass ignored)",
+                        phase2.getCandidateIntents(), phase2.getConfidence());
+                return triggerDisambiguation(groupId, phase2);
             }
-            log.info("[SubGraphResolver] Ambiguous but high confidence ({}) >= bypass ({}), trusting top intent: {}",
-                    phase2.getConfidence(), highConfidenceBypass, phase2.getIntentName());
+            // 候选意图不属于任何已知消歧组 → 信任首选意图
+            log.info("[SubGraphResolver] Ambiguous but candidates not in any known group, trusting top intent: {}",
+                    phase2.getIntentName());
         }
 
         String effectiveIntent = phase2.getIntentName();
@@ -149,8 +140,8 @@ public class SubGraphResolver {
             log.info("[SubGraphResolver] Fuzzy matched to: {}", effectiveIntent);
         }
 
-        String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
-        return RoutingResolution.resolved(effectiveIntent, rewrittenInput, routeType);
+        // RESUME由executeRoute根据suspendedAgents状态决定，本层统一输出SWITCH
+        return RoutingResolution.resolved(effectiveIntent, rewrittenInput, "SWITCH");
     }
 
     private RoutingResolution triggerDisambiguation(String groupId, RoutingResult phase2) {
@@ -169,8 +160,6 @@ public class SubGraphResolver {
                                                               RoutingResult phase1Result,
                                                               String chatHistory,
                                                               String disambiguationGroupId,
-                                                              boolean hasSuspendedAgents,
-                                                              Map<String, ?> suspendedAgents,
                                                               String intentRoutingTemplatePath,
                                                               String domainIntentScopeList) {
         if (disambiguationGroupId == null) {
@@ -183,10 +172,6 @@ public class SubGraphResolver {
         }
 
         String currentAgent = "消歧模式";
-        String pendingAgents = hasSuspendedAgents
-                ? String.join(", ", suspendedAgents.keySet())
-                : "无";
-        String sessionState = "消歧中: 意图组=" + disambiguationGroupId;
 
         StringBuilder sb = new StringBuilder();
         sb.append("系统追问: \"").append(group.getDisambiguationQuestion()).append("\"\n");
@@ -205,7 +190,7 @@ public class SubGraphResolver {
         RoutingResult rePhase1 = RoutingResult.builder()
                 .routeType("SWITCH").confidence(0.8).reasoning("消歧回答重新识别").build();
         RoutingResult phase2 = subGraphRouter.rewriteAndIdentify(sessionId, userInput, rePhase1,
-                currentAgent, pendingAgents, sessionState, disambigContext,
+                currentAgent, null, disambigContext,
                 intentRoutingTemplatePath, chatHistory, domainIntentScopeList);
         log.info("[SubGraphResolver] Disambiguation re-identify: intent={}, ambiguous={}, confidence={}",
                 phase2.getIntentName(), phase2.isAmbiguous(), phase2.getConfidence());
@@ -221,9 +206,8 @@ public class SubGraphResolver {
             log.info("[SubGraphResolver] Disambiguation resolved (in-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
-            String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
             String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
-            return RoutingResolution.resolved(identifiedIntent, rewrittenInput, routeType);
+            return RoutingResolution.resolved(identifiedIntent, rewrittenInput, "SWITCH");
         }
 
         if (identifiedIntent != null
@@ -233,9 +217,8 @@ public class SubGraphResolver {
             log.info("[SubGraphResolver] Disambiguation resolved (out-group intent): intent={}, confidence={}",
                     identifiedIntent, phase2.getConfidence());
 
-            String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
             String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
-            return RoutingResolution.resolved(identifiedIntent, rewrittenInput, routeType);
+            return RoutingResolution.resolved(identifiedIntent, rewrittenInput, "SWITCH");
         }
 
         if (identifiedIntent != null
@@ -245,41 +228,15 @@ public class SubGraphResolver {
             log.info("[SubGraphResolver] Disambiguation resolved (group name, using first candidate): group={}, default={}",
                     identifiedIntent, defaultIntent);
 
-            String routeType = resolveRouteType(phase1Result, phase2, hasSuspendedAgents, suspendedAgents);
             String rewrittenInput = phase2.getRewrittenInput() != null ? phase2.getRewrittenInput() : userInput;
-            return RoutingResolution.resolved(defaultIntent, rewrittenInput, routeType);
+            return RoutingResolution.resolved(defaultIntent, rewrittenInput, "SWITCH");
         }
 
         log.info("[SubGraphResolver] Disambiguation answer still ambiguous → rejected");
         return RoutingResolution.rejected();
     }
 
-    private String resolveRouteType(RoutingResult phase1Result, RoutingResult phase2,
-                                     boolean hasSuspendedAgents, Map<String, ?> suspendedAgents) {
-        if (phase2.getRefinedRouteType() != null) {
-            return phase2.getRefinedRouteType();
-        }
-        if (phase1Result.isResume()) {
-            return "RESUME";
-        }
-        String effectiveIntent = phase2.getIntentName();
-        if (effectiveIntent != null && !"UNKNOWN".equalsIgnoreCase(effectiveIntent) && hasSuspendedAgents) {
-            if (suspendedAgents.containsKey(effectiveIntent)) {
-                log.info("[SubGraphResolver] State-based RESUME override: intent={} is in suspendedAgents (phase1 was {})",
-                        effectiveIntent, phase1Result.getRouteType());
-                return "RESUME";
-            }
-        }
-        if (phase1Result.isFollow()) {
-            return "SWITCH";
-        }
-        return phase1Result.getRouteType() != null ? phase1Result.getRouteType() : "SWITCH";
-    }
-
-    private String resolveGroupId(String phase2GroupId, List<String> candidateIntents) {
-        if (phase2GroupId != null) {
-            return phase2GroupId;
-        }
+    private String resolveGroupId(List<String> candidateIntents) {
         if (candidateIntents != null && !candidateIntents.isEmpty()) {
             for (String candidate : candidateIntents) {
                 SubGraphRegistry.IntentGroup group = subGraphRegistry.findGroupByIntent(candidate);

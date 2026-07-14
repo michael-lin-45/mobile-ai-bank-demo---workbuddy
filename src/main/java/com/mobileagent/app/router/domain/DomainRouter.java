@@ -5,6 +5,8 @@ import com.mobileagent.app.data.SubGraphProperties;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.observability.AgentSpanContext;
 import com.mobileagent.app.observability.ObservabilityMetrics;
+import com.mobileagent.app.orchestration.OrchestrationStateService;
+import com.mobileagent.app.orchestration.model.OrchestrationStatus;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
 import io.opentelemetry.api.GlobalOpenTelemetry;
@@ -27,6 +29,10 @@ import java.util.*;
  *
  * 领域关键词从 application.yml 的 routing.domains 读取，
  * 新增领域只需改yml，无需改Java代码。
+ *
+ * 合并说明: 以主分支A的逻辑为骨架(ORCHESTRATION域处理 + 编排激活强制路由ORCHESTRATION
+ * + 确定性路由仅短路UNSUPPORTED)，保留本分支B的可观测埋点
+ * (AgentSpanContext托管span / ObservabilityMetrics路由与意图计数 / OTel L0 span)。
  */
 @Slf4j
 @Component
@@ -35,6 +41,7 @@ public class DomainRouter {
     private final Map<String, Set<String>> domainKeywords;
 
     private static final String UNSUPPORTED_DOMAIN = "UNSUPPORTED";
+    private static final String ORCHESTRATION_DOMAIN = "ORCHESTRATION";
 
     private final ChatClient domainChatClient;
     private final GlobalSessionStateStore globalSessionStore;
@@ -42,6 +49,7 @@ public class DomainRouter {
     private final ObjectMapper objectMapper;
     private final int l0MaxPairs;
     private final long lastDomainExpireMinutes;
+    private final OrchestrationStateService orchStateService;
 
     public DomainRouter(@Qualifier("domainChatClient") ChatClient domainChatClient,
                         GlobalSessionStateStore globalSessionStore,
@@ -49,13 +57,15 @@ public class DomainRouter {
                         SubGraphProperties routingProperties,
                         ObjectMapper objectMapper,
                         @org.springframework.beans.factory.annotation.Value("${routing.history.l0-max-pairs:10}") int l0MaxPairs,
-                        @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes) {
+                        @org.springframework.beans.factory.annotation.Value("${session.last-domain.expire-minutes:5}") long lastDomainExpireMinutes,
+                        OrchestrationStateService orchStateService) {
         this.domainChatClient = domainChatClient;
         this.globalSessionStore = globalSessionStore;
         this.obsMetrics = obsMetrics;
         this.objectMapper = objectMapper;
         this.l0MaxPairs = l0MaxPairs;
         this.lastDomainExpireMinutes = lastDomainExpireMinutes;
+        this.orchStateService = orchStateService;
 
         Map<String, Set<String>> keywords = new LinkedHashMap<>();
         for (var entry : routingProperties.getDomains().entrySet()) {
@@ -76,16 +86,22 @@ public class DomainRouter {
     // ==================== 主入口 ====================
 
     public DomainResult route(String sessionId, String userInput, Set<String> excludedDomains) {
-        // 1. 确定性路由: 关键词匹配
+        // Orchestration-aware routing: if orchestration is active (WAITING_USER), force route to ORCHESTRATION
+        OrchestrationStateService.OrchestrationState orchState = orchStateService.getOrCheckExpired(sessionId);
+        if (orchState != null && orchState.getStatus() == OrchestrationStatus.WAITING_USER) {
+            log.info("[DomainRouter] Orchestration active (WAITING_USER), forcing route to ORCHESTRATION for session={}", sessionId);
+            obsMetrics.recordIntentRecognized(ORCHESTRATION_DOMAIN, 1.0);
+            obsMetrics.recordRouterDecision("L0", "orch_active", ORCHESTRATION_DOMAIN);
+            return new DomainResult(ORCHESTRATION_DOMAIN, null, 1.0, "ORCHESTRATION:active");
+        }
+
+        // 1. 确定性路由: 关键词匹配 (仅用于UNSUPPORTED等无需LLM的场景)
+        // 正常意图判断交给LLM，避免关键词误判多意图
         DomainResult deterministic = routeDeterministic(userInput);
-        if (deterministic != null && !excludedDomains.contains(deterministic.domain())) {
-            // ── 可观测补全（方案A）──────────────────────────────────────────────
+        if (deterministic != null && UNSUPPORTED_DOMAIN.equals(deterministic.domain())
+                && !excludedDomains.contains(deterministic.domain())) {
+            // ── 可观测补全（保留B）──────────────────────────────────────────────
             // 确定性路由虽不调 LLM，仍显式创建 L0 span，保证 L0 计数 = 请求数
-            // （与 L1 持平 → L2≤L0 恒成立），且 trace 瀑布层级完整。
-            // 直接经 OTel Tracer 创建（不经 LLM 路径的 ObsChatModel），parent 自动取
-            // 当前 server span（与 LLM 路径一致）。绝不 makeCurrent——避免线程 OTel
-            // 上下文栈残留 → traceId 跨请求泄漏（历史已修复的 98968ms 异常本源）。
-            // span 仅覆盖路由决策，立即 end()，无悬挂风险。
             Span l0Span = GlobalOpenTelemetry.getTracer("obs-chat-model")
                     .spanBuilder("L0:DomainRouter")
                     .setSpanKind(SpanKind.INTERNAL)
@@ -101,7 +117,7 @@ public class DomainRouter {
             }
 
             updateLastDomain(sessionId, deterministic.domain());
-            log.info("[DomainRouter] Deterministic: domain={} for input='{}'", deterministic.domain(), userInput);
+            log.info("[DomainRouter] Deterministic (UNSUPPORTED): domain={} for input='{}'", deterministic.domain(), userInput);
             obsMetrics.recordRouterHit();
             obsMetrics.recordIntentRecognized(deterministic.domain(), deterministic.confidence());
             obsMetrics.recordRouterDecision("L0", "hit", deterministic.domain());
@@ -128,8 +144,8 @@ public class DomainRouter {
                         .call()
                         .content();
             } catch (Exception e) {
-                // LLM 调用失败：ObsChatModel 已在异常路径自行 end span；此处回填兜底领域(lastDomain/CHAT)并清理上下文
-                ctx.commitIntent(resolveFallbackDomain(sessionId, excludedDomains), java.util.Map.of());
+                // LLM 调用失败：ObsChatModel 已在异常路径自行 end span；此处回填兜底领域(CHAT)并清理上下文
+                ctx.commitIntent("CHAT", java.util.Map.of());
                 throw e;
             }
             obsMetrics.stopLlmTimer(llmSample);
@@ -152,11 +168,10 @@ public class DomainRouter {
             return result;
 
         } catch (Exception e) {
-            String fallback = resolveFallbackDomain(sessionId, excludedDomains);
-            log.error("[DomainRouter] LLM call failed, falling back to '{}'", fallback, e);
+            log.error("[DomainRouter] LLM call failed, defaulting to CHAT", e);
             obsMetrics.recordRouterFail();
-            obsMetrics.recordRouterDecision("L0", "fail", fallback);
-            return new DomainResult(fallback, null, 0.3, null);
+            obsMetrics.recordRouterDecision("L0", "fail", "CHAT");
+            return new DomainResult("CHAT", null, 0.3, null);
         } finally {
             // 兜底：若上方未成功 commit（如埋点/状态更新异常），仍结束 held span 并清理 ThreadLocal，防止 span 泄漏
             AgentSpanContext.clear();
@@ -192,8 +207,8 @@ public class DomainRouter {
         }
 
         if (hitDomains.size() > 1) {
-            log.info("[DomainRouter] Multi-domain keywords hit {}, delegating to LLM for input='{}'", hitDomains, input);
-            return null;
+            log.info("[DomainRouter] Multi-domain keywords hit {}, routing to ORCHESTRATION for input='{}'", hitDomains, input);
+            return ORCHESTRATION_DOMAIN;
         }
 
         if (hitDomains.size() == 1) return hitDomains.get(0);
@@ -205,6 +220,26 @@ public class DomainRouter {
             if (input.contains(keyword)) return true;
         }
         return false;
+    }
+
+    /**
+     * Find which domains have keywords matching the given input.
+     * Used by OrchestrationAgent for L1 context classification (inherit vs preserve).
+     *
+     * @param userInput user input to match against domain keywords
+     * @return set of domain names whose keywords match the input
+     */
+    public Set<String> findDomainsInInput(String userInput) {
+        if (userInput == null || userInput.isBlank()) return Set.of();
+        String input = userInput.trim();
+        Set<String> result = new LinkedHashSet<>();
+        for (var entry : domainKeywords.entrySet()) {
+            if (UNSUPPORTED_DOMAIN.equals(entry.getKey())) continue;
+            if (containsAny(input, entry.getValue())) {
+                result.add(entry.getKey());
+            }
+        }
+        return result;
     }
 
     private String extractUnsupportedFeature(String input) {
@@ -233,21 +268,6 @@ public class DomainRouter {
 
     public void clearLastDomain(String sessionId) {
         globalSessionStore.getOrCreate(sessionId).clearLastDomain();
-    }
-
-    /**
-     * LLM 不可用时的兜底领域：优先沿用最近活跃领域(lastDomain)，否则退回 CHAT。
-     * 这样多轮追问（如「张三」）在 LLM 故障时仍能留在原流程，而非被踢进闲聊。
-     */
-    private String resolveFallbackDomain(String sessionId, Set<String> excludedDomains) {
-        String lastDomain = globalSessionStore.getOrCreate(sessionId).getLastDomain();
-        if (lastDomain != null && !"CHAT".equals(lastDomain) && !UNSUPPORTED_DOMAIN.equals(lastDomain)
-                && (excludedDomains == null || !excludedDomains.contains(lastDomain))) {
-            updateLastDomain(sessionId, lastDomain); // 续期，保持会话延续
-            log.warn("[DomainRouter] LLM unavailable, falling back to last domain: {}", lastDomain);
-            return lastDomain;
-        }
-        return "CHAT";
     }
 
     private String formatExcludedDomainsContext(Set<String> excludedDomains) {
@@ -299,6 +319,7 @@ public class DomainRouter {
         if (domain == null) return "CHAT";
         String upper = domain.toUpperCase();
         if (domainKeywords.containsKey(upper)) return upper;
+        if (ORCHESTRATION_DOMAIN.equals(upper)) return upper;
         return "CHAT";
     }
 

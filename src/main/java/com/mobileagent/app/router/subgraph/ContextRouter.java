@@ -13,16 +13,20 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 /**
- * 上下文路由器 - Phase1: 使用LLM判断意图类型 (FOLLOW / SWITCH / RESUME)
+ * 上下文路由器 - Phase1: 使用LLM判断意图类型 (FOLLOW / SWITCH / CANCEL)
  *
  * 设计:
- * - 全部走LLM判断,不做确定性规则短路(避免误判)
+ * - 无活跃意图时(hasActiveAgent=false)直接短路返回SWITCH，省一次LLM调用
+ * - 有活跃意图时走LLM判断FOLLOW/SWITCH/CANCEL
  * - 调用方传入已格式化的chatHistory字符串，本类不再自行读取ChatMemory
- * - 不依赖AgentStateManager，由L1 Service传入状态字符串(currentAgent, pendingAgents, sessionState)
+ * - 不依赖AgentStateManager，由L1 Service传入状态字符串(currentAgent, sessionState)
+ *
+ * RESUME是纯粹的代码行为: executeRoute根据suspendedAgents状态决定是否resume，
+ * 不由LLM判断，也不经过本路由器输出。
  *
  * 支持两种模板:
- * - 默认(l1-context.st): 理财L1使用,包含FOLLOW/SWITCH/RESUME三种
- * - 简化(l1-context-simple.st): 转账/账单L1使用,只有FOLLOW/SWITCH两种
+ * - 默认(l1-context.st): 理财L1使用,包含FOLLOW/SWITCH/CANCEL三种
+ * - 简化(l1-context-simple.st): 转账/账单L1使用,包含FOLLOW/SWITCH/CANCEL三种
  */
 @Slf4j
 @Service
@@ -48,8 +52,8 @@ public class ContextRouter {
      *
      * @param sessionId 会话ID
      * @param userInput 用户输入
-     * @param currentAgent 当前活跃意图名称(如"TRANSFER"或"无")
-     * @param pendingAgents 挂起的意图列表描述(如"WEALTH_CONSULT, WEALTH_INTERPRET"或"无")
+     * @param currentAgent 当前活跃意图名称(如"TRANSFER")，无活跃意图时传null
+     * @param hasActiveAgent 是否存在活跃意图(用于短路判断，避免魔法字符串)
      * @param templatePath 提示词模板路径
      * @param domainName 领域名称
      * @param chatHistory 已格式化的对话历史字符串(由调用方从GlobalSessionContext.messages获取)
@@ -57,12 +61,23 @@ public class ContextRouter {
      * @return 路由结果(至少包含routeType)
      */
     public RoutingResult route(String sessionId, String userInput,
-                               String currentAgent, String pendingAgents,
+                               String currentAgent, boolean hasActiveAgent,
                                String templatePath, String domainName, String chatHistory,
                                String lastQuestion) {
+        // 无活跃意图 → FOLLOW/CANCEL无意义，直接SWITCH（省一次LLM调用）
+        if (!hasActiveAgent) {
+            log.info("[ContextRouter] No active agent → short-circuit SWITCH | sessionId={}", sessionId);
+            return RoutingResult.builder()
+                    .routeType("SWITCH")
+                    .confidence(1.0)
+                    .reasoning("无活跃意图，必定为新意图")
+                    .build();
+        }
+
         try {
-            String sessionState = buildSessionStateDescription(currentAgent, pendingAgents);
-            String systemPrompt = buildRoutingSystemPrompt(userInput, currentAgent, pendingAgents,
+            String currentAgentDisplay = currentAgent != null ? currentAgent : "无";
+            String sessionState = buildSessionStateDescription(currentAgentDisplay);
+            String systemPrompt = buildRoutingSystemPrompt(userInput, currentAgentDisplay,
                     sessionState, templatePath, domainName, chatHistory, lastQuestion);
 
             long startMs = System.currentTimeMillis();
@@ -77,7 +92,7 @@ public class ContextRouter {
                         .content();
             } catch (Exception e) {
                 // LLM 调用失败：ObsChatModel 已在异常路径自行 end span；此处回填兜底 routeType 并清理
-                ctx.commitIntent(resolveFallbackRouteType(currentAgent, lastQuestion), java.util.Map.of());
+                ctx.commitIntent(resolveFallbackRouteType(currentAgentDisplay, lastQuestion), java.util.Map.of());
                 throw e;
             }
             long elapsedMs = System.currentTimeMillis() - startMs;
@@ -107,21 +122,15 @@ public class ContextRouter {
         }
     }
 
-    private String buildSessionStateDescription(String currentAgent, String pendingAgents) {
-        StringBuilder sb = new StringBuilder();
+    private String buildSessionStateDescription(String currentAgent) {
         if (currentAgent != null && !"无".equals(currentAgent)) {
-            sb.append("当前活跃意图: ").append(currentAgent);
-        } else {
-            sb.append("当前无活跃意图");
+            return "当前活跃意图: " + currentAgent;
         }
-        if (pendingAgents != null && !"无".equals(pendingAgents)) {
-            sb.append("\n挂起的意图: ").append(pendingAgents);
-        }
-        return sb.toString();
+        return "当前无活跃意图";
     }
 
     private String buildRoutingSystemPrompt(String userInput,
-                                             String currentAgent, String pendingAgents,
+                                             String currentAgent,
                                              String sessionState,
                                              String templatePath, String domainName,
                                              String chatHistory, String lastQuestion) {
@@ -142,10 +151,12 @@ public class ContextRouter {
                     例: 问题"风险偏好？"，用户"稳健" → FOLLOW
                     例: 问题"转给谁？"，用户"张三" → FOLLOW
                     例: 问题"金额？"，用户"500" → FOLLOW
+                  - 取消/放弃(如"算了""不转了""取消") → CANCEL
+                    例: 问题"转给谁？"，用户"不转了" → CANCEL（取消当前操作，不是回答问题）
+                    例: 问题"金额？"，用户"算了" → CANCEL
                   - 否(用户提出了新问题/新需求/与问题无关) → SWITCH
                     例: 问题"风险偏好？"，用户"什么是风险等级" → SWITCH（不是在回答，是在反问）
                     例: 问题"转给谁？"，用户"查账单" → SWITCH（完全无关）
-                    例: 问题"金额？"，用户"算了不转了" → FOLLOW（取消=回应当前agent）
                 """.formatted(lastQuestion);
         } else {
             lastQuestionContext = "";
@@ -156,7 +167,6 @@ public class ContextRouter {
                 .replace("{message}", userInput)
                 .replace("{current_agent}", currentAgent)
                 .replace("{last_agent}", currentAgent)
-                .replace("{pending_agents}", pendingAgents)
                 .replace("{session_state}", sessionState)
                 .replace("{chat_history}", chatHistory)
                 .replace("{last_question_context}", lastQuestionContext);
@@ -200,8 +210,11 @@ public class ContextRouter {
         }
         return switch (routeType.toUpperCase()) {
             case "CONTINUE_FOLLOWUP", "FOLLOW" -> "FOLLOW";
+            case "CANCEL_OPERATION", "CANCEL" -> "CANCEL";
             case "SWITCH_DIRECT", "SWITCH_COMPLEX", "SWITCH" -> "SWITCH";
-            case "CONTINUE_RESUME", "RESUME_PENDING", "RESUME" -> "RESUME";
+            // RESUME — 代码根据suspendedAgents状态决定，不由LLM输出。
+            // 若LLM意外输出RESUME，视为SWITCH（下游executeRoute根据状态自动resume）
+            case "CONTINUE_RESUME", "RESUME_PENDING", "RESUME" -> "SWITCH";
             default -> "SWITCH";
         };
     }

@@ -135,11 +135,10 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     private Flux<StreamChunk> handleWithLastQuestion(String sessionId, String userInput,
                                                       ActiveAgentInfo ownActive) {
         String currentAgent = ownActive.getIntent();
-        String pendingAgents = "无";
         String chatHistory = getFormattedChatHistory(sessionId);
 
         RoutingResult phase1 = contextRouter.route(sessionId, userInput,
-                currentAgent, pendingAgents,
+                currentAgent, true,
                 contextRoutingTemplatePath, domainName, chatHistory,
                 ownActive.getLastQuestion());
         log.info("[{}] Phase1 (activeAgent+lastQuestion): routeType={}, confidence={}",
@@ -149,8 +148,21 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
             return resumeActiveAgent(sessionId, userInput, ownActive);
         }
 
+        // CANCEL: user explicitly cancels current active operation
+        if (phase1.isCancel()) {
+            var graph = subGraphRegistry.getGraph(ownActive.getIntent());
+            if (graph != null) {
+                log.info("[{}] CANCEL: cancelling activeAgent intent={}, threadId={}",
+                        logTag, ownActive.getIntent(), ownActive.getThreadId());
+                return graphExecutionEngine.cancelGraph(graph, ownActive.getIntent(), ownActive.getThreadId(), userInput)
+                        .doOnNext(chunk -> handleActiveAgentState(sessionId, chunk));
+            }
+            // No graph → fallback SWITCH
+            log.info("[{}] CANCEL but no graph for intent={} → fallback to SWITCH", logTag, ownActive.getIntent());
+        }
+
         RoutingResult phase2 = runSubGraphRouter(sessionId, userInput, phase1,
-                currentAgent, pendingAgents);
+                currentAgent);
 
         if (!phase2.isBelongsToDomain()) {
             log.info("[{}] REROUTE: belongsToDomain=false, intent={}", logTag, phase2.getIntentName());
@@ -164,18 +176,17 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     }
 
     private Flux<StreamChunk> handleNewIntention(String sessionId, String userInput) {
-        String currentAgent = "无";
-        String pendingAgents = "无";
         String chatHistory = getFormattedChatHistory(sessionId);
 
+        // 无活跃意图 → ContextRouter直接短路SWITCH，省一次LLM调用
         RoutingResult phase1 = contextRouter.route(sessionId, userInput,
-                currentAgent, pendingAgents,
+                null, false,
                 contextRoutingTemplatePath, domainName, chatHistory, null);
         log.info("[{}] Phase1 (no activeAgent): routeType={}, confidence={}",
                 logTag, phase1.getRouteType(), phase1.getConfidence());
 
         RoutingResult phase2 = runSubGraphRouter(sessionId, userInput, phase1,
-                currentAgent, pendingAgents);
+                "无");
 
         if (!phase2.isBelongsToDomain()) {
             log.info("[{}] REROUTE: belongsToDomain=false, intent={}", logTag, phase2.getIntentName());
@@ -187,14 +198,12 @@ public class SingleSubAgentDomainService extends AbstractDomainService {
     }
 
     private RoutingResult runSubGraphRouter(String sessionId, String userInput, RoutingResult phase1,
-                                           String currentAgent, String pendingAgents) {
-        String sessionState = "Phase1路由: " + phase1.getRouteType();
-        String disambigContext = "无";
+                                           String currentAgent) {
         String domainIntentScopeList = subGraphRegistry.getDomainIntentScopeDescription(List.of(intent));
         String chatHistory = getFormattedChatHistory(sessionId);
 
         RoutingResult phase2 = subGraphRouter.rewriteAndIdentify(sessionId, userInput, phase1,
-                currentAgent, pendingAgents, sessionState, disambigContext,
+                currentAgent, null, null,
                 intentRoutingTemplatePath, chatHistory, domainIntentScopeList);
         log.info("[{}] Phase2 SubGraphRouter: intent={}, belongsToDomain={}, rewritten=[{}]",
                 logTag, phase2.getIntentName(), phase2.isBelongsToDomain(), phase2.getRewrittenInput());

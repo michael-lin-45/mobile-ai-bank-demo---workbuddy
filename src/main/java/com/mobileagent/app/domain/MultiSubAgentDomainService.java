@@ -217,22 +217,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         });
     }
 
-    private boolean hasOwnSuspendedAgents(String sessionId) {
-        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
-        DomainState ds = ctx.getDomainState(getStateKey());
-        if (ds == null || ds.getSuspendedAgents() == null || ds.getSuspendedAgents().isEmpty()) {
-            return false;
-        }
-
-        // 惰性清理过期项
-        ds.getSuspendedAgents().entrySet().removeIf(e -> e.getValue().isExpired());
-        if (ds.getSuspendedAgents().isEmpty()) {
-            ctx.updateDomainState(getStateKey(), d -> d.setSuspendedAgents(null));
-            return false;
-        }
-        return true;
-    }
-
     // ==================== 消歧管理 ====================
 
     private boolean isInDisambiguation(String sessionId) {
@@ -257,12 +241,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         ctx.updateDomainState(getStateKey(), ds -> ds.setDisambiguation(null));
     }
 
-    public String getPendingAgentsDescription(String sessionId) {
-        Map<String, SuspendedInfo> suspended = getAllOwnSuspended(sessionId);
-        if (suspended.isEmpty()) return "无";
-        return String.join(", ", suspended.keySet());
-    }
-
     // ==================== 主入口 ====================
 
     @Override
@@ -270,15 +248,13 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         log.info("[{}] Handling: sessionId={}, input={}", logTag, sessionId, userInput);
 
         try {
-            String currentAgent = buildCurrentAgent(sessionId);
-            String pendingAgents = getPendingAgentsDescription(sessionId);
-
             ActiveAgentInfo activeAgentForRouting = getOwnActiveAgent(sessionId);
-            String lastQuestion = (activeAgentForRouting != null) ? activeAgentForRouting.getLastQuestion() : null;
+            boolean hasActiveAgent = activeAgentForRouting != null;
+            String lastQuestion = hasActiveAgent ? activeAgentForRouting.getLastQuestion() : null;
             String chatHistory = getFormattedChatHistory(sessionId);
 
             RoutingResult phase1 = contextRouter.route(sessionId, userInput,
-                    currentAgent, pendingAgents,
+                    buildCurrentAgent(sessionId), hasActiveAgent,
                     contextRoutingTemplatePath, domainName, chatHistory, lastQuestion);
             log.info("[{}] Phase1: routeType={}, confidence={}", logTag, phase1.getRouteType(), phase1.getConfidence());
 
@@ -288,19 +264,38 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                     return resumeActiveAgent(sessionId, userInput, activeAgent);
                 }
 
-                if (!hasOwnSuspendedAgents(sessionId)) {
-                    log.info("[{}] FOLLOW but no context → fallback to SWITCH", logTag);
-                    phase1 = RoutingResult.builder()
-                            .routeType("SWITCH").confidence(0.5)
-                            .reasoning("FOLLOW但无活跃线程,降级为新意图").build();
-                }
-            }
-
-            if ("RESUME".equals(phase1.getRouteType()) && !hasOwnSuspendedAgents(sessionId)) {
-                log.info("[{}] RESUME but no suspended agents → fallback to SWITCH", logTag);
+                // FOLLOW but no activeAgent (should not happen after hasActiveAgent short-circuit,
+                // but kept as defensive check)
+                log.info("[{}] FOLLOW but no activeAgent → fallback to SWITCH", logTag);
                 phase1 = RoutingResult.builder()
                         .routeType("SWITCH").confidence(0.5)
-                        .reasoning("RESUME但无挂起线程,降级为新意图").build();
+                        .reasoning("FOLLOW但无活跃意图,降级为新意图").build();
+            }
+
+            // CANCEL: user explicitly cancels current active operation
+            // - cancelGraph injects _cancelSignal + resumes L2, L2 detects and routes to cancelExecution
+            // - clear activeAgent + suspendedAgent for the cancelled intent
+            if (phase1.isCancel()) {
+                ActiveAgentInfo activeAgent = getOwnActiveAgent(sessionId);
+                if (activeAgent != null) {
+                    var graph = subGraphRegistry.getGraph(activeAgent.getIntent());
+                    if (graph != null) {
+                        String intent = activeAgent.getIntent();
+                        String threadId = activeAgent.getThreadId();
+                        log.info("[{}] CANCEL: cancelling activeAgent intent={}, threadId={}", logTag, intent, threadId);
+
+                        // Remove from suspendedAgents if present (interrupt writes to both active+suspended)
+                        removeOwnSuspendedAgent(sessionId, intent);
+
+                        return graphExecutionEngine.cancelGraph(graph, intent, threadId, userInput)
+                                .doOnNext(chunk -> handleActiveAgentState(sessionId, chunk));
+                    }
+                }
+                // No activeAgent → fallback SWITCH (nothing to cancel)
+                log.info("[{}] CANCEL but no activeAgent → fallback to SWITCH", logTag);
+                phase1 = RoutingResult.builder()
+                        .routeType("SWITCH").confidence(0.5)
+                        .reasoning("CANCEL但无活跃线程,降级为新意图").build();
             }
 
             DisambiguationState disambigState = getDisambiguationState(sessionId);
@@ -310,7 +305,6 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
             RoutingResolution resolution = intentResolver.resolve(sessionId, userInput, phase1, chatHistory,
                     isInDisambiguation(sessionId), disambigGroupId,
-                    hasOwnSuspendedAgents(sessionId), getAllOwnSuspended(sessionId),
                     intentRoutingTemplatePath, domainIntentScopeList);
 
             log.info("[{}] Routing resolution: status={}, intent={}, outOfDomain={}",
@@ -336,8 +330,7 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
                 }
             }
 
-            if (resolution.isResolved() && activeAgentForRouting != null
-                    && !"RESUME".equals(resolution.getRouteType())) {
+            if (resolution.isResolved() && activeAgentForRouting != null) {
                 String identifiedIntent = resolution.getIntentName();
                 if (identifiedIntent != null && identifiedIntent.equals(activeAgentForRouting.getIntent())) {
                     log.info("[{}] Auto-upgrade SWITCH→FOLLOW: identifiedIntent={} matches activeAgent.intent={}",
@@ -382,24 +375,15 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         String predictedIntent = resolution.getIntentName();
         boolean wasDisambiguated = isInDisambiguation(sessionId);
 
-        if (!"RESUME".equals(resolution.getRouteType())
-                && getOwnSuspendedAgent(sessionId, resolution.getIntentName()) != null) {
-            log.info("[{}] Auto-upgrade {}→RESUME for suspended intent={}",
-                    logTag, resolution.getRouteType(), resolution.getIntentName());
+        // RESUME由代码根据suspendedAgents状态决定，不由LLM输出
+        if (getOwnSuspendedAgent(sessionId, resolution.getIntentName()) != null) {
+            log.info("[{}] RESUME: intent={} in suspendedAgents", logTag, resolution.getIntentName());
             // 埋点：意图准确率（suspended 命中 = correct）
             recordIntentAccuracy(predictedIntent, resolution.getIntentName(), wasDisambiguated, false);
             return handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
         }
-        Flux<StreamChunk> result = switch (resolution.getRouteType()) {
-            case "RESUME" -> {
-                recordIntentAccuracy(predictedIntent, resolution.getIntentName(), wasDisambiguated, false);
-                yield handleResume(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
-            }
-            default -> {
-                recordIntentAccuracy(predictedIntent, resolution.getIntentName(), wasDisambiguated, false);
-                yield handleSwitchNew(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
-            }
-        };
+        recordIntentAccuracy(predictedIntent, resolution.getIntentName(), wasDisambiguated, false);
+        Flux<StreamChunk> result = handleSwitchNew(sessionId, resolution.getIntentName(), resolution.getRewrittenInput());
         // 消歧完成后清理消歧状态
         if (wasDisambiguated) {
             clearDisambiguationState(sessionId);

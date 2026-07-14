@@ -49,7 +49,6 @@ public class SubGraphRouter {
      * @param userInput 用户原始输入
      * @param phase1Result Phase1的路由结果
      * @param currentAgent 当前活跃意图名称
-     * @param pendingAgents 挂起的意图列表描述
      * @param sessionState 会话状态描述
      * @param disambigContext 消歧上下文
      * @param templatePath 提示词模板路径
@@ -59,14 +58,14 @@ public class SubGraphRouter {
      */
     public RoutingResult rewriteAndIdentify(String sessionId, String userInput,
                                              RoutingResult phase1Result,
-                                             String currentAgent, String pendingAgents,
+                                             String currentAgent,
                                              String sessionState, String disambigContext,
                                              String templatePath,
                                              String chatHistory,
                                              String domainIntentScopeList) {
         try {
             String systemPrompt = buildIntentionSystemPrompt(userInput, phase1Result,
-                    currentAgent, pendingAgents, sessionState, disambigContext, chatHistory,
+                    currentAgent, sessionState, disambigContext, chatHistory,
                     templatePath != null ? templatePath : DEFAULT_TEMPLATE_PATH,
                     domainIntentScopeList);
 
@@ -91,7 +90,7 @@ public class SubGraphRouter {
 
             RoutingResult result = parseRewriteResponse(content, phase1Result);
             log.info("[SubGraphRouter] Result: intent={}, routeType={}, rewritten={}, confidence={}",
-                    result.getIntentName(), result.getRefinedRouteType(),
+                    result.getIntentName(), result.getRouteType(),
                     result.getRewrittenInput(), result.getConfidence());
 
             // 埋点：改写准确率轻量信号（实体守恒 + 代词检测）
@@ -109,7 +108,6 @@ public class SubGraphRouter {
             log.error("[SubGraphRouter] LLM call failed, degrading to current intent: {}", fbIntent, e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
-                    .refinedRouteType(phase1Result.getRouteType())
                     .intentName(fbIntent)
                     .rewrittenInput(userInput)
                     .confidence(0.3)
@@ -123,7 +121,7 @@ public class SubGraphRouter {
 
     private String buildIntentionSystemPrompt(String userInput,
                                                RoutingResult phase1Result,
-                                               String currentAgent, String pendingAgents,
+                                               String currentAgent,
                                                String sessionState, String disambigContext,
                                                String chatHistory,
                                                String templatePath,
@@ -132,22 +130,23 @@ public class SubGraphRouter {
         String allIntentList = subGraphRegistry.getIntentListDescription();
         String scopeList = domainIntentScopeList != null ? domainIntentScopeList : allIntentList;
 
-        String mode = phase1Result.isResume() ? "RESUME" : "SWITCH";
+        // Disambiguation section: only inject when disambigContext has real content
+        String disambigSection = "";
+        if (disambigContext != null && !"无".equals(disambigContext) && !disambigContext.isBlank()) {
+            disambigSection = "\n消歧回答处理:\n"
+                + "- 用户正在回答消歧追问，简短回答是对候选意图的选择\n"
+                + "- 必须将用户回答映射到候选意图之一\n"
+                + "- 明确选择后不再标记is_ambiguous=true\n"
+                + "- 回答与候选意图都不相关 → intent_name=UNKNOWN\n"
+                + "\n消歧上下文:\n" + disambigContext;
+        }
 
         return template
-                .replace("{intent_list}", scopeList)
                 .replace("{intent_scope_list}", scopeList)
-                .replace("{all_intent_list}", allIntentList)
                 .replace("{message}", userInput)
-                .replace("{mode}", mode)
-                .replace("{intent_name}", currentAgent)
-                .replace("{last_agent_description}", currentAgent)
-                .replace("{last_agent_summary}", sessionState)
-                .replace("{session_state}", sessionState)
-                .replace("{pending_agents}", pendingAgents)
-                .replace("{disambig_context}", disambigContext)
                 .replace("{chat_history}", chatHistory)
-                .replace("{domain_name}", "");
+                .replace("{domain_name}", "")
+                .replace("{disambig_section}", disambigSection);
     }
 
     private RoutingResult parseRewriteResponse(String content, RoutingResult phase1Result) {
@@ -159,65 +158,35 @@ public class SubGraphRouter {
             String rewrittenInput = node.has("rewritten_input") ? node.get("rewritten_input").asText() : phase1Result.getReasoning();
             double confidence = node.has("confidence") ? node.get("confidence").asDouble() : 0.5;
 
-            String refinedRouteType = determineRouteType(intentName, phase1Result, node);
-
-            String resumeTarget = null;
-            if ("RESUME".equals(refinedRouteType)) {
-                resumeTarget = node.has("resume_target") && !node.get("resume_target").isNull()
-                        ? node.get("resume_target").asText() : intentName;
-            }
-
             boolean ambiguous = node.has("is_ambiguous") && node.get("is_ambiguous").asBoolean();
             java.util.List<String> candidateIntents = null;
-            String groupId = null;
             if (node.has("candidate_intents") && node.get("candidate_intents").isArray()) {
                 candidateIntents = new java.util.ArrayList<>();
                 for (var candidate : node.get("candidate_intents")) {
                     candidateIntents.add(candidate.asText());
                 }
             }
-            if (node.has("group_id") && !node.get("group_id").isNull()) {
-                groupId = node.get("group_id").asText();
-            }
 
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
-                    .refinedRouteType(refinedRouteType)
                     .intentName(intentName)
                     .rewrittenInput(rewrittenInput)
                     .confidence(confidence)
                     .reasoning(phase1Result.getReasoning())
-                    .resumeTarget(resumeTarget)
                     .ambiguous(ambiguous)
                     .candidateIntents(candidateIntents)
-                    .groupId(groupId)
                     .belongsToDomain(!node.has("belongs_to_domain") || node.get("belongs_to_domain").asBoolean(true))
                     .build();
         } catch (Exception e) {
             log.warn("[SubGraphRouter] Failed to parse rewrite response: {}", content, e);
             return RoutingResult.builder()
                     .routeType(phase1Result.getRouteType())
-                    .refinedRouteType("SWITCH")
                     .intentName("UNKNOWN")
                     .rewrittenInput(phase1Result.getReasoning())
                     .confidence(0.3)
                     .reasoning("解析失败")
                     .build();
         }
-    }
-
-    private String determineRouteType(String intentName, RoutingResult phase1Result,
-                                       com.fasterxml.jackson.databind.JsonNode node) {
-        if (phase1Result.isResume()) {
-            return "RESUME";
-        }
-        if (node.has("route_type")) {
-            String routeType = node.get("route_type").asText();
-            if ("RESUME".equalsIgnoreCase(routeType)) {
-                return "RESUME";
-            }
-        }
-        return "SWITCH";
     }
 
     private String loadTemplate(String path) {
