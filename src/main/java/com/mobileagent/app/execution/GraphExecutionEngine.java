@@ -76,6 +76,34 @@ public class GraphExecutionEngine {
         return resumeStreaming(graph, intent, userInput, threadId, globalStateData);
     }
 
+    /**
+     * 取消 L2 子图 — 注入 _cancelSignal=true 后走 resume 流程
+     *
+     * <p>GES只做两件事：1) 设cancel信号 2) resume。用户原始输入照常传递。
+     * L2子图（LLM模式）检测 _cancelSignal 走 cancelExecution；
+     * L2子图（HTTP代理模式）将用户输入（含cancel语义）原样传给后端，由后端处理取消。
+     *
+     * @param graph     L2 子图
+     * @param intent    子图意图名（用于日志和 isStreamable 判断）
+     * @param threadId  L2 子图 threadId
+     * @param userInput 用户原始输入
+     * @return Flux<StreamChunk> 取消结果
+     */
+    public Flux<StreamChunk> cancelGraph(CompiledGraph graph, String intent, String threadId, String userInput) {
+        // 先注入 _cancelSignal，再走 resume 流程
+        try {
+            RunnableConfig config = threadConfig(threadId);
+            Map<String, Object> signalData = new HashMap<>();
+            signalData.put("_cancelSignal", true);
+            graph.updateState(config, signalData, null);
+            log.info("[GraphExec] Cancel: injected _cancelSignal, intent={}, threadId={}", intent, threadId);
+        } catch (Exception e) {
+            log.error("[GraphExec] Cancel: failed to inject _cancelSignal, intent={}, threadId={}", intent, threadId, e);
+        }
+        // cancel信号已注入，走标准resume流程（userInput照常传递）
+        return resumeGraph(graph, intent, userInput, threadId, null);
+    }
+
     // ==================== 非流式路径（与原逻辑完全一致） ====================
 
     private Flux<StreamChunk> executeBlocking(CompiledGraph graph, String intent,
@@ -83,6 +111,7 @@ public class GraphExecutionEngine {
         return Flux.defer(() -> {
             try {
                 RunnableConfig config = threadConfig(threadId);
+                input.put("_threadId", threadId);
                 log.info("[GraphExec] Blocking execute: intent={}, threadId={}", intent, threadId);
 
                 long startMs = System.currentTimeMillis();
@@ -121,6 +150,7 @@ public class GraphExecutionEngine {
                 log.info("[GraphExec] Blocking resume: intent={}, threadId={}", intent, threadId);
 
                 Map<String, Object> updateData = new HashMap<>();
+                updateData.put("_threadId", threadId);
                 if (globalStateData != null && !globalStateData.isEmpty()) {
                     updateData.put("_globalStateData", globalStateData);
                 }
@@ -154,6 +184,7 @@ public class GraphExecutionEngine {
                                                 Map<String, Object> input, String threadId) {
         try {
             RunnableConfig config = threadConfig(threadId);
+            input.put("_threadId", threadId);
             log.info("[GraphExec] Streaming execute: intent={}, threadId={}", intent, threadId);
 
             long startMs = System.currentTimeMillis();
@@ -185,10 +216,11 @@ public class GraphExecutionEngine {
                                                String userInput, String threadId,
                                                Map<String, Object> globalStateData) {
         try {
-            RunnableConfig config = threadConfig(threadId);
-            log.info("[GraphExec] Streaming resume: intent={}, threadId={}", intent, threadId);
+                RunnableConfig config = threadConfig(threadId);
+                log.info("[GraphExec] Streaming resume: intent={}, threadId={}", intent, threadId);
 
-            Map<String, Object> updateData = new HashMap<>();
+                Map<String, Object> updateData = new HashMap<>();
+                updateData.put("_threadId", threadId);
             if (globalStateData != null && !globalStateData.isEmpty()) {
                 updateData.put("_globalStateData", globalStateData);
             }

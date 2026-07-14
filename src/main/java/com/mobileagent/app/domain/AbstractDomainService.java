@@ -123,6 +123,24 @@ public abstract class AbstractDomainService implements DomainHandler {
         ctx.updateDomainState(getStateKey(), ds -> ds.setActiveAgent(null));
     }
 
+    /**
+     * 追加用户输入到 ActiveAgentInfo.userMessages — 在 executeNewAgent / resumeActiveAgent 时调用
+     *
+     * <p>首次调用时（executeNewAgent）作为原始输入记入 userMessages[0]，
+     * 后续调用时（resumeActiveAgent）追加用户的回答。
+     * 编排领养时可通过 userMessages 还原完整的L1交互上下文。
+     */
+    protected void appendUserMessageToActiveAgent(String sessionId, String message) {
+        if (message == null || message.isEmpty()) return;
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        ctx.updateDomainState(getStateKey(), ds -> {
+            if (ds.getActiveAgent() != null) {
+                ds.getActiveAgent().getUserMessages().add(message);
+            }
+        });
+        log.debug("[{}] Appended userMessage to activeAgent: session={}, message={}", logTag, sessionId, message);
+    }
+
     // ==================== 对话历史 ====================
 
     /** 从 GlobalSessionContext.messages 获取最近X对消息 */
@@ -188,6 +206,8 @@ public abstract class AbstractDomainService implements DomainHandler {
 
         Map<String, Object> globalStateData = globalSessionStore.getOrCreate(sessionId).data();
 
+        appendUserMessageToActiveAgent(sessionId, userInput);
+
         return graphExecutionEngine.resumeGraph(graph, active.getIntent(), userInput,
                         active.getThreadId(), globalStateData)
                 .doOnNext(chunk -> handleActiveAgentState(sessionId, chunk));
@@ -204,6 +224,7 @@ public abstract class AbstractDomainService implements DomainHandler {
         String threadId = generateThreadId(sessionId, intent);
         Map<String, Object> input = buildGraphInput(sessionId, rewrittenInput);
         setOwnActiveAgent(sessionId, intent, threadId);
+        appendUserMessageToActiveAgent(sessionId, rewrittenInput);
 
         return graphExecutionEngine.executeGraph(graph, intent, input, threadId)
                 .doOnNext(chunk -> handleActiveAgentState(sessionId, chunk));
@@ -222,6 +243,70 @@ public abstract class AbstractDomainService implements DomainHandler {
         }
 
         return input;
+    }
+
+    // ==================== L1 Context Adoption ====================
+
+    /**
+     * 自报告 L1 上下文 — 编排接管时调用
+     *
+     * <p>扫描本域的 activeAgent + suspendedAgents（子类可覆盖 collectSuspendedContexts），
+     * 返回结构化快照供编排层汇总和注入。
+     */
+    @Override
+    public L1ContextSnapshot collectL1Context(String sessionId) {
+        List<L1ContextSnapshot.ActiveContext> actives = collectActiveContext(sessionId);
+        List<L1ContextSnapshot.SuspendedContext> suspended = collectSuspendedContexts(sessionId);
+        if ((actives == null || actives.isEmpty()) && (suspended == null || suspended.isEmpty())) {
+            return L1ContextSnapshot.EMPTY;
+        }
+        return new L1ContextSnapshot(domainKey, actives, suspended);
+    }
+
+    /** 收集本域的活跃子图上下文 */
+    protected List<L1ContextSnapshot.ActiveContext> collectActiveContext(String sessionId) {
+        ActiveAgentInfo active = getOwnActiveAgent(sessionId);
+        if (active == null) return List.of();
+        return List.of(new L1ContextSnapshot.ActiveContext(
+            domainKey, active.getIntent(), active.getThreadId(), active.getLastQuestion(),
+            active.getUserMessages() != null ? active.getUserMessages() : List.of()));
+    }
+
+    /** 收集本域的挂起子图上下文 — Single返回空，Multi覆盖 */
+    protected List<L1ContextSnapshot.SuspendedContext> collectSuspendedContexts(String sessionId) {
+        return List.of();
+    }
+
+    /**
+     * 释放 L1 所有权 — 只释放 inheritedIntents 中的意图，其余保留
+     *
+     * <p>编排领养的意图：清 activeAgent/suspendedAgents（不 abort L2 checkpoint）
+     * <p>未领养的意图：保留不动，用户编排结束后可 resume
+     *
+     * <p>L2 checkpoint 不在此处 abort：
+     * 由 L2GraphTool 接管后通过 _cancelSignal 让 L2 子图走 cancelExecution 干净终止，
+     * 或正常执行完毕后 GES 自动清理 checkpoint。
+     */
+    @Override
+    public void releaseL1Resources(String sessionId, List<String> inheritedIntents) {
+        if (inheritedIntents == null || inheritedIntents.isEmpty()) return;
+        releaseActiveIfInherited(sessionId, inheritedIntents);
+        releaseSuspendedIfInherited(sessionId, inheritedIntents);
+    }
+
+    /** 释放活跃子图所有权（仅当意图在 inheritedIntents 中）— 不 abort checkpoint */
+    protected void releaseActiveIfInherited(String sessionId, List<String> inheritedIntents) {
+        ActiveAgentInfo active = getOwnActiveAgent(sessionId);
+        if (active != null && inheritedIntents.contains(active.getIntent())) {
+            log.info("[{}] Releasing inherited activeAgent (checkpoint preserved for L2GraphTool): intent={}, threadId={}",
+                logTag, active.getIntent(), active.getThreadId());
+            clearOwnActiveAgent(sessionId);
+        }
+    }
+
+    /** 释放挂起子图资源（仅当意图在 inheritedIntents 中） — Single无操作，Multi覆盖 */
+    protected void releaseSuspendedIfInherited(String sessionId, List<String> inheritedIntents) {
+        // default: no suspended agents to release
     }
 
     // ==================== 抽象方法 ====================

@@ -272,6 +272,33 @@ public class MockBankingService {
         return "稳健";
     }
 
+    /**
+     * 模拟理财产品购买 — 供 WEALTH_PURCHASE 意图的 WealthPurchaseGraphConfig 调用
+     */
+    public WealthPurchaseResult wealthPurchase(String productName, BigDecimal shareCount) {
+        String orderId = "WP" + System.currentTimeMillis() % 1000000;
+        BigDecimal unitPrice = getUnitPrice(productName);
+        BigDecimal totalAmount = unitPrice.multiply(shareCount);
+
+        String message = "购买成功！已购买" + productName + " " + shareCount + "份，"
+                + "单价" + unitPrice + "元/份，"
+                + "总金额" + totalAmount + "元。"
+                + "订单号：" + orderId;
+
+        return new WealthPurchaseResult(true, productName, shareCount, unitPrice, totalAmount, orderId, message);
+    }
+
+    private BigDecimal getUnitPrice(String productName) {
+        if (productName == null) return new BigDecimal("1.00");
+        return switch (productName) {
+            case "稳利宝" -> new BigDecimal("1.0000");
+            case "汇添富" -> new BigDecimal("1.2500");
+            case "天天利" -> new BigDecimal("1.0000");
+            case "安心宝" -> new BigDecimal("1.0000");
+            default -> new BigDecimal("1.0000");
+        };
+    }
+
     public record TransferResult(boolean success, String receiver, BigDecimal amount,
                                   String purpose, String txnId, String message) {}
 
@@ -283,4 +310,8 @@ public class MockBankingService {
     public record WealthConsultResult(boolean success, String riskLevel, String focusArea, String message) {}
 
     public record WealthInterpretResult(boolean success, String productName, String message) {}
+
+    public record WealthPurchaseResult(boolean success, String productName, BigDecimal shareCount,
+                                        BigDecimal unitPrice, BigDecimal totalAmount,
+                                        String orderId, String message) {}
 }

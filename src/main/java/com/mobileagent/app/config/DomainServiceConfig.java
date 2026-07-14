@@ -8,6 +8,7 @@ import com.mobileagent.app.memory.DomainStateAware;
 import com.mobileagent.app.memory.GlobalSessionStateStore;
 import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.execution.GraphExecutionEngine;
+import com.mobileagent.app.orchestration.OrchestrationAgent;
 import com.mobileagent.app.router.subgraph.ContextRouter;
 import com.mobileagent.app.router.registry.DomainServiceRegistry;
 import com.mobileagent.app.router.registry.SubGraphRegistry;
@@ -111,7 +112,7 @@ public class DomainServiceConfig {
         return service;
     }
 
-    // ==================== 理财 (1-N: WEALTH_CONSULT + WEALTH_INTERPRET) ====================
+    // ==================== 理财 (1-N: WEALTH_CONSULT + WEALTH_INTERPRET + WEALTH_PURCHASE) ====================
 
     @Bean("wealthDomainService")
     public MultiSubAgentDomainService wealthDomainService(
@@ -135,10 +136,11 @@ public class DomainServiceConfig {
                 .obsMetrics(obsMetrics)
                 .contextRoutingTemplatePath("prompts/l1-context.st")
                 .intentRoutingTemplatePath("prompts/l1-intention.st")
-                .rejectedMessage("该理财功能暂不支持，目前仅支持理财咨询和理财产品解读")
+                .rejectedMessage("该理财功能暂不支持，目前仅支持理财咨询、理财产品解读和购买理财产品")
                 .handledIntents(List.of(
                         new AbstractDomainService.IntentInfo("WEALTH_CONSULT", "理财咨询与推荐"),
-                        new AbstractDomainService.IntentInfo("WEALTH_INTERPRET", "理财产品解读")
+                        new AbstractDomainService.IntentInfo("WEALTH_INTERPRET", "理财产品解读"),
+                        new AbstractDomainService.IntentInfo("WEALTH_PURCHASE", "购买理财产品")
                 ))
                 .maxSuspendedDepth(3)
                 .suspendedExpireMinutes(20)
@@ -153,6 +155,14 @@ public class DomainServiceConfig {
     @Bean
     public Object chatServiceRegistration(ChatService chatService, DomainServiceRegistry domainServiceRegistry) {
         domainServiceRegistry.register("CHAT", chatService);
+        return Boolean.TRUE;
+    }
+
+    // ==================== ORCHESTRATION (多意图编排) ====================
+
+    @Bean
+    public Object orchestrationRegistration(OrchestrationAgent orchestrationAgent, DomainServiceRegistry domainServiceRegistry) {
+        domainServiceRegistry.register("ORCHESTRATION", orchestrationAgent);
         return Boolean.TRUE;
     }
 }

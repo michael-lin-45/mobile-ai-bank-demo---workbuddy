@@ -27,6 +27,8 @@ import java.util.Map;
  *   paramExtract  - L2 子Graph参数提取+取消意图判断
  *   chat          - L1 闲聊 (ChatService)
  *   wealthInterpret - L2 理财产品解读(流式)
+ *   orch-planner  - 编排规划模型 (OrchestrationAgent 规划)
+ *   orch          - 编排Agent模型 (OrchestrationAgent 执行)
  *
  * 对话历史统一使用 GlobalSessionContext.messages,
  * 不再使用 Spring AI ChatMemory。
@@ -35,6 +37,7 @@ import java.util.Map;
  *   所有 ChatModel 均通过 ObsChatModel 包装，自动采集 llm.* 5 项指标:
  *   llm.token.input, llm.token.output, llm.first_token.latency,
  *   llm.operation.duration, llm.error.count
+ *   注: 编排专用模型(orch-planner/orch)不强制 enable_thinking=false，以保留思维链能力。
  */
 @Slf4j
 @Configuration
@@ -142,10 +145,33 @@ public class ModelConfig {
         return ChatClient.builder(chatModel).build();
     }
 
+    // ==================== orch-planner: 编排规划模型 ====================
+
+    @Bean("orchPlannerModel")
+    public ChatModel orchPlannerModel(
+            @Value("${models.orch-planner.base-url}") String baseUrl,
+            @Value("${models.orch-planner.api-key}") String apiKey,
+            @Value("${models.orch-planner.model}") String model) {
+        log.info("[ModelConfig] orchPlannerModel: baseUrl={}, model={}", baseUrl, model);
+        return wrapOrchModel(baseUrl, apiKey, model, "ORCH", "OrchPlanner");
+    }
+
+    // ==================== orch: 编排Agent模型 ====================
+
+    @Bean("orchModel")
+    public ChatModel orchModel(
+            @Value("${models.orch.base-url}") String baseUrl,
+            @Value("${models.orch.api-key}") String apiKey,
+            @Value("${models.orch.model}") String model) {
+        log.info("[ModelConfig] orchModel: baseUrl={}, model={}", baseUrl, model);
+        return wrapOrchModel(baseUrl, apiKey, model, "ORCH", "OrchAgent");
+    }
+
     // ==================== 工具方法 ====================
 
     /**
      * 构建 OpenAiChatModel 并用 ObsChatModel 包装以采集 llm.* 指标。
+     * 业务模型强制 enable_thinking=false（关闭思维链，降低延迟）。
      *
      * streamUsage=true 使 OpenAI 在流式响应的最后一个 chunk 中返回 usage 信息，
      * ObsChatModel 优先使用精确 usage，拿不到则走 content.length()/1.5 估算兜底。
@@ -164,6 +190,25 @@ public class ModelConfig {
                 .defaultOptions(OpenAiChatOptions.builder()
                         .model(model)
                         .extraBody(Map.of("enable_thinking", false))
+                        .build())
+                .build();
+        return new ObsChatModel(originalModel, meterRegistry, model, defaultAgentLayer, defaultAgentName);
+    }
+
+    /**
+     * 编排专用模型包装：不加 enable_thinking=false（编排需要思维链），
+     * 同样经 ObsChatModel 包装以采集 llm.* 指标。
+     */
+    private ChatModel wrapOrchModel(String baseUrl, String apiKey, String model,
+                                    String defaultAgentLayer, String defaultAgentName) {
+        OpenAiApi api = OpenAiApi.builder()
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .build();
+        OpenAiChatModel originalModel = OpenAiChatModel.builder()
+                .openAiApi(api)
+                .defaultOptions(OpenAiChatOptions.builder()
+                        .model(model)
                         .build())
                 .build();
         return new ObsChatModel(originalModel, meterRegistry, model, defaultAgentLayer, defaultAgentName);

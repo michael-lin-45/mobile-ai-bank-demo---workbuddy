@@ -199,6 +199,24 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
         log.debug("[{}] Resumed agent: session={}, intent={}", logTag, sessionId, intent);
     }
 
+    /**
+     * Remove a specific intent from suspendedAgents — used when CANCEL cancels an active operation
+     * that was also in suspendedAgents (interrupt writes to both activeAgent + suspendedAgents).
+     */
+    private void removeOwnSuspendedAgent(String sessionId, String intent) {
+        GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+        ctx.updateDomainState(getStateKey(), ds -> {
+            Map<String, SuspendedInfo> suspended = ds.getSuspendedAgents();
+            if (suspended != null && suspended.containsKey(intent)) {
+                suspended.remove(intent);
+                log.info("[{}] Removed suspendedAgent for intent={} (CANCEL cleanup)", logTag, intent);
+                if (suspended.isEmpty()) {
+                    ds.setSuspendedAgents(null);
+                }
+            }
+        });
+    }
+
     private boolean hasOwnSuspendedAgents(String sessionId) {
         GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
         DomainState ds = ctx.getDomainState(getStateKey());
@@ -426,6 +444,60 @@ public class MultiSubAgentDomainService extends AbstractDomainService {
 
         return graphExecutionEngine.resumeGraph(graph, intent, userInput, threadId, globalStateData)
                 .doOnNext(chunk -> handleActiveAgentState(sessionId, chunk));
+    }
+
+    // ==================== L1 Context Adoption Overrides ====================
+
+    /**
+     * 报告本域的挂起子图上下文 — Multi域有 suspendedAgents，需要报告
+     */
+    @Override
+    protected List<L1ContextSnapshot.SuspendedContext> collectSuspendedContexts(String sessionId) {
+        Map<String, SuspendedInfo> suspended = getAllOwnSuspended(sessionId);
+        if (suspended.isEmpty()) return List.of();
+        return suspended.values().stream()
+            .map(info -> new L1ContextSnapshot.SuspendedContext(
+                domainKey, info.getIntent(), info.getThreadId()))
+            .toList();
+    }
+
+    /**
+     * 释放挂起子图所有权（仅当意图在 inheritedIntents 中）— 不 abort checkpoint
+     *
+     * <p>从 suspendedAgents map 中移除匹配的条目。
+     * L2 checkpoint 由 L2GraphTool 通过 _cancelSignal 让 L2 子图走 cancelExecution 干净终止，
+     * 或正常执行完毕后 GES 自动清理。
+     */
+    @Override
+    protected void releaseSuspendedIfInherited(String sessionId, List<String> inheritedIntents) {
+        Map<String, SuspendedInfo> suspended = getAllOwnSuspended(sessionId);
+        if (suspended.isEmpty()) return;
+
+        List<String> toRelease = suspended.values().stream()
+            .map(SuspendedInfo::getIntent)
+            .filter(inheritedIntents::contains)
+            .toList();
+
+        for (String intent : toRelease) {
+            SuspendedInfo info = suspended.get(intent);
+            if (info != null) {
+                log.info("[{}] Releasing inherited suspendedAgent (checkpoint preserved for L2GraphTool): intent={}, threadId={}",
+                    logTag, info.getIntent(), info.getThreadId());
+            }
+        }
+
+        if (!toRelease.isEmpty()) {
+            GlobalSessionContext ctx = globalSessionStore.getOrCreate(sessionId);
+            ctx.updateDomainState(getStateKey(), ds -> {
+                Map<String, SuspendedInfo> sus = ds.getSuspendedAgents();
+                if (sus != null) {
+                    toRelease.forEach(sus::remove);
+                    if (sus.isEmpty()) {
+                        ds.setSuspendedAgents(null);
+                    }
+                }
+            });
+        }
     }
 
     // ==================== 工具方法 ====================
