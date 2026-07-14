@@ -19,7 +19,7 @@ $host.ui.RawUI.WindowTitle = "AI Bank 可观测系统启动器"
 # 通用工具函数
 # ======================================
 
-function Stop-PortOccupier {
+function global:Stop-PortOccupier {
   param([int]$Port, [int]$RetryCount = 3)
   for ($i = 0; $i -le $RetryCount; $i++) {
 
@@ -125,21 +125,47 @@ function Wait-Url {
   return $false
 }
 
-# 启动失败时，停止全部已启动服务后退出
-function Stop-AllAndExit {
-  Write-Host "`n=== Cleanup all services ===" -ForegroundColor Yellow
-  # Kill otelcol by process name (it does not listen on a single predictable port)
+# 实际清理逻辑（幂等）：按进程名 + 端口杀掉所有已启动服务
+# 定义为 global 函数，便于 Ctrl+C 事件处理器在子作用域中直接调用
+function global:Stop-AllServices {
+  if ($global:CleanedUp) { return }
+  $global:CleanedUp = $true
+  Write-Host "`n=== 正在清理已启动的服务 (Ctrl+C / 失败退出) ===" -ForegroundColor Yellow
+  # Kill otelcol by process name (它不监听单一可预测端口)
   Get-Process -Name otelcol -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   # Kill all known service ports using the robust Stop-PortOccupier
-  $ports = @(6379, 9090, 4318, 8888, 8080, 3000)
-  $labels = @{6379='Redis'; 9090='Backend'; 4318='Collector'; 8888='Collector-Prometheus'; 8080='Core'; 3000='Frontend'}
+  $ports = @(6379, 9090, 4318, 8887, 8080, 3000)
+  $labels = @{6379='Redis'; 9090='Backend'; 4318='Collector'; 8887='Collector-Prometheus'; 8080='Core'; 3000='Frontend'}
   foreach ($p in $ports) {
-    $null = Stop-PortOccupier -Port $p
+    $null = global:Stop-PortOccupier -Port $p
     Write-Host "  Cleaned $($labels[$p]):$p" -ForegroundColor Yellow
   }
+  Write-Host "=== 清理完成 ===" -ForegroundColor Green
+}
+
+# 启动失败时，停止全部已启动服务后退出
+function Stop-AllAndExit {
+  global:Stop-AllServices
   pause
   exit 1
 }
+
+# ======================================
+# Ctrl+C 安全清理：中断时杀掉所有已启动的进程/服务
+# ======================================
+
+$global:CtrlC     = $false
+$global:CleanedUp = $false
+
+# 注册 Ctrl+C 处理：仅置标志位（不吞掉默认中断，finally 会执行清理）
+# 同时作为安全网，在事件作用域里直接调用清理（幂等，重复调用无害）
+$null = Register-ObjectEvent -InputObject ([Console]) -EventName CancelKeyPress -Action {
+  $global:CtrlC = $true
+  try { global:Stop-AllServices } catch { }
+}
+
+# 包裹整段启动流程：Ctrl+C / 异常退出时，finally 中执行清理
+try {
 
 
 # ======================================
@@ -405,4 +431,8 @@ Write-Host "  Collector OTLP : http://127.0.0.1:$COLLECTOR_PORT"
 Write-Host "  Redis 热层     : 127.0.0.1:$REDIS_PORT"
 Write-Host "  前端界面       : http://127.0.0.1:$FRONTEND_PORT"
 Write-Host "`n按任意键退出启动器, 服务继续在后台运行..."
+Write-Host "  (如需停止全部服务, 按 Ctrl+C 即可一键清理)" -ForegroundColor DarkGray
 $null = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+} finally {
+  if ($global:CtrlC) { global:Stop-AllServices }
+}

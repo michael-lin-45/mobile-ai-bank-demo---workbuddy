@@ -7,6 +7,9 @@ import com.mobileagent.app.observability.AgentSpanContext;
 import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.util.JsonParseUtils;
 import com.mobileagent.app.util.TemplateUtils;
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanKind;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -76,6 +79,27 @@ public class DomainRouter {
         // 1. 确定性路由: 关键词匹配
         DomainResult deterministic = routeDeterministic(userInput);
         if (deterministic != null && !excludedDomains.contains(deterministic.domain())) {
+            // ── 可观测补全（方案A）──────────────────────────────────────────────
+            // 确定性路由虽不调 LLM，仍显式创建 L0 span，保证 L0 计数 = 请求数
+            // （与 L1 持平 → L2≤L0 恒成立），且 trace 瀑布层级完整。
+            // 直接经 OTel Tracer 创建（不经 LLM 路径的 ObsChatModel），parent 自动取
+            // 当前 server span（与 LLM 路径一致）。绝不 makeCurrent——避免线程 OTel
+            // 上下文栈残留 → traceId 跨请求泄漏（历史已修复的 98968ms 异常本源）。
+            // span 仅覆盖路由决策，立即 end()，无悬挂风险。
+            Span l0Span = GlobalOpenTelemetry.getTracer("obs-chat-model")
+                    .spanBuilder("L0:DomainRouter")
+                    .setSpanKind(SpanKind.INTERNAL)
+                    .startSpan();
+            try {
+                l0Span.setAttribute("agent.name", "DomainRouter");
+                l0Span.setAttribute("agent.layer", "L0");
+                l0Span.setAttribute("intent", deterministic.domain());
+                l0Span.setAttribute("routing.mode", "deterministic");
+                l0Span.setAttribute("session_id", sessionId != null ? sessionId.trim() : "");
+            } finally {
+                l0Span.end();
+            }
+
             updateLastDomain(sessionId, deterministic.domain());
             log.info("[DomainRouter] Deterministic: domain={} for input='{}'", deterministic.domain(), userInput);
             obsMetrics.recordRouterHit();

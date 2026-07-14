@@ -316,6 +316,8 @@ TraceQueryService.listTracesPaginated()  【已重写：按 trace_id 去重枚�
 - **Agents 链显示规则**（R26 修复）：按 L0 边界切段 → 每段 `L0 → L1(合并) → <业务名 WEALTH/TRANSFER/BILL>`；reroute 则为 `L0→L1→WEALTH → L0→L1→TRANSFER`。
 - **意图链**：四层真实识别结果，**不再回退** session 整条 intentFlow。
 
+> **★ Web 版补正（2026-07-14）— 确定性路由也产生 L0 span**：`DomainRouter.route()` 有两条分支——①确定性路由（关键词命中，如"转账"→TRANSFER/"账单"→BILL/"理财·基金"→WEALTH，**不调 LLM**）直接返回；②LLM 兜底路由（无关键词或多域命中）才调 `domainChatClient`。旧实现仅分支②经 `ObsChatModel` 创建 L0 span，导致 L0 计数 < 请求数、L2≤L0 不恒成立。现分支①在提前返回前也显式经 `GlobalOpenTelemetry.getTracer("obs-chat-model")` 创建 `L0:DomainRouter` span（`agent.layer=L0`、`intent=命中域`、`routing.mode=deterministic`、立即 end，parent 自动取当前 server span，**绝不 makeCurrent 以免 traceId 跨请求泄漏**）。改后 L0 覆盖全部经 DomainRouter 的请求（≈ requestCount），L0 ≥ L1 ≥ L2 恒成立；确定性 L0 与 LLM L0（`L0:qwen-plus`）在 trace 瀑布中并列于 L0 层，前端按 `layer` 缩进渲染一致。详见《指标GAP分析-v2.md》§8.18。
+
 **★web合入 P4：HITL 跨 trace 会话连续性**（来自 A1《一条 Agent 请求的完整链路追踪》）
 
 银行场景的人工中断（转账审批/大额复核/监管查询）会导致同一业务会话产生两次独立的 HTTP 请求 → 两条独立的 trace。此时 Tempo trace 在人工操作处天然断裂。必须用 **session_id 在 Loki 日志中拼接**业务链：
@@ -1465,7 +1467,7 @@ annotations:
 
 ### 14.3 三项待定决策（P3 拍板）
 
-- **待定项 A**：L0 是否覆盖"所有请求（含不调 LLM 的规则命中）"？建议引入独立 `request.received` 口径。
+- **待定项 A（L0 是否覆盖"所有请求"）— 🟢 已决策（方案 b）已实施（2026-07-14）**：采用「把现有 L0 span 扩展到路由入口」方案。`DomainRouter.route()` 的确定性路由分支（关键词命中，不调 LLM）现在也显式经 OTel Tracer 创建 `L0:DomainRouter` span（含 `routing.mode=deterministic` 属性），使 L0 计数 = 全部经 DomainRouter 的请求数（≈ requestCount），**L2 ≤ L0 恒成立**。详见《指标GAP分析-v2.md》§8.18。方案 (a) 独立 `request.received` 口径留作备选。
 - **待定项 B**：reRoute 是否携带原报文？需先明确 reRoute 范围与"原报文"字段定义。
 - **待定项 C**：是否引入 Langfuse？建议 P3 引入，不抢占 P0/P1/P2。
 

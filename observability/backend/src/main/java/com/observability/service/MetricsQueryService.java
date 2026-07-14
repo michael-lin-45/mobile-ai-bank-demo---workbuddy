@@ -428,7 +428,10 @@ public class MetricsQueryService {
         try {
             Instant from = Instant.now().minusSeconds(2 * 86400L); // 最近 2d，与 H2 保留期一致
             long l0 = spanRepository.countDistinctTraceByOpNamePrefixSince("L0:%", from);
-            long l1 = spanRepository.countDistinctTraceByOpNamePrefixSince("L1:%", from);
+            // L1 层有三种 span 名：L1:（ChatService 纯 CHAT 直答）、L1-LLM1:（ContextRouter）、
+            // L1-LLM2:（SubGraphRouter）。用 'L1%' 匹配全部三种，再按 trace DISTINCT 去重=每请求计 1 次。
+            // 切勿用 'L1:%'——那样只会匹配到极少数纯 CHAT 的 L1: span，漏掉几乎每请求都有的 L1-LLM1/L1-LLM2。
+            long l1 = spanRepository.countDistinctTraceByOpNamePrefixSince("L1%", from);
             long l2 = spanRepository.countDistinctTraceByOpNamePrefixSince("L2:%", from);
             cachedL0 = l0; cachedL1 = l1; cachedL2 = l2;
             return new long[]{l0, l1, l2};

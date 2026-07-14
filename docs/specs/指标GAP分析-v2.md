@@ -538,13 +538,11 @@ V1 是一份"识别问题"的文档；半年后重审，V2 的结论是：**计�
 
 记录本轮主人提出、暂未拍板的两项设计决策，**仅记录、未改动代码**，待后续明确口径后实现。
 
-### 待定项 A：L0 是否覆盖"所有请求（含不调 LLM 的规则命中）"
-- **现状**：当前 L0 基于 H2 spans 中 `operation_name LIKE 'L0:%'` 的 `COUNT(DISTINCT trace_id)`，仅统计**真正调用 domain 层 LLM** 的请求。走确定性关键词命中 / 缓存 / 模板直接返回（不调 LLM）的请求不产生 L0 span → 不计入。实测 seed 36 条中仅 10 个 trace 产生 L0 span（L0=10），符合"真实 LLM 消耗"可观测语义。
-- **诉求**：主人希望 L0 能反映"所有请求接收数"（含规则命中、不调 LLM 的请求），使 L0 ≈ requestCount（请求总数）。
-- **待定（待主人确认口径后实现）**：
-  - 方案 (a)：引入独立"请求接收数"口径（如 Core 在请求入口统一打点 `request.received`，与"LLM 调用数"区分，互不覆盖）；
-  - 方案 (b)：把现有 L0 span 扩展到路由入口，使规则命中也产生 `L0:` span。
-  - 需主人选定方案与字段定义后再动手。本轮不改代码。
+### 待定项 A：L0 是否覆盖"所有请求（含不调 LLM 的规则命中）" — 🟢 已决策（方案 b）已实施（2026-07-14）
+- **诉求**：主人希望 L0 能反映"所有请求接收数"（含规则命中、不调 LLM 的请求），使 L0 ≈ requestCount（请求总数），从而 **L2 ≤ L0 恒成立**（此前 L0<L1 因确定性路由跳过 L0 span）。
+- **决策**：采用 **方案 (b) — 把现有 L0 span 扩展到路由入口**。理由：方案 (a) 需新增独立口径字段且要区分"请求接收数"与"LLM 调用数"，反而增加语义歧义；方案 (b) 复用既有 `L0:` span 命名与 `COUNT(DISTINCT trace_id)` 计数口径，改动最小、计数天然对齐。
+- **落地**：见 **§8.18** 确定性路由补全 L0 span。改后 L0 = 全部经 DomainRouter 的请求数（含确定性命中），与 L1 持平；L2≤L0 恒成立。
+- **方案 (a) 留作备选**：若未来需要严格区分"请求接收数"与"LLM 消耗数"，再引入 `request.received` 独立口径，不与本改动冲突。
 
 ### 待定项 B：reRoute（重新路由）是否包含原报文
 - **现状**：路由链 `DomainRouter → ContextRouter / SubGraphRouter → 子图` 存在因意图不清 / 置信度不足 / 升级转交等触发的"重新路由"（reRoute）路径；当前 reRoute 的埋点 / 事件未明确携带触发时的原请求报文（原报文）。
@@ -628,3 +626,58 @@ V1 是一份"识别问题"的文档；半年后重审，V2 的结论是：**计�
 ### 编译与验证
 - `./mvnw.cmd -o compile` EXIT=0（2026-07-10 第二轮编译验证通过）。
 - 待用户用 `start-all.ps1` 重启 backend(9090)；重启后前台跑 `seed_all.py` 并拉 `/api/v1/traces`（验证 #1 `L0→L1→WEALTH`、#2 单轮真实意图链）、`/api/v1/sessions`（验证 #3 每轮 L2 + 前端 `dedupAgents` 折叠）。
+
+## 8.18 确定性路由补全 L0 span（第二十三轮·续，2026-07-14）
+
+### 背景与根因（本轮回填 8.15 待定项 A — 方案 b 选定）
+- 上轮（8.14）实测 seed 36 条中仅 **10 个 trace 产生 L0 span（L0=10）**，L0 < 36（请求数）；后续实测 L0=23 / L1=36 → **L0 < L1**，与"L0 为顶层编排、L1 为其下子 Agent"的拓扑（应 L0 ≥ L1）矛盾，且导致 L2≤L0 不恒成立。
+- **根因（代码层，确定性）**：`DomainRouter.route()` 第 75-140 行有两条分支：
+  1. **确定性路由（关键词命中，第 77-84 行）**：`routeDeterministic()` 命中关键词（如"转账"→TRANSFER、"账单"→BILL、"理财/基金"→WEALTH）即 `return`，**不调用 LLM、不创建任何 OTel span**。该分支是 `route()` 方法体内、在 `try-finally`（仅覆盖 LLM 分支）**之外**的提前返回。
+  2. **LLM 兜底路由（第 88-139 行）**：无关键词或多域命中时才调 `domainChatClient`，由 `AgentSpanContext.setWithHeldSpan("L0",...)` 经 `ObsChatModel` 创建 L0 span。
+- 关键词来自 `application.yml` 的 `routing.domains.*.keywords`（TRANSFER/BILL/WEALTH/UNSUPPORTED）。seed 36 条中约 14 条中文输入含关键词 → 走确定性分支 → 无 L0 span，正是 L0 缺口来源。
+
+### 修复（方案 b：确定性分支也显式创建 L0 span）
+仅改 `DomainRouter.route()` 确定性分支（约 +15 行），**不触碰 LLM 分支、不触碰 ObsChatModel**：
+```java
+// 1. 确定性路由: 关键词匹配
+DomainResult deterministic = routeDeterministic(userInput);
+if (deterministic != null && !excludedDomains.contains(deterministic.domain())) {
+    // 可观测补全（方案A）：确定性路由虽不调 LLM，仍显式创建 L0 span，
+    // 保证 L0 计数 = 请求数（与 L1 持平 → L2≤L0 恒成立），trace 瀑布层级完整。
+    // 直接经 OTel Tracer 创建（不经 LLM 路径的 ObsChatModel），parent 自动取当前
+    // server span（与 LLM 路径一致）。绝不 makeCurrent——避免线程 OTel 上下文栈残留
+    // → traceId 跨请求泄漏（历史已修复的 98968ms 异常本源）。span 仅覆盖路由决策，
+    // 立即 end()，无悬挂风险。
+    Span l0Span = GlobalOpenTelemetry.getTracer("obs-chat-model")
+            .spanBuilder("L0:DomainRouter")
+            .setSpanKind(SpanKind.INTERNAL)
+            .startSpan();
+    try {
+        l0Span.setAttribute("agent.name", "DomainRouter");
+        l0Span.setAttribute("agent.layer", "L0");
+        l0Span.setAttribute("intent", deterministic.domain());
+        l0Span.setAttribute("routing.mode", "deterministic");   // 区分确定性 vs LLM 路由
+        l0Span.setAttribute("session_id", sessionId != null ? sessionId.trim() : "");
+    } finally {
+        l0Span.end();
+    }
+    updateLastDomain(...); ... return deterministic;
+}
+```
+- **设计要点**：
+  - 确定性 L0 span 的 `operationName = "L0:DomainRouter"`（LLM 路径为 `"L0:qwen-plus"`），均被后端 `COUNT(DISTINCT trace_id) WHERE op LIKE 'L0%'` 计数命中 → L0 计数覆盖全部请求。
+  - **不 `makeCurrent`**：沿用历史教训（traceId 跨请求泄漏根因 = `Scope` 同线程不配对 close）。确定性路径无 LLM 调用，直接创建+结束 span，parent 自动取当前 server span，与 LLM 路径 OTel 树结构一致（均为 server span 的「业务子 span」），前端按 `layer` 缩进渲染正常。
+  - **不依赖 `AgentSpanContext`**：确定性分支无下游 ObsChatModel 消费，故不走 `setWithHeldSpan`/`commitIntent` 托管模式，避免 `try-finally` 外 return 导致 `clear()` 不执行而 span 泄漏。
+  - 新增 `routing.mode=deterministic` 属性，便于后端/前端区分"关键词命中（0ms）"与"LLM 路由"两种 L0 来源。
+
+### 编译
+- `./mvnw.cmd compile -DskipTests -o` EXIT=0（2026-07-14）。待 `start-all.ps1` 重启 Core(8080) 部署后验证。
+
+### 预期验证（清库 + seed_all.py 36 条后）
+- `GET /api/v1/metrics/realtime` 的 `l0Calls ≈ 36`（= 请求数，确定性 14 + LLM 22），`l1Calls = 36`（每请求 1 次 L1-*），`l2Calls ≤ 36` → **L0(36) ≥ L1(36) ≥ L2**，L2≤L0 恒成立。
+- 含 `routing.mode=deterministic` 的 L0 span 出现在 trace 瀑布 L0 层（与 LLM 路径 L0 并列），trace 列表全部 36 条均带 L0 段。
+- 注意：若某 session 多轮均走确定性（如 np1 三轮机"基金/货币基金/买货币基金"全命中 WEALTH 关键词），该 session 三轮均产生 L0 span，Trace 列表按轮显示，与 8.17 的「单轮真实意图链」一致。
+
+### 同步说明
+- 8.15 待定项 A 已从「待定」改为「🟢 已决策（方案 b）已实施」，本 §8.18 为其落地记录。
+- 8.14 中"L0=10 < 36 属正确可观测语义"的结论需修正：那是基于"L0 仅统计 LLM 路由"的旧口径；现方案 b 下 L0 覆盖全部请求，L0=36 才是目标态，L0<请求数反而说明有请求未进 DomainRouter（如 `/state`、`/session` 非业务端点，本就不该有 L0）。

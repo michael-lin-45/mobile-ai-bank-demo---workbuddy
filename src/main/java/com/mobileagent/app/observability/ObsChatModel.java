@@ -113,7 +113,7 @@ public class ObsChatModel implements ChatModel {
             log.info("[ObsChatModel][DIAG] call() held={} layer={} name={} thread={} spanNull={}",
                     held, agentLevel, agentName, Thread.currentThread().getName(), span == null);
         }
-        Scope scope = span != null ? span.makeCurrent() : null;
+        Scope scope = openScope(span, rc);
         boolean ended = false;
         try {
             // Set prompt attribute on span
@@ -185,7 +185,12 @@ public class ObsChatModel implements ChatModel {
         String agentName = rc.name;
         String intent = rc.intent;
         io.opentelemetry.api.trace.Span span = startBusinessSpan(rc);
-        Scope scope = span != null ? span.makeCurrent() : null;
+        // ⚠️ 关键：绝不在装配线程 makeCurrent()。
+        // stream() 的 doOnNext/doOnComplete/doOnError 运行在 reactor 调度线程，与此处装配线程不同；
+        // 装配线程打开的 Scope 无法在 reactor 线程 close，会残留在被线程池复用的装配线程上 →
+        // 下一个请求 startBusinessSpan 误继承该残留上下文为 parent → traceId 跨请求合并、duration 虚高、intent 串标。
+        // 业务 span 已在上一行用装配线程"当前(干净)上下文"创建，自带正确 parent 与独立 traceId；
+        // 后续仅通过 span 引用直接写属性/结束(setSpanAttribute/span.end())，不依赖 ThreadLocal 当前上下文，故无需 openScope。
         // Set prompt attribute on span
         if (span != null) {
             String promptText = prompt != null && prompt.getInstructions() != null
@@ -235,7 +240,8 @@ public class ObsChatModel implements ChatModel {
                         setSpanAttribute(span, "ai.token.input", String.valueOf(usageInputTokens.get()));
                         setSpanAttribute(span, "ai.token.output", String.valueOf(usageOutputTokens.get()));
                     }
-                    if (scope != null) scope.close();
+                    // 不在此 scope.close()：本回调在 reactor 线程执行，与装配线程不同；
+                    // 已不再打开装配线程 scope，直接结束 span 即可。
                     span.end();
                 }
 
@@ -261,7 +267,15 @@ public class ObsChatModel implements ChatModel {
                     setSpanAttribute(span, "error", e.getClass().getSimpleName() + ": " + e.getMessage());
                     span.recordException(e);
                     span.setStatus(StatusCode.ERROR);
-                    if (scope != null) scope.close();
+                    // 同 doOnComplete：不做 scope.close()，直接结束 span。
+                    span.end();
+                }
+            })
+            .doOnCancel(() -> {
+                // SSE 客户端提前断开时会触发 cancel 而非 complete/error；
+                // 若不结束 span 会造成 span 悬挂(永不上报/永不结束)。此处兜底结束。
+                if (span != null) {
+                    setSpanAttribute(span, "cancelled", "true");
                     span.end();
                 }
             });
@@ -458,19 +472,37 @@ public class ObsChatModel implements ChatModel {
             log.info("[ObsChatModel] Business span created: name={}, layer={}, agentName={}, intent={}, sessionId={}, span={}",
                 spanName, rc.layer, rc.name, rc.intent, rc.sessionId, span);
 
-            // Also propagate via Baggage so child HTTP spans inherit these attributes
-            io.opentelemetry.api.baggage.Baggage baggage = io.opentelemetry.api.baggage.Baggage.builder()
+            // 构造 Baggage 供子 HTTP span 继承这些业务属性。
+            // ⚠️ 切勿在此 makeCurrent()——返回的 Scope 若不 close 会破坏线程 OTel 上下文栈，
+            //    线程池复用时下一请求的 server span 会挂到残留上下文 → traceId 跨请求泄漏
+            //    （36 请求塌缩成 ~10 traceId、intent 串标、duration 高达 99s+）。
+            //    改为存入 rc，由 call()/stream() 与 span 合并进同一个会被 finally 正常 close 的 scope。
+            rc.baggage = io.opentelemetry.api.baggage.Baggage.builder()
                     .put("agent.layer", rc.layer != null ? rc.layer : "")
                     .put("intent", rc.intent != null ? rc.intent : "")
                     .put("session_id", rc.sessionId != null ? rc.sessionId.trim() : "")
                     .build();
-            io.opentelemetry.context.Context.current().with(baggage).makeCurrent();
 
             return span;
         } catch (Exception e) {
             log.debug("[ObsChatModel] Failed to create business span: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 打开覆盖 span + baggage 的单一 OTel Scope。
+     * 关键：span 与 baggage 必须合并进【同一个】Scope，由 call()/stream() 在 finally / doOnComplete /
+     * doOnError 里统一 close，确保线程 OTel 上下文栈严格平衡——杜绝旧实现中 baggage 单独 makeCurrent()
+     * 却从不 close 导致的 traceId 跨请求泄漏。span 为 null 时返回 null（不影响主业务）。
+     */
+    private Scope openScope(io.opentelemetry.api.trace.Span span, ResolvedCtx rc) {
+        if (span == null) return null;
+        io.opentelemetry.context.Context ctx = io.opentelemetry.context.Context.current().with(span);
+        if (rc != null && rc.baggage != null) {
+            ctx = ctx.with(rc.baggage);
+        }
+        return ctx.makeCurrent();
     }
 
     // ==================== 上下文解析（ThreadLocal 优先，模型绑定兜底） ====================
@@ -485,6 +517,10 @@ public class ObsChatModel implements ChatModel {
         /** 保留进入 call() 时解析到的 AgentSpanContext 强引用，避免 call 期间 ThreadLocal
          *  因线程切换/提前清理而不可见，导致 held 误判为 false、span 被提前 end。 */
         AgentSpanContext spanCtx;
+        /** startBusinessSpan 构造的 Baggage：不在 startBusinessSpan 内 makeCurrent（会泄漏未关闭 Scope，
+         *  破坏线程 OTel 上下文栈 → traceId 跨请求泄漏），改由 call()/stream() 与 span 合并进同一个
+         *  会被 finally 正常 close 的 scope。 */
+        io.opentelemetry.api.baggage.Baggage baggage;
     }
 
     /**
