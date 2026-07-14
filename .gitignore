@@ -34,3 +34,10 @@ build/
 .vscode/
 observability/otel-collector/
 observability/backend/data/
+
+### Runtime artifacts（避免把日志/二进制/缓存提交进仓库） ###
+core.log
+dump.rdb
+scripts/logs/
+__pycache__/
+*.pyc

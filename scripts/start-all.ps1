@@ -292,7 +292,7 @@ Set-Location $OBS_BACKEND_PATH
 
 # 编译后端 (确保最新代码生效)
 Write-Host "  编译可观测后端..." -ForegroundColor DarkGray
-$compileCmd = "cd '$OBS_BACKEND_PATH'; mvn package -DskipTests -q"
+$compileCmd = "cd '$OBS_BACKEND_PATH'; .\mvnw.cmd package -DskipTests -q"
 $compileBytes = [System.Text.Encoding]::Unicode.GetBytes($compileCmd)
 $compileB64 = [Convert]::ToBase64String($compileBytes)
 $compileProc = Start-Process powershell -ArgumentList "-NoProfile", "-EncodedCommand", $compileB64 -WindowStyle Hidden -Wait -PassThru
@@ -350,7 +350,7 @@ $dnsJvmArgs = if ($DNS_SERVER) { "-Dreactor.netty.dns.nameservers=$DNS_SERVER -D
 
 # 编译核心系统 (确保最新代码生效)
 Write-Host "  编译核心系统..." -ForegroundColor DarkGray
-$coreCompileCmd = "cd '$CORE_PROJECT_PATH'; mvn package -DskipTests -q"
+$coreCompileCmd = "cd '$CORE_PROJECT_PATH'; .\mvnw.cmd package -DskipTests -q"
 $coreCompileBytes = [System.Text.Encoding]::Unicode.GetBytes($coreCompileCmd)
 $coreCompileB64 = [Convert]::ToBase64String($coreCompileBytes)
 $coreCompileProc = Start-Process powershell -ArgumentList "-NoProfile", "-EncodedCommand", $coreCompileB64 -WindowStyle Hidden -Wait -PassThru

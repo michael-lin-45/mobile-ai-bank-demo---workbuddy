@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-统一播种脚本（UTF-8 安全），覆盖原 test/seed.sh(英文) + test/seed_new.sh(中文) 全部 36 条对话。
+统一播种脚本（UTF-8 安全），覆盖原 test/seed.sh(已汉化) + test/seed_new.sh(中文) 全部 36 条对话。
 解决 Git Bash 下 curl -d 传中文 UTF-8 损坏导致 Core 400 的问题。
 直接 urllib + utf-8 body，确保中文消息正确送达 Core。
 """
@@ -15,26 +15,26 @@ BASE = "http://127.0.0.1:8080/api/bank/chat"
 
 # (sessionId, message, sleep_after_seconds)
 TURNS = [
-    # ---- seed.sh (英文) ----
-    ("zs1", "transfer 50000 to Li Si", 3),
-    ("zs1", "yes confirm", 3),
-    ("zs1", "ok proceed", 3),
-    ("zs2", "show last month bills", 3),
-    ("zs2", "how much on food", 3),
-    ("ww1", "recommend conservative funds", 4),
-    ("ww1", "explain Chaochao Ying", 4),
-    ("ww1", "anything else", 4),
-    ("ww1", "transfer 30000 to Zhao Liu", 4),
-    ("ww1", "confirm", 4),
-    ("xm1", "I want to check wealth", 4),
-    ("xm1", "product interpretation", 4),
-    ("ll1", "transfer 500 to Zhang San", 3),
-    ("ll1", "cancel it", 3),
-    ("am1", "recommend tech sector funds", 4),
-    ("am1", "historical returns", 4),
-    ("am1", "risk level", 4),
-    ("xmi1", "hello there", 3),
-    ("xmi1", "did my salary arrive", 3),
+    # ---- seed.sh (已汉化) ----
+    ("zs1", "转账50000给李四", 3),
+    ("zs1", "确认", 3),
+    ("zs1", "好的，继续", 3),
+    ("zs2", "查一下上个月的账单", 3),
+    ("zs2", "餐饮花了多少钱", 3),
+    ("ww1", "推荐稳健的基金", 4),
+    ("ww1", "解释一下朝朝盈", 4),
+    ("ww1", "还有别的吗", 4),
+    ("ww1", "转账3万给赵六", 4),
+    ("ww1", "确认", 4),
+    ("xm1", "我想看看理财", 4),
+    ("xm1", "产品解读", 4),
+    ("ll1", "转账500给张三", 3),
+    ("ll1", "取消", 3),
+    ("am1", "推荐科技板块的基金", 4),
+    ("am1", "历史收益", 4),
+    ("am1", "风险等级", 4),
+    ("xmi1", "你好", 3),
+    ("xmi1", "我的工资到账了吗", 3),
     # ---- seed_new.sh (中文) ----
     ("np1", "你好，我想了解一下基金产品，有什么推荐的吗", 4),
     ("np1", "能详细说说货币基金和债券基金的区别吗", 4),

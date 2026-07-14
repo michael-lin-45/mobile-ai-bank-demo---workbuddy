@@ -13,7 +13,7 @@ def check(url, label):
         return f"  {label}: FAIL -> {e}"
 
 print("=" * 60)
-print("Full-Stack Verification")
+print("全栈验证")
 print("=" * 60)
 
 # 1. Backend
@@ -26,8 +26,8 @@ print("\n[Core 8080]")
 print(check("http://127.0.0.1:8080/actuator/health", "Health"))
 
 # 3. Chat API
-print("\n[Chat API]")
-msgs = ["I want to invest", "check my balance", "transfer 100 to Bob"]
+print("\n[聊天 API]")
+msgs = ["我想理财投资", "查一下我的余额", "转账100给王五"]
 for msg in msgs:
     url = "http://127.0.0.1:8080/api/bank/chat?sessionId=verify"
     body = json.dumps({"message": msg}).encode("utf-8")
@@ -57,4 +57,4 @@ for ep in ["/api/v1/metrics", "/api/v1/traces", "/api/v1/logs"]:
         print(f"  {ep}: {e}")
 
 print("\n" + "=" * 60)
-print("Verification complete")
+print("验证完成")

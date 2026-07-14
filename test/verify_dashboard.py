@@ -35,14 +35,14 @@ C = "http://127.0.0.1:8080"
 CORE_CHAT = C + "/api/bank/chat"
 
 TRAFFIC_TURNS = [
-    ("vSeedA", "transfer 50000 to Li Si"),
-    ("vSeedA", "yes confirm"),
-    ("vSeedB", "show last month bills"),
-    ("vSeedC", "recommend conservative funds"),
-    ("vSeedC", "explain Chaochao Ying"),
-    ("vSeedD", "I want to check wealth"),
-    ("vSeedE", "recommend tech sector funds"),
-    ("vSeedF", "hello there"),
+    ("vSeedA", "转账50000给李四"),
+    ("vSeedA", "确认"),
+    ("vSeedB", "查一下上个月的账单"),
+    ("vSeedC", "推荐稳健的基金"),
+    ("vSeedC", "解释一下朝朝盈"),
+    ("vSeedD", "我想看看理财"),
+    ("vSeedE", "推荐科技板块的基金"),
+    ("vSeedF", "你好"),
 ]
 
 

@@ -6,8 +6,8 @@ from urllib import request
 body = json.dumps({
     "sessionId": "sim-bridge-001",
     "userId": "sim",
-    "userInput": "transfer 100 to Alice",
-    "aiResponse": "转账成功！已向Alice转账100元。交易流水号：TXN203005",
+    "userInput": "转账100给王五",
+    "aiResponse": "转账成功！已向王五转账100元。交易流水号：TXN203005",
     "intent": "TRANSFER",
     "agentPath": "TRANSFER",
     "confidence": 0.0,
