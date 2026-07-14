@@ -36,6 +36,10 @@ public class SubGraphProperties {
     @Data
     public static class SubGraphConfigProps {
         private String name;
+        /** 所属领域 — 用于编排层自动推导 domainAgent 的默认 L2GraphTool */
+        private String domain;
+        /** 对应的 L2 CompiledGraph Bean 名 — 用于编排层自动绑定默认工具 */
+        private String graphBean;
         private String description;
         private String paramSchema;
         private boolean isWriteOp;

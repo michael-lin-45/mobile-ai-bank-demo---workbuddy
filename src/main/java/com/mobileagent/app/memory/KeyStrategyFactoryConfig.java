@@ -4,6 +4,7 @@ import com.alibaba.cloud.ai.graph.KeyStrategy;
 import com.alibaba.cloud.ai.graph.KeyStrategyFactory;
 import com.alibaba.cloud.ai.graph.state.strategy.AppendStrategy;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
+import com.mobileagent.app.orchestration.model.OrchestrationStateKeys;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -43,6 +44,9 @@ public class KeyStrategyFactoryConfig {
             strategies.put("_isFinal", new ReplaceStrategy());
             strategies.put("_cancelSignal", new ReplaceStrategy());
             strategies.put("_globalStateData", new ReplaceStrategy());
+
+            // Orchestration keys
+            strategies.put(OrchestrationStateKeys.STEP_L2_STATUS, new ReplaceStrategy());
 
             // 动态注册: L1 域的 DomainState key
             for (DomainStateAware provider : providers) {

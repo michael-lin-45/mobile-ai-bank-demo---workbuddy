@@ -35,6 +35,13 @@ public class DomainServiceRegistry {
     }
 
     /**
+     * 获取所有已注册的 DomainHandler（用于L1上下文扫描等场景）
+     */
+    public Collection<DomainHandler> getAllHandlers() {
+        return Collections.unmodifiableCollection(registry.values());
+    }
+
+    /**
      * 根据意图名反查所属领域
      *
      * 遍历所有注册的DomainHandler，查找哪个handler的handledIntents包含该意图。

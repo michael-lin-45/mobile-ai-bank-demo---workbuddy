@@ -96,6 +96,26 @@ public class GlobalSessionContext {
         return String.join("\n", recent);
     }
 
+    /**
+     * 格式化最近N条消息（按条数，非对数），供编排层等需要灵活控制上下文长度的场景使用
+     *
+     * @param maxItems 最大消息条数
+     * @return 格式化字符串
+     */
+    @SuppressWarnings("unchecked")
+    public String formatRecentItems(int maxItems) {
+        List<String> messages = (List<String>) (List<?>) state.value("messages")
+                .filter(List.class::isInstance)
+                .orElse(List.of());
+
+        if (messages.isEmpty()) return "(无历史对话)";
+
+        int start = Math.max(0, messages.size() - maxItems);
+        List<String> recent = messages.subList(start, messages.size());
+
+        return String.join("\n", recent);
+    }
+
     // ==================== lastDomain管理 (通过 OverAllState 的 _lastDomain key + ReplaceStrategy) ====================
 
     public void setLastDomain(String domain, long expireAt) {
@@ -112,7 +132,9 @@ public class GlobalSessionContext {
     }
 
     public void clearLastDomain() {
-        state.data().remove("_lastDomain");
+        // state.data() returns an unmodifiable map — cannot call remove() directly.
+        // Use updateState with an expired entry so getLastDomain() returns null.
+        state.updateState(Map.of("_lastDomain", new LastDomainEntry("", 0L)));
     }
 
     // ==================== DomainState 读写 (每个域一个 OverAllState key, ReplaceStrategy) ====================

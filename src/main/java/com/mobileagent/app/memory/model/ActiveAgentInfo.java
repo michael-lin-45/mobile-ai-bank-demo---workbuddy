@@ -28,6 +28,9 @@ public class ActiveAgentInfo implements Serializable {
     /** 中断时的提问内容 */
     private String lastQuestion;
 
+    /** 该L1子图交互过程中的所有用户输入记录，第一个元素为原始输入（如"给我妈转点家用"） */
+    private java.util.List<String> userMessages = new java.util.ArrayList<>();
+
     public ActiveAgentInfo() {
     }
 

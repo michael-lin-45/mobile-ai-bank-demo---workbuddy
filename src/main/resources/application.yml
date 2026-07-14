@@ -79,6 +79,16 @@ models:
     base-url: ${WEALTH_INTERPRET_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode}  # 理财解读模型API地址
     api-key: ${WEALTH_INTERPRET_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                # 理财解读模型API密钥
     model: ${WEALTH_INTERPRET_MODEL:qwen-turbo}                                               # 理财解读模型名称
+  # Orchestration Planner模型 - 多意图规划需要较强的推理能力
+  orch-planner:
+    base-url: ${ORCH_PLANNER_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode}  # 编排规划模型API地址
+    api-key: ${ORCH_PLANNER_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                # 编排规划模型API密钥
+    model: ${ORCH_PLANNER_MODEL:qwen-turbo}                                               # 编排规划模型名称
+  # Orchestration Agent模型 - 域Agent和SummaryAgent使用
+  orch:
+    base-url: ${ORCH_BASE_URL:https://ws-et7odty5cdhpdj1l.cn-beijing.maas.aliyuncs.com/compatible-mode}  # 编排Agent模型API地址
+    api-key: ${ORCH_API_KEY:sk-ws-H.RXRIMDR.I29P.MEUCIEPeZpJoGxK8tlp8W8FaVzVav_OadL74dqYvu9JJM-wFAiEAqkVcYUITyeQ2YzM14w1TarXcLSANmTGglFcIOLEVZ6o}                # 编排Agent模型API密钥
+    model: ${ORCH_MODEL:qwen-turbo}                                               # 编排Agent模型名称
 
 # ==================== 路由配置 ====================
 # 绑定到 SubGraphProperties, 新增领域只需改yml不动Java
