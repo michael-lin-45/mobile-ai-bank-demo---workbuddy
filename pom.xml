@@ -67,6 +67,13 @@
             <version>${spring-ai-alibaba.version}</version>
         </dependency>
 
+        <!-- Spring AI Alibaba Agent Framework (ReactAgent, StateAwareToolCallback, AgentHook) -->
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-agent-framework</artifactId>
+            <version>1.1.2.2</version>
+        </dependency>
+
 		<!-- Spring WebFlux for SSE streaming support -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
