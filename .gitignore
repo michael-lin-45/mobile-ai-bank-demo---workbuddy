@@ -62,6 +62,7 @@ ppt/.edge_profile/
 *.bak
 * - 备份*.yml
 * - 副本*.yml
+* - 商*.yml
 
 ### 文档站点索引（自动生成，不交付） ###
 docs/project.json
