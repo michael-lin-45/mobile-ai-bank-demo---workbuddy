@@ -1,4 +1,0 @@
-﻿PID=1728 CLI="C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot\bin\java.exe" -Xms512m -Xmx1024m -XX:MaxMetaspaceSize=256m -jar target/observability-backend-0.1.0-SNAPSHOT.jar --server.port=9090
-PID=14640 CLI=c:\Users\Administrator\.vscode\extensions\redhat.java-1.55.0-win32-x64\jre\21.0.11-win32-x86_64\bin\java --add-modules=ALL-SYSTEM --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --
-PID=32432 CLI=java  -Xms512m -Xmx1024m -XX:MaxMetaspaceSize=256m -Dreactor.netty.dns.nameservers=114.114.114.114 -Djava.net.preferIPv4Stack=true -javaagent:"D:\GitHub\mobile-ai-bank-demo - workbuddy\opentelemetry-javaagent.jar" -jar "
-9090 -> PID 1728 1728 1728 0 0 0 0
