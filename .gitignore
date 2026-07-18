@@ -38,6 +38,13 @@ observability/backend/data/
 ### Runtime artifacts（避免把日志/二进制/缓存提交进仓库） ###
 core.log
 dump.rdb
+core-build.log
+core-manual.log
+redis.log
+redis-manual.log
+seed_green.log
+seed_verify.log
+start-all-output.log
 scripts/logs/
 test/logs/
 __pycache__/

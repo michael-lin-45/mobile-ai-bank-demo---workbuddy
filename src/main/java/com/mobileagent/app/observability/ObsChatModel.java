@@ -38,20 +38,20 @@ import java.util.concurrent.atomic.AtomicLong;
  * 在 ModelConfig.buildChatModel() 返回处包一层即可，业务代码零改动。
  *
  * ─────────────────────────────────────────────────────────────
- * OTel Span 属性注入建议 (TODO — P2 改进):
+ * OTel Span 属性注入 (已实现):
  * ─────────────────────────────────────────────────────────────
- * 当前: 只记录 Micrometer Counter/Timer，不创建含业务属性的 OTel Span。
- *       自动 Span（Micrometer Bridge 生成）不含 userId / sessionId /
- *       intent 等属性，观测后端显示 "N/A" / "未采集"。
+ * 当前: 通过 ObsChatModel + AgentSpanContext 已创建含业务属性的 OTel Span
+ *       (L0/L1 层级)，并在 span 上注入 session_id / intent / model /
+ *       routing.mode 等属性，观测后端可正常展示（含 DomainRouter 确定性路由
+ *       补的 L0:DomainRouter span）。下方为可进一步增强的属性清单（非必须）。
  *
- * 建议改造:
- *   1. 注入 io.micrometer.tracing.Tracer 或 OpenTelemetry tracer
+ * 已落地的改造:
+ *   1. 注入 OpenTelemetry tracer（GlobalOpenTelemetry.getTracer）
  *   2. 在 call()/stream() 入口创建自定义 Span:
- *      - span.setAttribute("user_id", sessionContext.getUserId())
- *      - span.setAttribute("session_id", sessionContext.getSessionId())
- *      - span.setAttribute("intent", intentResult.getIntentName())
- *      - span.setAttribute("ai.token.system", String.valueOf(systemTokens))
- *      - span.setAttribute("ai.io.prompt", promptText)
+ *      - span.setAttribute("session_id", sessionId)
+ *      - span.setAttribute("intent", intent)
+ *      - span.setAttribute("model", modelName)
+ *      - span.setAttribute("routing.mode", "deterministic" | "llm_fallback")
  *   3. 或使用 AOP 切面在 Agent 层（L0/L1/L2）自动注入上下文属性
  *
  * 观测后端已支持: TraceQueryService.extractBusinessAttributes()

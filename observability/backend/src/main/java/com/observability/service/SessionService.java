@@ -13,6 +13,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 /**
@@ -21,6 +23,11 @@ import java.util.*;
 @Slf4j
 @Service
 public class SessionService {
+
+    /** 全局时区：北京时间（东八区）。所有面向前端的 Instant 展示均按此时区格式化。 */
+    private static final ZoneId BEIJING = ZoneId.of("Asia/Shanghai");
+    private static final DateTimeFormatter BJ_FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(BEIJING);
 
     private final SessionRepository sessionRepository;
     private final SessionTurnRepository sessionTurnRepository;
@@ -363,6 +370,34 @@ public class SessionService {
 
     private Map<String, Object> toTurnVO(SessionTurn t) {
         Map<String, Object> vo = new LinkedHashMap<>();
+        // P0-2 整改：从 trace spans 解析真实 model 与 TTFT（替换原硬编码 0L / "qwen-plus"）
+        String resolvedModel = "未知";
+        long resolvedTtft = 0L;
+        try {
+            if (t.getTraceId() != null) {
+                List<SpanEntity> spans = spanRepository.findByTraceIdOrderByStartTimeAsc(t.getTraceId());
+                if (spans != null && !spans.isEmpty()) {
+                    SpanEntity firstSpan = spans.get(0);
+                    SpanEntity llmSpan = null;
+                    for (SpanEntity s : spans) {
+                        String op = s.getOperationName();
+                        // P0-2 增强：不限定 qwen，凡 L0: 前缀的 span 即视为真实 LLM 模型调用，
+                        // 取首个作为本轮模型名（兼容 gpt-4o / claude / deepseek 等任意供应商）。
+                        if (op != null && op.startsWith("L0:")) {
+                            resolvedModel = op.length() > 3 ? op.substring(3) : "";
+                            llmSpan = s;
+                            break;
+                        }
+                    }
+                    if (llmSpan == null) resolvedModel = "规则模式(确定性路由)";
+                    if (llmSpan != null && firstSpan.getStartTime() != null && llmSpan.getStartTime() != null) {
+                        resolvedTtft = java.time.Duration.between(firstSpan.getStartTime(), llmSpan.getStartTime()).toMillis();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[SessionService] resolve model/ttft failed for trace={}: {}", t.getTraceId(), e.getMessage());
+        }
         vo.put("turnNumber", t.getTurnNumber());
         vo.put("traceId", t.getTraceId());
         // Frontend SessionDetailModal expects userMessage / aiMessage (NOT userQuery / aiResponse)
@@ -377,14 +412,14 @@ public class SessionService {
         vo.put("tokenInput", t.getTokens() != null ? t.getTokens() : 0);
         vo.put("tokenOutput", 0);
         vo.put("tokens", t.getTokens() != null ? t.getTokens() : 0); // alias used by SessionDetailModal
-        vo.put("ttftMs", 0L); // TODO: TTFT should come from OTel span attributes or SessionBridge when available
+        vo.put("ttftMs", resolvedTtft); // P0-2 整改：真实 TTFT（首 LLM span 起始 - 首 span 起始，毫秒）
         vo.put("rerouteTriggered", false);
         vo.put("businessOutcome", t.getStatus());
         vo.put("status", t.getStatus()); // used by SessionDetailModal for turn status badges
         // Additional fields used by SessionDetailModal
-        vo.put("time", t.getTimestamp() != null ? t.getTimestamp().toString() : null);
+        vo.put("time", t.getTimestamp() != null ? BJ_FMT.format(t.getTimestamp()) : null);
         vo.put("confidence", t.getConfidence());
-        vo.put("model", "qwen-plus"); // placeholder — real model info from OTel trace attributes TBD
+        vo.put("model", resolvedModel); // P0-2 整改：从 L0:qwen-* span operationName 解析真实模型
         vo.put("params", null);
         return vo;
     }
@@ -412,8 +447,8 @@ public class SessionService {
      */
     private String formatTimeRange(Instant start, Instant end) {
         if (start == null) return "-";
-        if (end == null) return start.toString();
-        return start.toString() + " ~ " + end.toString();
+        if (end == null) return BJ_FMT.format(start);
+        return BJ_FMT.format(start) + " ~ " + BJ_FMT.format(end);
     }
 
     private String formatDuration(long ms) {

@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatBeijingTime } from '../utils/time';
 
 /**
  * TraceTable — 链路追踪列表
@@ -71,6 +72,7 @@ function TraceTable({ traces = [], onViewDetail, loading }) {
         <thead>
           <tr>
             <th style={TH_STYLE}>Trace</th>
+            <th style={TH_STYLE}>时间</th>
             <th style={TH_STYLE}>Session</th>
             <th style={TH_STYLE}>User</th>
             <th style={TH_STYLE}>意图</th>
@@ -95,6 +97,9 @@ function TraceTable({ traces = [], onViewDetail, loading }) {
                 <span style={{ ...MONO_STYLE, color: '#1677ff', fontSize: 11 }}>
                   {shortId(t.traceId)}
                 </span>
+              </td>
+              <td style={{ ...TD_STYLE, ...MONO_STYLE, fontSize: 11 }}>
+                {formatBeijingTime(t.timestamp)}
               </td>
               <td style={TD_STYLE}>
                 <span style={{ ...MONO_STYLE, fontSize: 11 }}>{shortId(t.sessionId)}</span>

@@ -192,8 +192,11 @@ $REDIS_BIN        = "C:\Program Files\Redis\redis-server.exe"
 $REDIS_CLI        = "C:\Program Files\Redis\redis-cli.exe"
 
 # JVM memory limits (prevent OOM kill)
-$OBS_JVM_MEM      = "-Xms512m -Xmx1024m -XX:MaxMetaspaceSize=256m"
-$CORE_JVM_MEM     = "-Xms512m -Xmx1024m -XX:MaxMetaspaceSize=256m"
+# 注意: -Duser.timezone 的值含 "/", 在 Base64 子 PowerShell 二次解析时会被在 "-Duser" 处拆断
+# (java 会把 ".timezone=Asia/Shanghai" 当主类 → ClassNotFoundException)。
+# 必须用字面双引号包成单 token; 故这两个变量用单引号定义以保留内部双引号。
+$OBS_JVM_MEM      = '-Xms512m -Xmx1024m -XX:MaxMetaspaceSize=256m "-Duser.timezone=Asia/Shanghai"'
+$CORE_JVM_MEM     = '-Xms512m -Xmx1024m -XX:MaxMetaspaceSize=256m "-Duser.timezone=Asia/Shanghai"'
 $OBS_JAR          = "observability-backend-0.1.0-SNAPSHOT.jar"
 $CORE_JAR         = "mobile-ai-demo-0.0.1-SNAPSHOT.jar"
 
@@ -220,7 +223,9 @@ if (-not $redisStopped) {
   Write-Warning "  端口 $REDIS_PORT 仍被占用，无法释放"
   Stop-AllAndExit
 }
-Start-Process $REDIS_BIN -WindowStyle Hidden -ErrorAction SilentlyContinue
+# Redis 日志重定向到文件 (便于排障, 默认 Redis 日志走 stdout)
+$redisLog = Join-Path $ROOT "redis.log"
+Start-Process $REDIS_BIN -WindowStyle Hidden -ErrorAction SilentlyContinue -RedirectStandardOutput $redisLog
 $redisUp = $false
 for ($i = 0; $i -lt 15; $i++) {
   try { & $REDIS_CLI PING 2>$null | Out-Null; $redisUp = $true; Write-Host "  Redis PONG (${i}s)" -ForegroundColor Green; break }
@@ -310,7 +315,7 @@ if (-not (Test-Path $obsJarPath)) {
 }
 Write-Host "  JAR ready: $OBS_JAR" -ForegroundColor DarkGray
 
-$obsCmd = "cd '$OBS_BACKEND_PATH'; java $OBS_JVM_MEM -jar target/$OBS_JAR --server.port=$OBS_PORT"
+$obsCmd = "cd '$OBS_BACKEND_PATH'; java $OBS_JVM_MEM -jar target/$OBS_JAR --server.port=$OBS_PORT > '$OBS_BACKEND_PATH\backend.log' 2>&1"
 $obsBytes = [System.Text.Encoding]::Unicode.GetBytes($obsCmd)
 $obsB64 = [Convert]::ToBase64String($obsBytes)
 $backendProc = Start-Process powershell -ArgumentList "-NoProfile", "-EncodedCommand", $obsB64 -WindowStyle Hidden -PassThru
@@ -407,7 +412,8 @@ if (-not $feStopped) {
 }
 Set-Location $OBS_FRONTEND_PATH
 if (Test-Path (Join-Path $OBS_FRONTEND_PATH "node_modules")) {
-  $feProc = Start-Process cmd -ArgumentList "/c","npm run dev" -WindowStyle Hidden -PassThru
+  $feLog = Join-Path $OBS_FRONTEND_PATH "frontend.log"
+  $feProc = Start-Process cmd -ArgumentList "/c","npm run dev > `"$feLog`" 2>&1" -WindowStyle Hidden -PassThru
   if (Wait-Url "http://127.0.0.1:$FRONTEND_PORT/" -MaxTries 30 -SleepSec 2) {
     Write-Host "  前端启动成功, 端口: $FRONTEND_PORT" -ForegroundColor Green
   } else {
@@ -430,9 +436,15 @@ Write-Host "  核心项目接口   : http://127.0.0.1:$CORE_PORT"
 Write-Host "  Collector OTLP : http://127.0.0.1:$COLLECTOR_PORT"
 Write-Host "  Redis 热层     : 127.0.0.1:$REDIS_PORT"
 Write-Host "  前端界面       : http://127.0.0.1:$FRONTEND_PORT"
+Write-Host "  运行日志 (排障用):" -ForegroundColor Cyan
+Write-Host "    Redis    : $ROOT\redis.log" -ForegroundColor DarkGray
+Write-Host "    Backend  : $OBS_BACKEND_PATH\backend.log" -ForegroundColor DarkGray
+Write-Host "    Collector: $COLLECTOR_PATH\collector.log" -ForegroundColor DarkGray
+Write-Host "    Core     : $CORE_PROJECT_PATH\core.log" -ForegroundColor DarkGray
+Write-Host "    Frontend : $OBS_FRONTEND_PATH\frontend.log" -ForegroundColor DarkGray
 Write-Host "`n按任意键退出启动器, 服务继续在后台运行..."
 Write-Host "  (如需停止全部服务, 按 Ctrl+C 即可一键清理)" -ForegroundColor DarkGray
-$null = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+try { $null = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") } catch { }
 } finally {
   if ($global:CtrlC) { global:Stop-AllServices }
 }

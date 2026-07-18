@@ -96,7 +96,7 @@ function SessionViewerPage() {
 
   const handleTraceClick = useCallback((traceId) => {
     if (traceId) {
-      window.location.href = `/trace`;
+      window.location.href = `/trace?traceId=${encodeURIComponent(traceId)}`;
     }
   }, []);
 

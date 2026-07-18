@@ -31,11 +31,12 @@ function TraceExplorerPage() {
   const [selectedTrace, setSelectedTrace] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const handleSearch = useCallback(async (pageNum = 0) => {
+  const handleSearch = useCallback(async (pageNum = 0, traceIdOverride = null) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchTraces({ ...filters, page: pageNum, size: pageSize });
+      const effectiveFilters = traceIdOverride ? { ...filters, traceId: traceIdOverride } : filters;
+      const data = await fetchTraces({ ...effectiveFilters, page: pageNum, size: pageSize });
       if (data) {
         if (Array.isArray(data)) {
           setTraces(data);
@@ -58,9 +59,16 @@ function TraceExplorerPage() {
     }
   }, [filters, pageSize]);
 
-  // Auto-load traces on mount
+  // Auto-load traces on mount；若 URL 带 ?traceId= 则预填筛选并定位该 trace（P0-5 整改）
   useEffect(() => {
-    handleSearch();
+    const params = new URLSearchParams(window.location.search);
+    const qTraceId = params.get('traceId');
+    if (qTraceId) {
+      setFilters((f) => ({ ...f, traceId: qTraceId }));
+      handleSearch(0, qTraceId);
+    } else {
+      handleSearch(0);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

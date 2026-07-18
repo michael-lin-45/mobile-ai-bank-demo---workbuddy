@@ -7,10 +7,18 @@ BASE="http://127.0.0.1:8080/api/bank/chat"
 RUN_ID="s$(date +%s)${RANDOM}"
 PREFIX="seed-${RUN_ID}"
 
+# 计数器：按进程号隔离，记录成功/失败条数
+SEED_COUNTER="/tmp/seed_counter_$$.txt"
+echo "0 0" > "$SEED_COUNTER"
+
 send() {
   # 用 python 显式 UTF-8 发送，绕过 curl 在 Windows 下把命令行中文按 GBK 编码导致 400 的问题
-  SID="$1" MSG="$2" python3 - <<'PYEOF'
-import os, json, urllib.request, urllib.error
+  local SID="$1" MSG="$2"
+  local PY
+  PY="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)"
+  local OUT rc
+  OUT="$(SID="$SID" MSG="$MSG" "$PY" - <<'PYEOF'
+import os, json, sys, urllib.request, urllib.error
 sid = os.environ["SID"]
 msg = os.environ["MSG"]
 url = "http://127.0.0.1:8080/api/bank/chat?sessionId=" + sid
@@ -19,12 +27,29 @@ req = urllib.request.Request(url, data=body, headers={"Content-Type": "applicati
 try:
     with urllib.request.urlopen(req, timeout=60) as r:
         d = json.loads(r.read().decode("utf-8"))
-        print(f"  [{d.get('status')}] {d.get('intent','?')} - {(d.get('content') or d.get('question') or '')[:40]}")
+        status = d.get("status") or "?"
+        intent = d.get("intent") or "-"
+        answer = d.get("content") or d.get("question") or d.get("errorMessage") or ""
+        print("  ✅ [{}] {} — {}".format(status, intent, answer[:60].replace(chr(10), " ")))
+        sys.exit(0)
 except urllib.error.HTTPError as e:
-    print(f"  [HTTP {e.code}] {e.read().decode('utf-8','replace')[:120]}")
+    try:
+        b = e.read().decode("utf-8", "replace")
+    except Exception:
+        b = ""
+    print("  ❌ HTTP {} — {}".format(e.code, b[:120].replace(chr(10), " ")))
+    sys.exit(1)
 except Exception as e:
-    print(f"  [ERR] {e}")
+    print("  ❌ ERR — {}".format(str(e)[:120]))
+    sys.exit(1)
 PYEOF
+)"
+  rc=$?
+  echo "$OUT"
+  local ok fail
+  read ok fail < "$SEED_COUNTER" 2>/dev/null || { ok=0; fail=0; }
+  if [ "$rc" -eq 0 ]; then ok=$((ok + 1)); else fail=$((fail + 1)); fi
+  echo "$ok $fail" > "$SEED_COUNTER"
 }
 
 echo "=========================================="
@@ -84,3 +109,13 @@ echo "=========================================="
 echo "完成！7个会话，19轮"
 echo "  sessionId 前缀: ${PREFIX}-* (每次运行随机，重播不叠加旧会话)"
 echo "=========================================="
+
+# ── 播种结果汇总（存在失败则以非零码退出，便于自动化感知）──
+read ok fail < "$SEED_COUNTER" 2>/dev/null || { ok=0; fail=0; }
+rm -f "$SEED_COUNTER"
+echo ""
+echo ">>> 播种结果：$ok 成功 / $fail 失败"
+if [ "$fail" -gt 0 ]; then
+  echo "⚠️ 存在失败请求，请检查上方 ❌ 行（后端未启动 / 接口异常 / 网络问题）"
+  exit 1
+fi

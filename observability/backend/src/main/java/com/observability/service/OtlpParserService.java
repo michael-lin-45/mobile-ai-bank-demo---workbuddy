@@ -350,12 +350,20 @@ public class OtlpParserService {
     }
 
     /**
-     * OTel 标准 http 时长指标由 Micrometer OTLP 导出器以「秒」为单位，
-     * 需 ×1000 转为毫秒；自定义 llm.* Timer 已是毫秒，无需换算。
+     * OTel 标准语义中，所有「时长类」指标单位均为「秒」，需 ×1000 转为毫秒。
+     * 判定规则：
+     *  1) 已知以毫秒为单位的自定义指标（llm.* Timer）显式排除；
+     *  2) 其余凡命中「时长类」后缀（.duration / .latency）即按秒处理。
+     * 好处：http.*.duration、rpc.*.duration、db.*.duration、agent.*.duration、
+     * 自定义 *.duration / *.latency 等均自动命中，不再依赖硬编码前缀白名单，
+     * 避免新增「秒级且非 http」的自定义指标漏 ×1000 导致 1000× 失真。
+     * 注意：若未来新增「毫秒级且以 .duration/.latency 结尾」的非标准指标，
+     * 需在此显式排除，否则会被误判为秒。
      */
     private boolean isSecondsUnitMetric(String name) {
-        return "http.server.request.duration".equals(name)
-                || "http.client.request.duration".equals(name);
+        if (name == null) return false;
+        if (name.startsWith("llm.")) return false; // 已知毫秒级，排除
+        return name.endsWith(".duration") || name.endsWith(".latency");
     }
 
     /** Extract tags JSON from a dataPoint's attribute list */

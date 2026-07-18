@@ -5,12 +5,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -76,17 +78,31 @@ public class SessionBridge {
         }
     }
 
+    private static final ObjectMapper SESSION_MAPPER = new ObjectMapper();
+
     private String buildSessionJson(String sessionId, String userInput, String aiResponse,
                                      String intent, String agentPath, double confidence,
                                      long durationMs, int tokens, String traceId, String status) {
-        return String.format(java.util.Locale.US,
-            "{\"sessionId\":\"%s\",\"userId\":\"%s\",\"userInput\":\"%s\",\"aiResponse\":\"%s\"," +
-            "\"intent\":\"%s\",\"agentPath\":\"%s\",\"confidence\":%.2f," +
-            "\"durationMs\":%d,\"tokens\":%d,\"traceId\":\"%s\",\"status\":\"%s\"}",
-            escape(sessionId), extractUserId(sessionId),
-            escape(userInput), escape(aiResponse),
-            escape(intent), escape(agentPath), confidence,
-            durationMs, tokens, escape(traceId), escape(status));
+        // 改用 Jackson 序列化（P0-3 整改）：避免手工 String.format 拼接 JSON
+        // 漏转义 Unicode 控制字符（\u0000-\u001F 等）导致后端解析失败的隐患。
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("sessionId", sessionId);
+        m.put("userId", extractUserId(sessionId));
+        m.put("userInput", userInput);
+        m.put("aiResponse", aiResponse);
+        m.put("intent", intent);
+        m.put("agentPath", agentPath);
+        m.put("confidence", confidence);
+        m.put("durationMs", durationMs);
+        m.put("tokens", tokens);
+        m.put("traceId", traceId);
+        m.put("status", status);
+        try {
+            return SESSION_MAPPER.writeValueAsString(m);
+        } catch (Exception e) {
+            log.warn("[SessionBridge] JSON serialize failed, fallback to minimal: {}", e.getMessage());
+            return "{\"sessionId\":\"" + escape(sessionId) + "\",\"status\":\"" + escape(status) + "\"}";
+        }
     }
 
     /** 从 sessionId 推导 userId（简化：前缀作为 userId） */

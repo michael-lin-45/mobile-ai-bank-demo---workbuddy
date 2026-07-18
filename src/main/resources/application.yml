@@ -1,6 +1,10 @@
 ﻿spring:
   application:
     name: mobile-ai-demo    # 应用名称
+  # 全局时区：北京时间。所有 Jackson 序列化到前端的 Instant/时间字段按东八区输出。
+  # 与后端 9090 的 application.yml 保持一致，整个项目统一北京时区。
+  jackson:
+    time-zone: Asia/Shanghai
 
 # ==================== 服务配置 ====================
 server:

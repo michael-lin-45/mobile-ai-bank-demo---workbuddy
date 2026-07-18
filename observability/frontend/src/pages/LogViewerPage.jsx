@@ -74,7 +74,7 @@ function LogViewerPage() {
 
   const handleTraceClick = (traceId) => {
     if (traceId) {
-      window.location.href = `/trace`;
+      window.location.href = `/trace?traceId=${encodeURIComponent(traceId)}`;
     }
   };
 

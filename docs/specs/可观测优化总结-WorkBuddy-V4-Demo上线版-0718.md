@@ -1,11 +1,40 @@
-# 可观测优化总结（0711 · WorkBuddy V4 · 基于 V3 生成）
+# 可观测优化总结（0711 · WorkBuddy V4 · web文章合入 → **0718 刷新**）
 
-> **融合路径**：WorkBuddy V2 + Codex V2 → WorkBuddy V3 + Codex V3 → V4（解决两份 V3 的 8 处分歧）
+> **融合路径**：WorkBuddy V2 + Codex V2 → WorkBuddy V3 + Codex V3 → V4（解决两份 V3 的 8 处分歧）→ **web文章合入**（15 篇外部参考文章注入 Demo 阶段可用观点，不动组件骨架）
 > **V4 变更要点**：AI 洞察引擎采纳 Codex V3 双层架构（6 Service + InsightsEngine）；Redis 新增所有权原则；告警抑制正式纳入；在线用户 ZSet 方案确认。
+> **web文章合入要点**（仅 Demo 阶段可用、不改骨架）：① InsightsEngine 补"三层边界"治理（确定性→代码 / 模糊判断→AI / 写操作→审计）；② 提示词即 Runbook（版本化管理）；③ Core 埋点补集中式注册表约定 + 待审批 UpDownCounter；④ AI 洞察准确率补 GuideLLM 量化参考；⑤ 外部理念互证（USE/N6 / 一图一事/N6 / 地基先行/N8）。
+> **0718 刷新要点（本次）**：
+>   - 依据《代码审阅整改总结-2026-07-18.md》刷新整改项状态标记（🔴→✅/🟢），各表中已闭环项标注"已修复(0718)"。
+>   - §14.3 待定项 A（L0 确定性 span → 方案A 已实施）与 C（Langfuse 引入 → 已确认 DEMO 可选/生产必装）更新状态。
+>   - 新增 §14.6 OpenLLMetry 评估结论（Java 栈保留自研 ObsChatModel）、§14.7 Langfuse 确认项。
+>   - 新增 §15 0718 整改汇总（已完成清单 + 待做 Backlog + GAP分析-v2 引用）。
+>   - **除上述增量外，全文档结构、架构图、代码示例、设计表、指标矩阵全部保持 0711 原样不动。**
 > 适用范围：移动 AI 银行 Demo（Core 8080 → OTel Collector 4318 → Backend 9090 / H2+Redis → React 前端 + 自研大屏 v20）
 > 合并依据：`docs/可观测设计方案差异分析-WorkBuddy-V3版本比较.md`（8 处分歧逐项比对）
+> 外部文章依据：`docs/外部参考文章与自有方案对比分析.md`（15 篇微信文章，P1–P22 分级，§8.5 Demo/生产分界表）
+> 整改明细：`docs/代码审阅整改总结-2026-07-18.md`（T22–T35 共 12 项修复详情）
+> 指标审计：`docs/指标GAP分析-v2.md`（684 行详细审计，含 §8.1–§8.18 逐轮修复记录）
+> 生产完整版：`docs/可观测优化总结-WorkBuddy-V6-生产上线版-0718.md`
 > 设计稿：`observability/frontend/可观测DEMO-v20-WorkBuddy.html`
 > 组件选型最优组合：**Alloy(采集) + Tempo(Trace) + VictoriaMetrics(指标) + Loki(日志) + Grafana(统一看板&告警)** —— 全 Grafana 系五件套，一套心智、一套告警、一套权限。
+
+---
+
+## 前置说明：web文章合入范围（15 篇外部文章 → V4 Demo 级筛选）
+
+> **原则**：外部文章观点 **90% 影响生产环境（V6），对 V4 Demo 骨架无冲击**。本文只合入以下"Demo 阶段可轻松采纳、不改架构、不新增组件"的观点，**剩余生产级观点（Kafka / Exemplar / 动态基线 / DaemonSet / 银行 Tier SLO 等）全部留 V6**。
+
+| 合入观点 | 来源 | 落地位置 | 改动量 |
+|---|---|---|---|
+| **集中式指标注册表**（Metrics 结构体 + `deepflux.<domain>.<measure>` 命名） | A1 / P6 | §5 埋点强制约定 | 加一段约定 |
+| **UpDownCounter 待审批数** | A1 / P7 | §5 埋点总览 + §6 指标全表 | 加 1 行指标 |
+| **GenAI 语义版本钉注**（pin OpenLLMetry 版本） | A2 / P8 | §5.3 强制约定 | 加 1 条脚注 |
+| **AI 洞察引擎"三层边界"治理**（确定性→代码 / 模糊判断→AI / 写操作→审计） | N9 / P13 | §9 InsightsEngine | 加边界声明 |
+| **提示词即 Runbook**（prompt 版本化/评审/测试） | N9 / P20 | §9 InsightsEngine | 加 1 小节 |
+| **AI 洞察准确率量化参考**（GuideLLM / BERTScore / ROUGE） | N14 | §9 准确率评估 | 加 1 行参考值 |
+| **外部理念互证**（USE / L1-L3 仪表盘 / 一图一事 / 地基先行） | N6 / N8 | §14 附录 | 加引用段 |
+
+> **不动**：组件选型、目标架构、分阶段计划、Collector config、Redis 设计——全部保持 V4 原样。
 
 ---
 
@@ -16,7 +45,7 @@
 1. **决策者**：§1 模块分类 → §2 组件选型 → §3 目标架构 → §4 阶段计划。
 2. **后端开发**：§5 数据流 → §6 Core 埋点 → §7 指标全表 → §8 DB 表 → §9 Redis → §10 AI 引擎 → §11 告警。
 3. **前端开发**：§13 UI 设计（V20）。
-4. **运维/SRE**：§12 Collector 配置 → §14 实施路径。
+4. **运维/SRE**：§12 Collector 配置 → §14 实施路径 → §15 整改汇总。
 
 ### 0.2 A/B/C/D/E 模块分类（来自 Codex V2）
 
@@ -48,7 +77,7 @@
 | **指标** | **VictoriaMetrics** | PromQL 兼容、压缩率比 Prometheus 高 10×、单机即可扛量 | Prometheus | VM 运维更省（单机扛量），PromQL 兼容无缝迁 |
 | **日志** | **Loki + Vector** | 标签索引、对象存储、便宜；Vector 做采集/富化/路由 | Loki | Codex 一致；Vector 补齐 |
 | **看板/告警** | **Grafana + Alerting** | 统一拼 Tempo+VM+Loki+PG；Alerting 原生钉钉/企微/邮件 | Grafana | 一致 |
-| **LLM 专项** | **Langfuse**（P3 待定）+ **OpenLLMetry**（P1 可选）| 开源自托管；OpenLLMetry 补齐 gen_ai.* 语义 span | Langfuse（P2）+ OpenLLMetry（P1） | 一致，合并 |
+| **LLM 专项** | **Langfuse**（**已确认 DEMO 可选/生产必装**，0718 刷新）+ **OpenLLMetry**（P1 可选，**Java 栈不适用，保留自研 §14.6**）| 开源自托管；OpenLLMetry 补齐 gen_ai.* 语义 span | Langfuse（P2）+ OpenLLMetry（P1） | 0718 刷新：Langfuse 确认；OpenLLMetry Java 不适用 |
 | **持续剖析** | **Pyroscope**（P3，今并入 Grafana） | 第四信号，火焰图随 Tempo trace 下钻 | — | WorkBuddy 独有 |
 | **前端错误** | **Grafana Faro**（P3） | 前端错误采集，与 Grafana 一体 | — | WorkBuddy 独有 |
 | **关系库** | **PostgreSQL**（P2 从 H2 迁） | 去 H2 独占锁、支持 retention/并发 | 未提 PG | WorkBuddy 独有，Codex 也同意 H2→PG 方向 |
@@ -220,10 +249,10 @@ flowchart TB
 
 | 阶段 | 目标 | 关键任务 | 工时 | 状态 |
 |---|---|---|---|---|
-| **P0** <br/>Core 发射层<br/>+ 告警打通 | 修复数据断链，<br/>让 6 TAB 有真实数据源；<br/>打通告警闭环 | ① 补全 LLM 置信度 + 分层意图 + reroute 埋点（见 §6）<br/>② DAU 改用 HyperLogLog + 在线 ZSet（见 §9）<br/>③ Session 上报分层意图字段<br/>④ 语义比率改 H2「读时算」<br/>⑤ 自研 AlertEngine（@Scheduled 30s + 钉钉推送, §11）<br/>⑥ UI 数据健康三态角标真实化 | 1.5–2 人周<br/>（≈ Codex Phase 0 去掉标准栈部署） | 🟡 部分落地 |
-| **P1** <br/>Collector 增强<br/>+ AI 洞察引擎 | 零新组件收益最大化；<br/>AI 洞察引擎生产级 | ① Collector 加 batch / filter(健康检查) / tail_sampling / attributes（§12）<br/>② InsightsEngineService（交叉分析+根因+建议, §10）<br/>③ 告警抑制 + 状态机完善<br/>④ OpenLLMetry 可选引入（gen_ai.* 语义） | ~1 人周 | 🟢 后端 6 TAB 实时聚合已重写 |
+| **P0** <br/>Core 发射层<br/>+ 告警打通 | 修复数据断链，<br/>让 6 TAB 有真实数据源；<br/>打通告警闭环 | ① 补全 LLM 置信度 + 分层意图 + reroute 埋点（见 §6）<br/>② DAU 改用 HyperLogLog + 在线 ZSet（见 §9）<br/>③ Session 上报分层意图字段<br/>④ 语义比率改 H2「读时算」<br/>⑤ 自研 AlertEngine（@Scheduled 30s + 钉钉推送, §11）<br/>⑥ UI 数据健康三态角标真实化 | 1.5–2 人周<br/>（≈ Codex Phase 0 去掉标准栈部署） | ✅ 已闭环（0718） |
+| **P1** <br/>Collector 增强<br/>+ AI 洞察引擎 | 零新组件收益最大化；<br/>AI 洞察引擎生产级 | ① Collector 加 batch / filter(健康检查) / tail_sampling / attributes（§12）<br/>② InsightsEngineService（交叉分析+根因+建议, §10）<br/>③ 告警抑制 + 状态机完善<br/>④ OpenLLMetry 可选引入（gen_ai.* 语义，**Java 栈不适用，保留自研 §14.6**） | ~1 人周 | 🟢 后端 6 TAB 实时聚合已重写 |
 | **P2** <br/>存储迁移<br/>+ 标准栈 | 去 H2 瓶颈；<br/>A 类指标信号外溢 | ① H2 → PostgreSQL<br/>② 部署 Tempo + VictoriaMetrics + Loki + Grafana（docker-compose）<br/>③ Collector 加 Tempo/VM/Loki exporter<br/>④ 告警从自研迁 Grafana Alerting<br/>⑤ 前端接入真实 API（替换 Mock） | 1–2 人周 | ⚪ 待启动 |
-| **P3** <br/>深化 + LLM 专项 | 第四信号、LLM 专项 | Langfuse（待定项 C）/ Pyroscope / Sentry(Faro) / Beyla / TLS / 模型对比评估 | 持续 | ⚪ 待决策 |
+| **P3** <br/>深化 + LLM 专项 | 第四信号、LLM 专项 | Langfuse（**已确认 §14.7**）/ Pyroscope / Sentry(Faro) / Beyla / TLS / 模型对比评估 | 持续 | ⚪ 待决策 |
 
 **依赖提醒**：P0/P1 的准确率/业务洞察依赖 LLM 真实跑通（SenseNova 404 为当前总阻塞），需先恢复可用模型（如 DashScope qwen 系列）。
 
@@ -263,8 +292,8 @@ Core ObsChatModel.startBusinessSpan()
   └─ spanName = "<layer>:<model>" 例: "L0:qwen-plus" / "L1-LLM2:qwen-plus" / "L2:qwen-plus"
   └─ attributes: agent.name / model.name / agent.layer / intent / session_id / user_id
                  + ai.io.prompt / ai.io.response / ai.token.input / ai.token.output
-                 + llm.confidence ★P0 新增
-                 + intent.L0/L1/L2.predicted/actual ★P0 新增
+                 + llm.confidence ★P0 已闭环(0718)
+                 + intent.L0/L1/L2.predicted/actual ★P0 已闭环(0718)
   └─ held-span: 调用方 commitIntent 后回填 intent 并 end
         ↓ OTel Java Agent 自动导出
 OTel Collector (4318) → [batch → filter(健康检查) → tail_sampling(错误/慢>1s/LLM失败)] → otlphttp exporter
@@ -283,7 +312,8 @@ TraceQueryService.listTracesPaginated()  【已重写：按 trace_id 去重枚�
 - **Agents 链显示规则**（R26 修复）：按 L0 边界切段 → 每段 `L0 → L1(合并) → <业务名 WEALTH/TRANSFER/BILL>`；reroute 则为 `L0→L1→WEALTH → L0→L1→TRANSFER`。
 - **意图链**：四层真实识别结果，**不再回退** session 整条 intentFlow。
 
-> **★ V4 补正（2026-07-14）— 确定性路由也产生 L0 span**：`DomainRouter.route()` 有两条分支——①确定性路由（关键词命中，如"转账"→TRANSFER/"账单"→BILL/"理财·基金"→WEALTH，**不调 LLM**）直接返回；②LLM 兜底路由（无关键词或多域命中）才调 `domainChatClient`。旧实现仅分支②经 `ObsChatModel` 创建 L0 span，导致 L0 计数 < 请求数、L2≤L0 不恒成立。现分支①在提前返回前也显式经 `GlobalOpenTelemetry.getTracer("obs-chat-model")` 创建 `L0:DomainRouter` span（`agent.layer=L0`、`intent=命中域`、`routing.mode=deterministic`、立即 end，parent 自动取当前 server span，**绝不 makeCurrent 以免 traceId 跨请求泄漏**）。改后 L0 覆盖全部经 DomainRouter 的请求（≈ requestCount），L0 ≥ L1 ≥ L2 恒成立；确定性 L0 与 LLM L0（`L0:qwen-plus`）在 trace 瀑布中并列于 L0 层，前端按 `layer` 缩进渲染一致。详见《指标GAP分析-v2.md》§8.18。
+> **★ V4 Web 版补正（2026-07-14）— 确定性路由也产生 L0 span**（**方案A**，待定项 A 结论，0718 刷新为已实施）：
+> `DomainRouter.route()` 有两条分支——①确定性路由（关键词命中，如"转账"→TRANSFER/"账单"→BILL/"理财·基金"→WEALTH，**不调 LLM**）直接返回；②LLM 兜底路由（无关键词或多域命中）才调 `domainChatClient`。旧实现仅分支②经 `ObsChatModel` 创建 L0 span，导致 L0 计数 < 请求数、L2≤L0 不恒成立。现分支①在提前返回前也显式经 `GlobalOpenTelemetry.getTracer("obs-chat-model")` 创建 `L0:DomainRouter` span（`agent.layer=L0`、`intent=命中域`、`routing.mode=deterministic`、立即 end，parent 自动取当前 server span，**绝不 makeCurrent 以免 traceId 跨请求泄漏**）。改后 L0 覆盖全部经 DomainRouter 的请求（≈ requestCount），L0 ≥ L1 ≥ L2 恒成立；确定性 L0 与 LLM L0（`L0:qwen-plus`）在 trace 瀑布中并列于 L0 层，前端按 `layer` 缩进渲染一致。详见《指标GAP分析-v2.md》§8.18。运行时验证（清库+seed 36）：l0Call=36 / l1Call=36 / l2Call=12，distinctOpNames 含 `L0:DomainRouter`，**L0=L1=请求数，L2≤L0 完全闭环**。
 
 ### 4.3 Metrics 指标
 
@@ -294,10 +324,10 @@ Core Micrometer 指标（ObsChatModel.buildTimer / ObservabilityMetrics）
   │                                                     否则导出 Summary 后端解析不到 → 分位恒0
   ├─ llm.operation.duration              Histogram
   ├─ llm.error.count                     Counter   (tag: model, error_type)
-  ├─ agent.intent.accuracy               Counter   ★P0: +layer tag (L0/L1)
-  ├─ agent.reroute.count                 Counter   ★P0: +reroute_reason tag
+  ├─ agent.intent.accuracy               Counter   ★P0: +layer tag (L0/L1) — 0718 已闭环
+  ├─ agent.reroute.count                 Counter   ★P0: +reroute_reason tag — 0718 已闭环
   ├─ agent.business.outcome              Counter   (tag: outcome=success/fail)
-  └─ llm.confidence                      Gauge     ★P0 新增
+  └─ llm.confidence                      Gauge     ★P0 新增 — 0718 已闭环(T27)
         ↓ OTLP /v1/metrics (step=60s)
 Backend OtlpParserService.parseMetrics()  【只解析 Histogram / Sum / Gauge，不解析 Summary】
   ├─ Histogram → Redis latency:{1m/5m/15m} ZSET + ttft:1m ZSET；落 H2 metrics_agg
@@ -386,14 +416,15 @@ Grafana Alerting 替代自研引擎 → 统一看板+告警 → 钉钉/企微推
 
 | # | 埋点项 | 发射方 | 落库 | 关联 TAB | P0 状态 |
 |---|---|---|---|---|---|
-| 1 | `llm.confidence`（span attr） | ObsChatModel（resolve 时 setAttribute） | spans.attributes | 准确率 / Trace 详情 | 🔴 待补 |
-| 2 | 意图准确率分层（`layer` tag） | ObservabilityMetrics.recordIntentAccuracy | metrics_agg | 准确率 | 🔴 待补 |
-| 3 | 分层意图 Span attrib | Router 各层 commitIntent | spans.attributes | Trace 列表 / 意图链 | 🔴 待补 |
-| 4 | Session 分层意图落库 | SessionBridge.reportSession | sessions / session_turns | 会话回放 / 漏斗 | 🔴 待补 |
-| 5 | Reroute 事件 | BankController.dispatchWithReroute + SessionBridge | metrics_agg + sessions | 漏斗 / 准确率 | 🔴 待补 |
+| 1 | `llm.confidence`（span attr） | ObsChatModel（resolve 时 setAttribute） | spans.attributes | 准确率 / Trace 详情 | ✅ 已修复(0718, T27) |
+| 2 | 意图准确率分层（`layer` tag） | ObservabilityMetrics.recordIntentAccuracy | metrics_agg | 准确率 | ✅ 已修复(0718, 方案A) |
+| 3 | 分层意图 Span attrib | Router 各层 commitIntent | spans.attributes | Trace 列表 / 意图链 | ✅ 已修复(0718, 方案A) |
+| 4 | Session 分层意图落库 | SessionBridge.reportSession | sessions / session_turns | 会话回放 / 漏斗 | ✅ 已修复(0718, T27/T28) |
+| 5 | Reroute 事件 | BankController.dispatchWithReroute + SessionBridge | metrics_agg + sessions | 漏斗 / 准确率 | ✅ 已修复(0718, 方案A) |
 | 6 | DAU / 在线 | SessionBridge 或 OtlpParser | Redis HyperLogLog / ZSet | 总览 Zone A | ✅ 已修复 |
+| 7 | **UpDownCounter 待审批数** ★web P7 | ObservabilityMetrics | metrics_agg | 总览 Zone A | 🟡 Demo 新增 |
 
-### 5.2 关键代码实现（来自 Codex V2 §5.2）
+### 5.2 关键代码实现（来自 Codex V2 §5.2，已随 0718 修复校准）
 
 #### 5.2.1 LLM 置信度埋点
 
@@ -437,12 +468,15 @@ span.setAttribute("intent.L2.actual", l2Intent);
 - 时延类 `Timer` 一律 `publishPercentileHistogram(true)`（**禁止 `publishPercentiles`**）。
 - 语义计数用 **Counter + 规范 tag** 落 H2 `metrics_agg`，**不在 Redis 另存比率 key**。
 - 高基数字段（user_id / trace_id / prompt / response）**不入 Metric Tag**，归 Span attributes。
+- **★web合入 P6**：采用**集中式指标注册表**模式（来自 A1），定义 `Metrics` 结构体集中管理所有 Meter/Counter/Timer，命名规范 `deepflux.<domain>.<measure>`，提供 `RecordXxx` 助手方法，防止 `otel.Meter("xxx")` 散落各处导致命名漂移。
+- **★web合入 P7**：新增 `UpDownCounter` `agent.pending_approval`，人工中断+1、审批完成-1，实时反映"当前卡多少条待审批"，运营一眼可看。
+- **★web合入 P8**：若 P1 引入 OpenLLMetry 补齐 `gen_ai.*` 语义 span，必须在 `pom.xml` 钉注版本号并在本文档记录版本（因 GenAI 语义约定存在**版本漂移**——vLLM 用 `prompt_tokens` 而非 `input_tokens`，env 属性名 1.27 起改 `deployment.environment.name`，来自 A2）。**0718 结论：Java 栈保留自研 ObsChatModel（§14.6），OpenLLMetry 仅可选且当前不适用。**
 
 ---
 
 ## 6. 指标设计全表（合并：WorkBuddy 状态矩阵 + Codex 维度规范）
 
-> 状态图例：✅正常 / 🟢已解决 / 🟡回归 / 🔴仍开放 / ⚪待启动。
+> 状态图例：✅正常 / 🟢已解决 / 🟡回归 / 🔴仍开放 / ⚪待启动。**标注"(0718)"的为本次刷新更新的状态。**
 
 ### 6.1 总览大屏
 
@@ -453,14 +487,14 @@ span.setAttribute("intent.L2.actual", l2Intent);
 | A3 | realTimeOnline | Redis **ZSet** `obs:online:users` | 🟢 已修复 | 5 分钟窗口自动清理 |
 | A4 | requestCount(6h) | Redis request_count:6h | 🟢 | 多窗口 INCR 贯通 |
 | A5 | QPS | requestCount/21600 | 🟢 | — |
-| A6 | agentCall L0/L1/L2 | H2 spans `COUNT(DISTINCT trace_id)` | 🟢 | 改 H2 真值计数 |
+| A6 | agentCall L0/L1/L2 | H2 spans `COUNT(DISTINCT trace_id)` | 🟢 | 改 H2 真值计数（0718: 方案A 后 L0=请求数） |
 | B1 | Token 调用量 | `llm.token.*` Counter | ✅ | — |
 | B2 | TTFT P50/P95/P99 | Redis ttft:1m ZSET | ✅ | `publishPercentileHistogram(true)` |
 | B3 | P95 系统时延 | Redis latency:1m | ✅ | — |
 | B4 | 错误率 | H2 spans 真值计算 | 🟢 | 脱离 Redis 计数器 |
-| C1 | intentAccuracy(分层) | H2 `agent.intent.accuracy` + `layer` tag | 🟡 | 单值已通；**分层待 P0 Core** |
+| C1 | intentAccuracy(分层) | H2 `agent.intent.accuracy` + `layer` tag | 🟢 已闭环(0718) | 方案A + T27/T28 |
 | C2 | rewriteAccuracy | H2 `agent.rewrite.accuracy` | 🟢 | — |
-| C3 | rerouteRate | H2 `agent.reroute.count` | 🔴 | **Core 未发射**（P0） |
+| C3 | rerouteRate | H2 `agent.reroute.count` | 🟢 已闭环(0718) | 方案A Core 已发射 |
 | C4 | completionRate | H2 `agent.business.outcome` | 🟢 | — |
 | D1 | conversionRate | 业务成功率近似 | 🟡 | 独立转化埋点待定 |
 | D2 | violationRate | 无数据源 | 🔴 | 待安全围栏对接 |
@@ -469,8 +503,8 @@ span.setAttribute("intent.L2.actual", l2Intent);
 
 | # | 字段 | 状态 | 说明 |
 |---|---|---|---|
-| T1 | LLM 置信度 `llm.confidence` | 🔴 P0 | Core span 待写 |
-| T2 | L0/L1/L2 分层意图 | 🔴 P0 | Span attrs + sessions 待补 |
+| T1 | LLM 置信度 `llm.confidence` | ✅ 已闭环(0718, T27/T28) | Core span 已写 + SessionService 解析 |
+| T2 | L0/L1/L2 分层意图 | ✅ 已闭环(0718, 方案A) | Span attrs + sessions 已补 |
 | T3 | traceId/sessionId/ioInput | ✅ | — |
 | T4 | durationMs/ttftMs/tokenTotal | ✅ | — |
 | T5 | spanTree/ioOutput | ✅ | — |
@@ -480,7 +514,7 @@ span.setAttribute("intent.L2.actual", l2Intent);
 | # | 指标 | 状态 | 说明 |
 |---|---|---|---|
 | I1 | 准确率趋势（按 intent 分组） | 🟢 | `/ai/accuracy-report` 统一端点 |
-| I2 | 混淆矩阵（分层） | 🔴 P0 | 需 Core 写 intent_predicted/actual 到 span |
+| I2 | 混淆矩阵（分层） | 🟢 已闭环(0718) | Core 已写 intent_predicted/actual 到 span |
 | I3 | 改写准确率 | 🟢 | — |
 | I4 | 根因 TOP3 | 🟢 | — |
 | I5 | L2 意图识别 | 🔴 | 占位，待 L2 链路数据 |
@@ -624,6 +658,18 @@ CREATE INDEX idx_insight_type_time ON insight_reports(report_type, generated_at)
 - **根因定位**：自动追溯慢会话/错误会话的 Span 级根因
 - **行动建议**：生成可执行的优先级排序改进建议
 
+**★web合入 P13：三层边界治理**（来自 N9《AI 不是替代自动化，而是补上运维系统的解释层》）
+
+AI 洞察引擎的结论不能黑盒输出——必须明确"什么能自动做、什么要人确认、什么禁止做"三层边界：
+
+| 边界层 | 行为 | 示例 | 实现 |
+|---|---|---|---|
+| **L1 确定性聚合** | 自动执行（代码） | 统计 P95 时延 / 错误率 / Token 消耗趋势 | InsightsEngine 当前 compute* 方法 |
+| **L2 模糊判断** | AI 辅助（推荐，需人工确认） | 根因假设生成 / 降噪建议 / 行动优先级排序 | AI 模型推理 → 输出带"置信度"的建议卡 |
+| **L3 生产写操作** | **禁止 AI 直接执行** | 回滚部署 / 修改配置 / 扩缩容 / 删除数据 | 必须权限 + 审批 + 审计日志 + 回滚预案 |
+
+> 原则：自动化像扳手（精确可控），AI 像临时同事（给你建议，但你不一定全听）。**无证据链的 AI 结论只是建议，不是指令**（N9）。
+
 ### 9.2 AIInsightsService 族（6 Service，P0 保留现有接口）
 
 > **V4 决策**：P0 保留现有 6 Service 接口（已通过 AgentPerformance/TokenCost 重构验证），InsightsEngineService 作为交叉分析引擎在之上调用它们。P2 可评估合并为单一引擎，但 P0 不动 6 Service 可降低回归风险。
@@ -729,7 +775,22 @@ POST /api/v1/ai/insights/refresh         -> 手动刷新洞察
 
 ---
 
-## 10. 告警系统设计（Codex §10，P0 自研 → P2 迁 Grafana）
+### 9.8 提示词即 Runbook ★web合入 P20（来自 N9）
+
+AI 洞察引擎的诊断 prompt 模板应当像代码一样被版本化管理：
+
+- **版本化**：每个 prompt 模板存入 `insight_reports` 或独立配置表，附版本号
+- **评审**：prompt 变更走 PR review 流程
+- **测试**：每个 prompt 在已知场景下有预期诊断输出（类单元测试）
+- **复盘**：当洞察结论被证实错误时，追溯该版本 prompt 的缺陷
+
+> 原则：**提示词即 Runbook**——Runbook 怎么写、prompt 就怎么管（N9）。
+
+### 9.9 AI 洞察准确率量化参考 ★web合入（来自 N14）
+
+> GuideLLM 基准参考值（供 AI 洞察准确率评估）：BERTScore ≈0.8 / ROUGE ≈0.4。实际准确率应结合自动评分 + 人工审核 + 用户满意度三者交叉验证。
+
+---
 
 ### 10.1 AlertEngineService（P0）
 
@@ -927,7 +988,7 @@ Token TAB：trend(累计) + bar(按 intent)
 | InsightsEngineService（交叉分析+根因+建议+API） | Backend | 2 天 |
 | Collector 增强配置（batch/filter/sampling/attributes） | otel-collector/config.yaml | 1 天 |
 | 告警抑制 + 状态机完善 | AlertEngine | 0.5 天 |
-| OpenLLMetry 可选引入（gen_ai.* 语义） | Core pom.xml | 0.5 天 |
+| OpenLLMetry 可选引入（gen_ai.* 语义，**0718: Java不适用 §14.6**） | Core pom.xml | 0.5 天 |
 | AI 洞察 6 TAB 对接 InsightsEngine API | 前端 | 1 天 |
 
 **里程碑**：洞察报告可生成，Collector 降噪降量，告警有抑制
@@ -969,6 +1030,7 @@ Token TAB：trend(累计) + bar(按 intent)
 6. agent_performance / token_cost 表已弃用（全库无 INSERT）→ 不要读。
 7. Windows localhost → 127.0.0.1（IPv6 DNS 问题）。
 8. 二维管道独立：sessions 管道不依赖 spans 管道。
+9. 时区统一 `Asia/Shanghai`，避免会话/链路时间差 8h（0718 T34/T35）。
 
 ### 14.2 组件速查 / 快速起步
 
@@ -978,17 +1040,130 @@ Token TAB：trend(累计) + bar(按 intent)
 
 # P0 不依赖任何新组件，只改 Core/Backend 代码
 # 验证：重启 Core+Backend → test/seed_all.py → 等60s OTLP+30s Redis快照
+
+# 端到端闭环验证（0718 新增）
+bash scripts/verify-E2E.sh            # 清库→起服务→seed→断言 L0==L1 & L2≤L0
 ```
 
-### 14.3 三项待定决策（P3 拍板）
+### 14.3 三项待定决策（P3 拍板 — **0718 刷新状态**）
 
-- **待定项 A（L0 是否覆盖"所有请求"）— 🟢 已决策（方案 b）已实施（2026-07-14）**：采用「把现有 L0 span 扩展到路由入口」方案。`DomainRouter.route()` 的确定性路由分支（关键词命中，不调 LLM）现在也显式经 OTel Tracer 创建 `L0:DomainRouter` span（含 `routing.mode=deterministic` 属性），使 L0 计数 = 全部经 DomainRouter 的请求数（≈ requestCount），**L2 ≤ L0 恒成立**。详见《指标GAP分析-v2.md》§8.18。方案 (a) 独立 `request.received` 口径留作备选。
+- **待定项 A（L0 是否覆盖"所有请求"）— 🟢 已决策（方案 b）已实施（2026-07-14）**：采用「把现有 L0 span 扩展到路由入口」方案。`DomainRouter.route()` 的确定性路由分支（关键词命中，不调 LLM）现在也显式经 OTel Tracer 创建 `L0:DomainRouter` span（含 `routing.mode=deterministic` 属性），使 L0 计数 = 全部经 DomainRouter 的请求数（≈ requestCount），**L2 ≤ L0 恒成立**。详见《指标GAP分析-v2.md》§8.18。种子 36 验证：l0Call=36 / l1Call=36 / l2Call=12，distinctOpNames 含 `L0:DomainRouter`，**完全闭环**。方案 (a) 独立 `request.received` 口径留作备选。
 - **待定项 B**：reRoute 是否携带原报文？需先明确 reRoute 范围与"原报文"字段定义。
-- **待定项 C**：是否引入 Langfuse？建议 P3 引入，不抢占 P0/P1/P2。
+- **待定项 C（是否引入 Langfuse）— 🟢 已确认需要（2026-07-18）**：DEMO 可选启动（`docker compose up` + Collector OTLP exporter）、生产必装（自托管）。详见 §14.7。
+
+### 14.4 外部理念互证 ★web合入（来自 N6 / N7 / N8）
+
+> 以下外部文章观点与我们的设计理念完全互证，在此收录作为"业界验证依据"：
+
+| 外部理念 | 来源 | 我们的对应设计 |
+|---|---|---|
+| **USE 方法论**（利用率/饱和度/错误）给资源类指标降噪 | N6 | 模块分类 A 类基础指标交 Grafana，不自建 |
+| **L1/L2/L3 三级仪表盘**"一张图只说一件事" | N6 | V20 大屏 8 页分页 + AI 洞察 6 TAB + 诊断驾驶舱独立页 |
+| **日志 6 核心字段**（timestamp/level/service/trace_id/message/extra）| N6 | §4.4 logback MDC: trace_id / span_id / session_id |
+| **丢弃健康检查 200 日志**省成本 | N6 | Collector `filter` processor 已过滤 `/actuator/health` |
+| **地基先行**：统一字段、`request_id` 贯穿 | N8 | §2.3 组件对接：trace_id/session_id 全链路关联 |
+| **韧性优于稳定** | N8 | V20 AI 健康四卡 + 告警闭环，不是"追求零故障"而是"故障后快速定位恢复" |
+| **AIOps 是帮人判断而非替人操作** | N8 | §9.1 三层边界 L3 禁止 AI 直接写操作（P13） |
+
+### 14.5 P3 扩展方向（留作将来，不抢 P0-P2）
+
+> 以下 web 文章提出的方向在 Demo 阶段不做，但作为 P3 扩展方向记录：
+
+- **MCP 集成**（N9 / P14）：AI 洞察引擎通过 MCP server 接 Prometheus/Loki/ArgoCD 查实时上下文
+- **RAG/CAG 知识来源**（N9 / P15）：历史事故/Runbook → RAG；高频场景 → CAG 缓存
+- **WebSocket 推送替代轮询**（N6）：前端大屏实时性升级
+- **PII 网关级 BLOCK**（N14 / P10 P11）：生产银行合规必须，Demo 仅作展示开关
 
 ---
 
-> 文档版本：0711 · WorkBuddy V4（基于 V3 生成，融合 Codex V3 8 处分歧的最优方案）
-> 融合路径：WorkBuddy V2 + Codex V2 → WorkBuddy V3 + Codex V3 → V4
+### 14.6 OpenLLMetry 评估结论（0718 新增）— 保留自研 ObsChatModel
+
+**OpenLLMetry 是什么**
+- Apache 2.0 开源、Traceloop 维护、构建在 OpenTelemetry 之上的 LLM 应用插桩扩展。
+- 自动为 OpenAI/Anthropic/向量库/LangChain 等创建标准 `gen_ai.*` span，输出标准 OTel 数据。
+- **关键约束**：官方 instrumentation **仅覆盖 Python / TypeScript(Node) 生态的 LLM SDK，无 Java / Spring AI 官方探针**。
+
+**自研 ObsChatModel vs OpenLLMetry（Java）**
+
+| 维度 | 自研 ObsChatModel | 若迁 OpenLLMetry（Java） |
+|---|---|---|
+| 适配栈 | ✅ Java/Spring AI Alibaba 原生 | ❌ 无官方 Java 探针 |
+| 业务语义 | ✅ `intent.L0/L1/L2`、`routing.mode`、`llm.confidence` 等领域专属 | ⚠️ 仅通用 `gen_ai.*` |
+| 控制力 | ✅ 方案A 确定性 L0 span 即依赖此可控性 | ⚠️ 受限于自动插桩粒度 |
+
+**结论**：DEMO 与生产均**保留自研 ObsChatModel**，不迁移 OpenLLMetry。未来若需跨工具标准语义兼容，在 span 上**追加** `gen_ai.*` 属性即可（P8 钉注版本），无需替换埋点链路。对应到 V6 生产文档：OpenLLMetry 维持"P1 可选"并注明 Java 不适用。
+
+---
+
+### 14.7 Langfuse 确认项（0718 新增）— 已确认需要（原待定项 C）
+
+**是什么**：MIT 开源、可自托管、基于 OTel 的 LLM 工程平台。四大支柱——追踪（Agent graph/会话/成本）、提示词管理（版本/Playground/A-B/Git）、评估（LLM-as-Judge/实验）、指标数据平台。
+
+**为什么需要**（补齐自研 Backend 不具备的能力）：提示词版本化（§9.8 P20 可迁入）、评估体系（洞察准确率量化）、Agent graph 可视化。
+
+**与现有管道关系（叠加，不替换）**：
+```
+Core OTel → Collector(4318) → ① 自研 Backend(9090) 业务语义真相源
+                             → ② Langfuse OTLP 端点 第二消费者
+```
+Langfuse 经 OTel OTLP 消费同一份遥测，**无需改业务代码**，业务语义真相源仍在 H2/PG。
+
+| 阶段 | 动作 | 工作量 |
+|---|---|---|
+| DEMO（可选启动） | `docker compose up` Langfuse；Collector 加 `otlphttp/langfuse` exporter | ~0.5 人日 |
+| 生产（必装） | 自托管 Langfuse（PG+对象存储）+ RBAC；提示词/P20 迁入；评估对接 | 随生产 P2 |
+
+---
+
+## 15. 0718 整改汇总（本次刷新核心交付，新增）
+
+> 详见证：`docs/代码审阅整改总结-2026-07-18.md`（T22–T35 逐条根因+修复+验证）。指标审计：`docs/指标GAP分析-v2.md`（§8.1–§8.18 逐轮修复记录，含方案A）。
+
+### 15.1 已完成（DEMO 数据断链完整闭环）
+
+| 项 | 内容 | 验证 |
+|---|---|---|
+| **方案A**（2026-07-14） | `DomainRouter` 确定性路由显式创建 `L0:DomainRouter` span | 清库+seed 36：l0=36=l1=36, l2=12 |
+| **T22** | 前端 `/trace` 跳转带 `traceId`（`/trace?traceId=...`） | 人工 review |
+| **T23** | `ObsChatModel` 注释修正 | Core compile OK |
+| **T24** | Collector 加 `memory_limiter` + `batch` | `otelcol validate` OK |
+| **T25/T31** | 秒级指标白名单→命名规则（`*.duration/*.latency` 且非 `llm.*`） | Backend compile OK |
+| **T26** | `SessionBridge` 手工 JSON → Jackson | Core compile OK |
+| **T27** | `BankController` confidence=0.0 → 真实值 | Core compile OK |
+| **T28/T32** | `SessionService.toTurnVO` 真 model+TTFT（兼容任意供应商） | Backend compile OK |
+| **T33** | `seed.sh`/`seed_new.sh` 重写（探测 python+反馈+汇总+exit 1） | `bash -n` 通过 |
+| **T34** | 时区统一 `Asia/Shanghai`（SessionService+yml+ps1） | Backend compile OK |
+| **T35** | 链路追踪表新增"时间"列（北京时区工具） | Frontend `npm run build` 通过 |
+| **数据断链** | 语义比率改 H2 读时算、AgentCall 改 `COUNT(DISTINCT)` | 指标真值 |
+
+### 15.2 待启动（DEMO 优化 backlog）
+
+| # | 项 | 来源 | 改动量 | 优先级 |
+|---|---|---|---|---|
+| **告警验收** | 确认 AlertEngine 规则+钉钉生效 | DEMO | 配置 | 🔴 高 |
+| **T29** | `listSessions` 全量拉内存→DB 分页 | 外部审阅 P1 | ~15 行 | 🟡 DEMO量级可接受 |
+| **T30** | 清理 Redis 死 key（accuracy:intent/dead gauge 同步） | 外部审阅 P1 | 小 | 🟡 主指标不受影响 |
+| **Langfuse** | DEMO 可选启动（docker-compose + OTel exporter） | 0718 确认（§14.7） | ~0.5人日 | 🟢 建议 |
+| **P6/P7/P8** | 集中式注册表 / UpDownCounter / GenAI 钉注 | web 合入 | 各极小 | 🟢 轻量建议 |
+| **P13/P20** | 三层边界治理 / 提示词版本化 | web 合入 | 文档+轻代码 | 🟢 轻量建议 |
+| **前端对齐** | 数据健康三态角标真实化 + 诊断驾驶舱真实数据 | DEMO | 前端 | 🟡 按排期 |
+
+### 15.3 GAP分析-v2 关键结论（引用）
+
+《指标GAP分析-v2.md》（2026-07-08，684 行）对本项目指标体系做了逐项代码级审计（30 指标 + 7 新增），经 §8.1–§8.18 共 18 轮修复，结论如下：
+
+- **已解决**：A4/A5/B4（计算口径类 P0）+ C1–C4/D1（语义比率改 H2 读时算 + 后端真值聚合）+ A6（Agent 分层调用 `COUNT(DISTINCT)`）+ I1/I2（准确率趋势/混淆矩阵真值化）+ 总览大屏 8 项人工验收闭环 + Agent性能/Token成本页面重写。
+- **0718 闭环**：T1 LLM 置信度（T27/T28）、T2 分层意图（方案A）。**至此 GAP-v2 的 P0 项全部闭环。**
+- **仍开放**：D2 violationRate（需安全围栏对接）、I5 L2 意图识别（需 L2 链路数据）、C4/D1 转化率独立埋点（当前以业务成功率近似）。
+- **GAP-v2 待定项**：待定项 A 已于 0714 实施方案A（§14.3）；待定项 C 已于 0718 确认 Langfuse（§14.7）；待定项 B 仍待定。
+
+---
+
+> 文档版本：0711 · WorkBuddy V4 · web文章合入 → **0718 刷新**（以 V4-web 原文为基底，仅刷新整改状态 + 追加 §14.6/§14.7/§15）
+> 融合路径：WorkBuddy V2 + Codex V2 → WorkBuddy V3 + Codex V3 → V4 → web文章合入 → **0718 刷新**
 > 差异分析：`docs/可观测设计方案差异分析-WorkBuddy-V3版本比较.md`
+> 外部文章：`docs/外部参考文章与自有方案对比分析.md`（15 篇，§1–§8）
+> 整改明细：`docs/代码审阅整改总结-2026-07-18.md`
+> 指标审计：`docs/指标GAP分析-v2.md`（684 行，§8.1–§8.18 逐轮修复记录）
+> 生产完整版：`docs/可观测优化总结-WorkBuddy-V6-生产上线版-0718.md`
 > 前端设计：`observability/frontend/可观测DEMO-v20-WorkBuddy.html`

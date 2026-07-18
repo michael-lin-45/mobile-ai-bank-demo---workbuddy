@@ -14,6 +14,7 @@ import com.mobileagent.app.router.domain.DomainRouter;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 
@@ -71,11 +72,8 @@ public class BankController {
         this.sessionBridge = sessionBridge;
     }
 
-    @PostMapping(value = "/chat", produces = {
-            MediaType.TEXT_EVENT_STREAM_VALUE,
-            MediaType.APPLICATION_JSON_VALUE
-    })
-    public Object chat(@RequestParam String sessionId,
+    @PostMapping(value = "/chat")
+    public ResponseEntity<?> chat(@RequestParam String sessionId,
                        @RequestBody Map<String, String> req,
                        @RequestHeader(value = "Accept", defaultValue = MediaType.APPLICATION_JSON_VALUE) String accept,
                        HttpServletResponse response) {
@@ -86,16 +84,21 @@ public class BankController {
         if (userInput == null || userInput.isBlank()) {
             StreamChunk error = StreamChunk.error("Message cannot be empty");
             if (accept.contains(MediaType.TEXT_EVENT_STREAM_VALUE)) {
-                return sseAdapter.toSse(Flux.just(error), response);
+                return ResponseEntity.ok()
+                        .contentType(MediaType.TEXT_EVENT_STREAM)
+                        .body(sseAdapter.toSse(Flux.just(error), response));
             }
-            return error.toWorkflowOutput();
+            return ResponseEntity.ok(error.toWorkflowOutput());
         }
 
         // 意图识别调用入口
         Flux<StreamChunk> pipeline = buildChatPipeline(sessionId, userInput);
 
         if (accept.contains(MediaType.TEXT_EVENT_STREAM_VALUE)) {
-            return sseAdapter.toSse(pipeline, response);
+            // SSE 分支：用 ResponseEntity 包装 SseEmitter，确保 HttpEntityMethodProcessor 正确接手
+            return ResponseEntity.ok()
+                    .contentType(MediaType.TEXT_EVENT_STREAM)
+                    .body(sseAdapter.toSse(pipeline, response));
         }
 
         return sseAdapter.toJson(pipeline);
@@ -116,9 +119,10 @@ public class BankController {
 
         // 创建Accumulator用于积累Chunk的回复
         AtomicReference<String> currentDomainRef = new AtomicReference<>();
+        AtomicReference<Double> currentConfidenceRef = new AtomicReference<>(0.0); // P0-1 整改：传出真实置信度
         AssistantAccumulator accumulator = new AssistantAccumulator(ctx, currentDomainRef);
 
-        return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount, currentDomainRef)
+        return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount, currentDomainRef, currentConfidenceRef)
                 .doOnNext(accumulator::onChunk)
                 .doOnTerminate(() -> {
                     // 会话桥接：异步写入可观测后端 sessions 表
@@ -127,9 +131,9 @@ public class BankController {
                         sessionBridge.reportSession(sessionId, userInput, reply,
                                 currentDomainRef.get() != null ? currentDomainRef.get() : "CHAT",
                                 currentDomainRef.get() != null ? "L0→L1→L2(" + currentDomainRef.get() + ")" : "L0→L1(CHAT)",
-                                0.0,
+                                currentConfidenceRef.get(), // P0-1 整改：真实置信度（原硬编码 0.0）
                                 System.currentTimeMillis() - pipelineStartMs,
-                                0, getCurrentTraceId(), "COMPLETED");
+                                0, getCurrentTraceId(), "COMPLETED"); // tokens 暂为 0（规则模式无 LLM；LLM 模式待接入 token 计量）
                     }
                 });
     }
@@ -137,11 +141,13 @@ public class BankController {
     private Flux<StreamChunk> dispatchWithReroute(String sessionId, String userInput,
                                                    Set<String> excludedDomains,
                                                    AtomicInteger rerouteCount,
-                                                   AtomicReference<String> currentDomainRef) {
+                                                   AtomicReference<String> currentDomainRef,
+                                                   AtomicReference<Double> currentConfidenceRef) {
         // L0层意图路由
         DomainRouter.DomainResult domainResult = domainRouter.route(sessionId, userInput, excludedDomains);
         String currentDomain = domainResult.domain();
         currentDomainRef.set(currentDomain);
+        currentConfidenceRef.set(domainResult.confidence()); // P0-1 整改：捕获真实置信度
 
         log.info("[BankController] L0 domain: {}, unsupportedFeature: {}, excluded: {}, rerouteCount: {}",
                 currentDomain, domainResult.unsupportedFeature(), excludedDomains, rerouteCount.get());
@@ -154,7 +160,7 @@ public class BankController {
             if (rerouteCount.get() >= maxRerouteAttempts) {
                 return Flux.just(StreamChunk.complete(null, "抱歉，暂时无法识别您的请求，请换个方式描述。"));
             }
-            return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount, currentDomainRef);
+            return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount, currentDomainRef, currentConfidenceRef);
         }
 
         Flux<StreamChunk> resultFlux = dispatchToDomain(domainResult, sessionId, userInput);
@@ -171,7 +177,7 @@ public class BankController {
             if (rerouteCount.get() >= maxRerouteAttempts) {
                 return Flux.just(StreamChunk.complete(null, "抱歉，暂时无法识别您的请求，请换个方式描述。"));
             }
-            return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount, currentDomainRef);
+            return dispatchWithReroute(sessionId, userInput, excludedDomains, rerouteCount, currentDomainRef, currentConfidenceRef);
         });
     }
 

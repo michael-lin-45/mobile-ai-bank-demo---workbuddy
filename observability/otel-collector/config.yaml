@@ -14,6 +14,15 @@ exporters:
 
 # 内部遥测 Prometheus 端口改为 8887（避免与其它 Collector 8888 冲突）
 # 注意: address 字段在 v0.123+ 已弃用，必须用 readers/prometheus 格式
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
 service:
   telemetry:
     metrics:
@@ -26,10 +35,13 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
+      processors: [memory_limiter, batch]
       exporters: [otlphttp/json_backend]
     metrics:
       receivers: [otlp]
+      processors: [memory_limiter, batch]
       exporters: [otlphttp/json_backend]
     logs:
       receivers: [otlp]
+      processors: [memory_limiter, batch]
       exporters: [otlphttp/json_backend]

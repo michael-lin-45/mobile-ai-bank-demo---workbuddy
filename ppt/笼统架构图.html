@@ -1,0 +1,76 @@
+<svg viewBox="0 0 680 500" width="100%" role="img">
+  <title>推荐可观测架构</title>
+  <desc>在现有 OTel Collector 之上，将 H2 单文件库替换为 Tempo/Prometheus/Loki 三件套，引入 Langfuse 做 LLM 专项观测，用 Grafana 统一看板与告警，9090 自研后端降级为会话回放语义层。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <g>
+    <rect x="235" y="56" width="210" height="54" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text class="th" x="340" y="78" text-anchor="middle" dominant-baseline="central" fill="#0C447C">Core 银行 Agent</text>
+    <text class="ts" x="340" y="96" text-anchor="middle" dominant-baseline="central" fill="#0C447C">Spring Boot 8080 + OTel SDK</text>
+  </g>
+  <g>
+    <rect x="470" y="56" width="150" height="54" rx="8" fill="#FBEAF0" stroke="#993556" stroke-width="0.5"/>
+    <text class="th" x="545" y="78" text-anchor="middle" dominant-baseline="central" fill="#72243E">Langfuse</text>
+    <text class="ts" x="545" y="96" text-anchor="middle" dominant-baseline="central" fill="#72243E">LLM 成本/质量</text>
+  </g>
+
+  <g>
+    <rect x="225" y="150" width="230" height="54" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+    <text class="th" x="340" y="172" text-anchor="middle" dominant-baseline="central" fill="#3C3489">OTel Collector</text>
+    <text class="ts" x="340" y="190" text-anchor="middle" dominant-baseline="central" fill="#3C3489">4318 (已有, 改 exporter)</text>
+  </g>
+
+  <g>
+    <rect x="45" y="246" width="175" height="54" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+    <text class="th" x="132" y="268" text-anchor="middle" dominant-baseline="central" fill="#085041">Tempo</text>
+    <text class="ts" x="132" y="286" text-anchor="middle" dominant-baseline="central" fill="#085041">traces 存储</text>
+  </g>
+  <g>
+    <rect x="252" y="246" width="175" height="54" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+    <text class="th" x="340" y="268" text-anchor="middle" dominant-baseline="central" fill="#633806">Prometheus</text>
+    <text class="ts" x="340" y="286" text-anchor="middle" dominant-baseline="central" fill="#633806">metrics 时序</text>
+  </g>
+  <g>
+    <rect x="460" y="246" width="175" height="54" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+    <text class="th" x="548" y="268" text-anchor="middle" dominant-baseline="central" fill="#712B13">Loki</text>
+    <text class="ts" x="548" y="286" text-anchor="middle" dominant-baseline="central" fill="#712B13">logs 聚合</text>
+  </g>
+
+  <g>
+    <rect x="225" y="342" width="230" height="54" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+    <text class="th" x="340" y="364" text-anchor="middle" dominant-baseline="central" fill="#27500A">Grafana</text>
+    <text class="ts" x="340" y="382" text-anchor="middle" dominant-baseline="central" fill="#27500A">统一看板</text>
+  </g>
+  <g>
+    <rect x="470" y="342" width="150" height="54" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+    <text class="th" x="545" y="364" text-anchor="middle" dominant-baseline="central" fill="#791F1F">告警 / 通知</text>
+    <text class="ts" x="545" y="382" text-anchor="middle" dominant-baseline="central" fill="#791F1F">钉钉 / 邮件</text>
+  </g>
+
+  <g>
+    <rect x="45" y="342" width="165" height="54" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+    <text class="th" x="127" y="364" text-anchor="middle" dominant-baseline="central" fill="#444441">9090 Backend</text>
+    <text class="ts" x="127" y="382" text-anchor="middle" dominant-baseline="central" fill="#444441">会话回放语义层</text>
+  </g>
+  <g>
+    <rect x="45" y="430" width="165" height="48" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text class="th" x="127" y="454" text-anchor="middle" dominant-baseline="central" fill="#0C447C">React 前端</text>
+    <text class="ts" x="127" y="470" text-anchor="middle" dominant-baseline="central" fill="#0C447C">3000 (保留)</text>
+  </g>
+
+  <line x1="340" y1="110" x2="340" y2="148" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="445" y1="83" x2="468" y2="83" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="300" y1="204" x2="180" y2="244" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="340" y1="204" x2="340" y2="244" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="380" y1="204" x2="500" y2="244" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="132" y1="300" x2="290" y2="342" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="340" y1="300" x2="340" y2="342" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="548" y1="300" x2="392" y2="342" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="455" y1="369" x2="468" y2="369" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <line x1="127" y1="396" x2="127" y2="428" stroke="#5F5E5A" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M245 104 C 160 160, 140 280, 127 340" stroke="#888780" stroke-width="0.5" stroke-dasharray="4 3" fill="none" marker-end="url(#arrow)"/>
+</svg>
