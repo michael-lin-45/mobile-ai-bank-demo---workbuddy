@@ -58,11 +58,9 @@ __pycache__/
 ### PPT 预览用的浏览器 profile（本地产物，如 Playwright/Edge 缓存） ###
 ppt/.edge_profile/
 
-### 配置备份与副本（非交付文件） ###
+### 配置副本（非交付文件，仅保留 application.yml 主配置） ###
 *.bak
-* - 备份*.yml
-* - 副本*.yml
-* - 商*.yml
+src/main/resources/application -*.yml
 
 ### 文档站点索引（自动生成，不交付） ###
 docs/project.json
