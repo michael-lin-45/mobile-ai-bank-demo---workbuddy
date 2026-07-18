@@ -64,3 +64,10 @@ src/main/resources/application -*.yml
 
 ### 文档站点索引（自动生成，不交付） ###
 docs/project.json
+
+### Office 临时锁定文件（PPT/Excel 打开时生成的 ~$ 文件，纯本地） ###
+~$*.pptx
+~$*.docx
+~$*.xlsx
+~$*.ppt
+~$*.xls

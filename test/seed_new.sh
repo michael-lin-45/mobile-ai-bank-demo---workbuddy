@@ -10,14 +10,23 @@ RUN_ID="s$(date +%s)${RANDOM}"
 PREFIX="seed-${RUN_ID}"
 
 send() {
-  curl -s -X POST "$BASE?sessionId=$1" -H 'Content-Type: application/json' \
-    -d "{\"message\":\"$2\"}" 2>&1 | python3 -c "
-import sys,json
+  # 用 python 显式 UTF-8 发送，绕过 curl 在 Windows 下把命令行中文按 GBK 编码导致 400 的问题
+  SID="$1" MSG="$2" python3 - <<'PYEOF'
+import os, json, urllib.request, urllib.error
+sid = os.environ["SID"]
+msg = os.environ["MSG"]
+url = "http://127.0.0.1:8080/api/bank/chat?sessionId=" + sid
+body = json.dumps({"message": msg}).encode("utf-8")
+req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json; charset=utf-8"}, method="POST")
 try:
-  d=json.load(sys.stdin)
-  print(f'  [{d[\"status\"]}] {d.get(\"intent\",\"?\")} - {d.get(\"content\",\"\")[:40]}')
-except: print('  (sent)')
-" 2>/dev/null
+    with urllib.request.urlopen(req, timeout=60) as r:
+        d = json.loads(r.read().decode("utf-8"))
+        print(f"  [{d.get('status')}] {d.get('intent','?')} - {(d.get('content') or d.get('question') or '')[:40]}")
+except urllib.error.HTTPError as e:
+    print(f"  [HTTP {e.code}] {e.read().decode('utf-8','replace')[:120]}")
+except Exception as e:
+    print(f"  [ERR] {e}")
+PYEOF
 }
 
 echo "=========================================="

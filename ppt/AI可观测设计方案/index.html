@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 可观测设计方案</title>
+<style>
+/* ══════════════════════════════════════
+   🎨 设计系统 — 修改此处即可全局换色
+   ══════════════════════════════════════ */
+:root {
+  /* 主色系 */
+  --primary: #1677FF;
+  --primary-light: #E6F4FF;
+  --primary-dark: #0958D9;
+  /* 强调色 */
+  --accent-purple: #722ED1;
+  --accent-cyan: #13C2C2;
+  /* 语义色 */
+  --success: #52C41A;
+  --warning: #FAAD14;
+  --error: #FF4D4F;
+  /* 中性色 */
+  --bg-page: #FFFFFF;
+  --bg-warm: #F4F7FB;
+  --text-primary: #1F2937;
+  --text-secondary: #5F6368;
+  --text-muted: #9CA3AF;
+  --border: #E5E7EB;
+  --border-strong: #D1D5DB;
+  /* 封面/深色背景 */
+  --dark-bg: #0B1F3A;
+  --dark-text: rgba(255,255,255,.92);
+  --dark-text-dim: rgba(255,255,255,.65);
+  /* 字体 */
+  --font-cn: -apple-system, BlinkMacSystemSystem, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-en: "Inter", -apple-system, BlinkMacSystemSystem, "Segoe UI", Roboto, sans-serif;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-card: 0 2px 8px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-elevated: 0 8px 24px rgba(0,0,0,.10), 0 2px 6px rgba(0,0,0,.06);
+}
+
+/* ══════════════════════════════════════
+   🔧 幻灯片框架
+   ══════════════════════════════════════ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-cn), var(--font-en);
+  background: #1a1a2e; overflow: hidden; height: 100vh; width: 100vw;
+  display: flex; align-items: center; justify-content: center;
+}
+
+#presenter {
+  position: relative; width: 1440px; height: 810px;
+  transform-origin: center center;
+}
+
+.slide {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  display: none; overflow: hidden; font-size: 15px; color: var(--text-primary); line-height: 1.55;
+}
+.slide.active { display: block; }
+
+/* ── 导航提示 ── */
+.hint-bar {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  z-index: 999; color: rgba(255,255,255,.5); font-size: 12px;
+  pointer-events: none; letter-spacing: .5px;
+  font-family: var(--font-en);
+}
+
+/* ── 页码指示器 ── */
+.page-indicator {
+  position: fixed; bottom: 18px; right: 28px; z-index: 999;
+  display: flex; gap: 6px;
+}
+.page-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,.25); transition: all .25s;
+}
+.page-dot.on { background: var(--primary); width: 24px; border-radius: 4px; }
+
+/* ══════════════════════════════════════
+   🧩 通用组件样式
+   ══════════════════════════════════════ */
+
+h1.slide-title { font-size: 32px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
+h2.section-title { font-size: 22px; font-weight: 700; color: var(--primary-dark); margin-bottom: 16px; padding-left: 12px; border-left: 4px solid var(--primary); }
+h3.sub-title { font-size: 17px; font-weight: 600; color: var(--text-primary); margin-bottom: 10px; }
+p.body-text { color: var(--text-secondary); font-size: 14.5px; line-height: 1.65; }
+
+.card {
+  background: white; border-radius: var(--radius-md);
+  border: 1px solid var(--border); padding: 18px 20px;
+  box-shadow: var(--shadow-card); transition: transform .2s;
+}
+.card:hover { transform: translateY(-1px); box-shadow: var(--shadow-elevated); }
+
+.card-icon { width: 36px; height: 36px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; margin-bottom: 10px; flex-shrink: 0; }
+.card-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.card-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.55; }
+
+.tag {
+  display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.tag-blue { background: var(--primary-light); color: var(--primary); }
+.tag-green { background: #F6FFED; color: var(--success); }
+.tag-red { background: #FFF1F0; color: var(--error); }
+.tag-yellow { background: #FFFBE6; color: var(--warning); }
+.tag-purple { background: #F9F0FF; color: var(--accent-purple); }
+
+table.data-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+table.data-table th {
+  background: #F0F5FF; color: var(--primary-dark); font-weight: 600;
+  padding: 10px 12px; text-align: left; border-bottom: 2px solid var(--primary);
+}
+table.data-table td {
+  padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary);
+}
+table.data-table tr:last-child td { border-bottom: none; }
+table.data-table tr:hover td { background: var(--primary-light); }
+
+.arrow-right::after { content: ''; display: inline-block; width: 0; height: 0; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 10px solid var(--primary); margin-left: 8px; vertical-align: middle; }
+
+/* ══════════════════════════════════════
+   📄 各页具体样式
+   ══════════════════════════════════════ */
+
+/* ── P1 封面 ── */
+#s1 { background: linear-gradient(135deg, #0B1F3A 0%, #102A43 40%, #16427A 100%); color: white; position: relative; overflow: hidden; }
+#s1::before {
+  content:''; position:absolute; right:-80px; bottom:-120px; width:500px; height:500px;
+  border-radius:50%; background:radial-gradient(circle,rgba(22,119,255,.15) 0%,transparent 70%);
+}
+#s1::after {
+  content:''; position:absolute; left:60px; top:-100px; width:350px; height:350px;
+  border-radius:50%; background:radial-gradient(circle,rgba(114,46,209,.1) 0%,transparent 70%);
+}
+#s1-inner { position:relative; z-index:1; height:100%; display:flex; flex-direction:column; justify-content:center; padding:0 90px; }
+#s1-logo-area { display:flex; align-items:center; gap:14px; margin-bottom:36px; }
+#s1-logo-icon { width:52px; height:52px; background:linear-gradient(135deg,var(--primary),var(--accent-purple)); border-radius:14px; display:flex; align-items:center;justify-content:center; font-size:26px; color:#fff; font-weight:700; }
+#s1-brand { font-size:18px; color:rgba(255,255,255,.7); letter-spacing:2px; font-family:var(--font-en); text-transform:uppercase; }
+#s1-main-title { font-size:48px; font-weight:800; letter-spacing:1px; margin-bottom:12px; line-height:1.25; }
+#s1-subtitle { font-size:22px; color:rgba(255,255,255,.75); font-weight:400; margin-bottom:36px; letter-spacing:.5px; }
+#s1-meta { display:flex; gap:28px; font-size:13px; color:rgba(255,255,255,.55); }
+#s1-meta span { display:flex; align-items:center; gap:6px; }
+#s1-deco-line { position:absolute; bottom:0; left:0; right:0; height:4px; background:linear-gradient(90deg,var(--primary),var(--accent-purple),var(--accent-cyan)); }
+
+/* ── P2 必要性 ── */
+#s2 { background: var(--bg-warm); }
+#s2-grid { display:grid; grid-template-columns:1fr 1fr; gap:28px; height:100%; padding:44px 56px 30px; align-content:start; }
+.pain-section, .need-section { display:flex; flex-direction:column; gap:14px; }
+.pain-header, .need-header { font-size:19px; font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:10px; }
+.pain-header { color: var(--error); }
+.need-header { color: var(--success); }
+.pain-item { display:flex; gap:12px; align-items:flex-start; }
+.pain-num { min-width:26px;height:26px;border-radius:50%;background:var(--error);color:#fff;font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px; }
+.need-num { min-width:26px;height:26px;border-radius:50%;background:var(--success);color:#fff;font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px; }
+.pain-body h4 { font-size:14.5px; font-weight:600; color:#333; margin-bottom:4px; }
+.pain-body p, .need-body p { font-size:13px; color:var(--text-secondary); line-height:1.5; }
+.vs-divider { writing-mode:vertical-lr; text-align:center; font-size:13px; color:var(--text-muted); letter-spacing:3px; font-weight:700; opacity:.6; }
+
+/* ── P3 架构 ── */
+#s3 { background: var(--bg-page); padding:38px 48px 28px; }
+.arch-flow { display:flex; flex-direction:column; gap:16px; }
+.arch-row { display:flex; gap:14px; align-items:stretch; justify-content:center; }
+.arch-layer-label { 
+  font-size:11px; font-weight:700; color:white; padding:4px 10px; border-radius:4px;
+  writing-mode:vertical-lr; text-align:center; letter-spacing:2px; flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;min-width:22px;
+}
+.arch-box {
+  border-radius:var(--radius-md); padding:14px 18px; min-width:160px; text-align:center; font-size:13px; font-weight:500;
+  border:1px solid; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:4px;
+}
+.arch-arrow-down { font-size:22px; color:var(--text-muted); text-align:center; line-height:1; margin:2px auto; }
+.arch-arrow-right::after { content:'→'; font-size:18px; color:var(--text-muted); margin-left:6px; vertical-align:middle; }
+.layer-core { background:#E6F4FF; border-color:var(--primary); color:var(--primary-dark); }
+.layer-collect { background:#FFF7E6; border-color:#FAAD14; color:#B77800; }
+.layer-store { background:#F6FFED; border-color:var(--success); color:#237804; }
+.layer-backend { background:#F9F0FF; border-color:var(--accent-purple); color:#531DAB; }
+.layer-fe { background:#E6FFFB; border-color:var(--accent-cyan); color:#08979C; }
+.arch-sub { font-size:11px; opacity:.75; font-weight:400; }
+.arch-note {
+  margin-top:12px; background:#FEFCE8; border:1px dashed var(--warning); border-radius:var(--radius-sm);
+  padding:10px 16px; font-size:12px; color:#854D04;
+}
+
+/* ── P4-P7 内容页共用布局 ── */
+.content-layout { padding:36px 46px 24px; display:flex; flex-direction:column; gap:18px; height:100%; }
+.content-split { display:grid; grid-template-columns:1fr 1fr; gap:24px; flex:1; min-height:0; }
+.content-main { display:flex; flex-direction:column; gap:12px; overflow:hidden; }
+.content-side { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; overflow:hidden; }
+.ui-shot { max-width:100%; max-height:100%; border-radius:var(--radius-md); border:1px solid var(--border); object-fit:contain; box-shadow:var(--shadow-card); }
+.ui-caption { font-size:11px; color:var(--text-muted); text-align:center; }
+
+/* ── P8 对比页 ── */
+#s8 { background: var(--bg-warm); }
+.compact-table { font-size:12px !important; }
+.compact-table th, .compact-table td { padding:7px 10px !important; }
+.highlight-check { color:var(--success); font-weight:700; }
+.highlight-cross { color:var(--error); font-weight:700; }
+.footer-note { margin-top:auto; padding:12px 18px; background:#EFF6FF; border-radius:var(--radius-sm); border-left:3px solid var(--primary); font-size:12.5px; color:#1E40AF; line-height:1.55; }
+
+/* ── 工具条 ── */
+.toolbar {
+  position:fixed;top:12px;right:20px;z-index:999;display:flex;gap:6px;
+}
+.btn-nav {
+  width:34px;height:34px;border-radius:8px;border:none;background:rgba(255,255,255,.12);
+  color:rgba(255,255,255,.7);cursor:pointer;font-size:16px;display:flex;
+  align-items:center;justify-content:center;transition:all .2s;
+}
+.btn-nav:hover { background:rgba(255,255,255,.22); color:#fff; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════
+     🖼️  PPT 页面内容
+     ══════════════════════════════════════ -->
+
+<div id="presenter">
+
+<!-- ==================== P1 封面 ==================== -->
+<section class="slide active" id="s1">
+  <div id="s1-inner">
+    <div id="s1-logo-area">
+      <div id="s1-logo-icon">AI</div>
+      <span id="s1-brand">AI Observability Platform</span>
+    </div>
+    <h1 style="font-size:48px;font-weight:800;letter-spacing:1px;margin-bottom:12px;line-height:1.25;">AI 可观测设计方案</h1>
+    <p id="s1-subtitle">移动银行 AI 智能助手 · 全链路可观测平台</p>
+    <div id="s1-meta">
+      <span>🏦 面向银行业务场景</span>
+      <span>🔒 合规 · 安全 · 高可用</span>
+      <span>📊 从「发生了什么」到「为什么 + 怎么办」</span>
+    </div>
+  </div>
+  <div id="s1-deco-line"></div>
+</section>
+
+<!-- ==================== P2 必要性 ==================== -->
+<section class="slide" id="s2">
+  <div class="content-layout">
+    <h1 class="slide-title">为什么银行需要<strong style="color:var(--primary)">AI 可观测</strong>？</h1>
+    <p class="body-text" style="margin-bottom:6px;">传统 APM 只覆盖基础设施层，无法洞察 AI 助手的核心行为与业务语义。</p>
+
+    <div id="s2-grid">
+      <!-- 左：痛点 -->
+      <div class="pain-section">
+        <div class="pain-header">❌ 传统可观测的三大盲区</div>
+        <div class="card pain-item"><div class="pain-num">1</div><div class="pain-body"><h4>只覆盖基础设施层</h4><p>JVM/HTTP/DB 指标齐全，但看不到 <b>LLM 行为</b>：Token 消耗、首字延时(TTFT)、意图准确率、路由决策、会话满意度——这些才是 AI 助手的 KPI。</p></div></div>
+        <div class="card pain-item"><div class="pain-num">2</div><div class="pain-body"><h4>无法回答「为什么」</h4><p>传统监控告诉你「LLM 错误率 ↑」，但不知道<b>根因在哪</b>：是 Prompt 太长？外部 API 超时？还是某个意图域模型能力不足？只能人工翻日志盲猜。</p></div></div>
+        <div class="card pain-item"><div class="pain-num">3</div><div class="pain-body"><h4>故障靠人工发现</h4><p>没有自动告警和根因定位：<b>LLM 404 挂了一整天</b>全靠客户投诉才知道；慢请求堆积无人感知；合规风险无法主动预警。</p></div></div>
+      </div>
+
+      <!-- 右：需求 -->
+      <div class="need-section">
+        <div class="need-header">✅ 银行 AI 助手四大核心需求</div>
+        <div class="card pain-item"><div class="need-num">①</div><div class="need-body"><h4>全链路透明可视</h4><p>从用户输入 → DomainRouter 路由 → LLM 推理 → Agent 执行 → 最终响应，<b>完整调用链路</b>一屏尽览。每一步耗时、Token 用量、置信度清晰可见。</p></div></div>
+        <div class="card pain-item"><div class="need-num">②</div><div class="need-body"><h4>从「是什么」升级为「为什么 + 怎么办」</h4><p>不只是看指标趋势，更要<b>自动根因定位</b> + <b>优先级行动建议</b>。慢会话？自动追溯 Span 级瓶颈并给出优化方向。</p></div></div>
+        <div class="card pain-item"><div class="need-num">③</div><div class="need-body"><h4>金融级合规与安全</h4><p><b>字段级数据脱敏</b>(卡号/身份证/手机号)、<b>五角色 RBAC 访问控制</b>、<b>TLS 全链路加密</b>、<b>审计日志</b>——满足银保监合规要求。</p></div></div>
+        <div class="card pain-item"><div class="need-num">④</div><div class="need-body"><h4>千万级规模支撑</h4><p>日均 <b>500~1500 万次 AI 交互</b>、<b>2000~6000 万 Span/天</b>、<b>9~27 亿行 Session</b>/半年。PostgreSQL 分区表 + Redis Sentinel + TDigest 流式分位，扛住银行量级。</p></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== P3 架构图 ==================== -->
+<section class="slide" id="s3">
+  <h1 class="slide-title">整体系统架构 —— 从埋点到呈现的全数据链路</h1>
+  <p class="body-text" style="margin-bottom:14px;">
+    五条信号管道（Trace · Metrics · Log · Session · Alert）贯穿始终，
+    <span class="tag tag-blue">标准栈外溢</span>
+    <span class="tag tag-green">业务语义自建</span>
+    <span class="tag tag-purple">Grafana 统一看板</span>
+  </p>
+
+  <div class="arch-flow">
+    <!-- Layer 1: Core 埋点 -->
+    <div class="arch-row">
+      <div class="arch-layer-label layer-core">埋点</div>
+      <div class="arch-box layer-core">
+        <strong>Core 应用 ( :8080 )</strong>
+        <span class="arch-sub">OTel Java Agent 自动拦截</span>
+        <div style="margin-top:4px;font-size:11.5px;line-height:1.5;text-align:left;width:100%;">
+          • ObsChatModel → OTLP Span (L0·L1·L2)<br/>
+          • Micrometer → Token/TTFT/Error Counter<br/>
+          • SessionBridge @Async → POST /api/v1/sessions
+        </div>
+      </div>
+    </div>
+    <div class="arch-arrow-down">↓ OTLP / HTTP</div>
+
+    <!-- Layer 2: Collector 采集 -->
+    <div class="arch-row">
+      <div class="arch-layer-label layer-collect">采集</div>
+      <div class="arch-box layer-collect">
+        <strong>OTel Collector / Alloy ( :4318 )</strong>
+        <span class="arch-sub">批量 + 过滤 + 分级采样 + 负载均衡</span>
+        <div style="margin-top:4px;font-size:11.5px;line-height:1.5;text-align:left;width:100%;">
+          • batch processor → filter(健康检查)<br/>
+          • tail_sampling: 错误/慢&gt;1s/LLM失败/交易100%<br/>
+          • <b>P0: 3实例+Nginx LB</b> 消除 SPOF
+        </div>
+      </div>
+    </div>
+    <div class="arch-arrow-down">↓ 四路分流</div>
+
+    <!-- Layer 3: 存储层 -->
+    <div class="arch-row" style="gap:10px;">
+      <div class="arch-layer-label layer-store" style="writing-mode:horizontal-tb;min-width:auto;padding:2px 8px;">标准栈</div>
+      <div class="arch-box layer-store" style="min-width:130px;"><strong>Grafana Tempo</strong><span class="arch-sub">Trace 长周期存储</span></div>
+      <div class="arch-box layer-store" style="min-width:140px;"><strong>VictoriaMetrics</strong><span class="arch-sub">PromQL 兼容指标</span></div>
+      <div class="arch-box layer-store" style="min-width:130px;"><strong>Loki + Vector</strong><span class="arch-sub">日志集中检索</span></div>
+      <div style="display:flex;align-items:center;color:var(--text-muted);font-size:18px;margin:0 4px;">+</div>
+      <div class="arch-layer-label layer-backend" style="writing-mode:horizontal-tb;min-width:auto;padding:2px 8px;">自研</div>
+      <div class="arch-box layer-backend" style="min-width:180px;flex:1;">
+        <strong>Backend ( :9090 ) · 业务语义权威源</strong>
+        <span class="arch-sub" style="font-size:10.5px;">PostgreSQL + Redis Sentinel + InsightsEngine</span>
+        <div style="margin-top:3px;font-size:11px;line-height:1.45;text-align:left;width:100%;">
+          Spans · Sessions · Metrics_agg · Alerts · Insight_reports
+        </div>
+      </div>
+    </div>
+    <div class="arch-arrow-down">↓ 查询聚合</div>
+
+    <!-- Layer 4: 展示层 -->
+    <div class="arch-row" style="gap:10px;">
+      <div class="arch-box layer-fe" style="min-width:220px;flex:2;">
+        <strong>🎛️ React 前端 V20 — 诊断驾驶舱</strong>
+        <span class="arch-sub">总览 · 会话回放 · 链路追踪 · AI洞察(6TAB) · 日志 · 告警 · 智能洞察</span>
+      </div>
+      <div class="arch-box layer-fe" style="min-width:170px;flex:1;">
+        <strong>📊 Grafana + Alerting</strong>
+        <span class="arch-sub">统一看板 + 告警推送<br/>钉钉 / 企微 / 邮件</span>
+      </div>
+    </div>
+
+    <div class="arch-note">
+      💡 <b>两条独立管道设计</b>：Spans 管(按 traceId 关联) 与 Sessions 管(按 sessionId 关联) 弱耦合。
+      Sessions 不依赖 OTel 成败 → 即使 Trace 导出失败，会话回放仍有值。
+    </div>
+  </div>
+</section>
+
+<!-- ==================== P4 指标体系 ==================== -->
+<section class="slide" id="s4">
+  <div class="content-layout">
+    <h1 class="slide-title">观测指标体系 —— <span style="color:var(--primary)">五层模块</span>覆盖 AI 全生命周期</h1>
+
+    <div class="content-split">
+      <div class="content-main">
+        <table class="data-table">
+          <thead>
+            <tr><th style="width:42px">#</th><th style="width:110px;">模块</th><th>代表指标</th><th style="width:130px;">作用</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="tag tag-blue">A</span></td><td><b>基础设施</b></td><td>DAU / 在线人数 / QPS / P95 时延</td><td>系统健康基线</td></tr>
+            <tr><td><span class="tag tag-purple">B</span></td><td><b>AI 模型性能 ★</b></td><td>Token 调用量 / TTFT P50·P95 / TPOT / 错误率</td><td>LLM 成本+速度+稳定性</td></tr>
+            <tr><td><span class="tag tag-green">C</span></td><td><b>业务语义 ★</b></td><td>意图准确率 / Reroute率 / 完成率 / 置信度分布</td><td>AI 助手「懂不懂」的核心</td></tr>
+            <tr><td><span class="tag tag-yellow">D</span></td><td><b>转化漏斗</b></td><td>进入→意图→L1→L2→完成 的转化率</td><td>业务价值闭环</td></tr>
+            <tr><td><span class="tag" style="background:#F5F5F5;color:#888;">E</span></td><td><b>维度规范</b></td><td>Metric Tag 基数预算 &lt; 200；高基数字段归 Trace/Log</td><td>防止基数爆炸</td></tr>
+          </tbody>
+        </table>
+        <p style="margin-top:10px;font-size:12.5px;color:var(--text-muted);">
+          ★ = <b style="color:var(--accent-purple)">自研主战场</b>（传统 APM 不覆盖）｜ A 类交给 Grafana 标准栈即可
+        </p>
+      </div>
+      <div class="content-side">
+        <img class="ui-shot" src="assets/v20_overview.png" alt="总览大屏UI" style="max-height:520px;">
+        <div class="ui-caption">生产版 UI — 总览大屏（Zone A/B/C 三区指标卡片）</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== P5 会话回放 & 链路追踪 ==================== -->
+<section class="slide" id="s5">
+  <div class="content-layout">
+    <h1 class="slide-title">会话回放 &amp; 链路追踪 —— <span style="color:var(--primary)">完整还原每次对话</span></h1>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;flex:1;min-height:0;">
+      <!-- 左：会话回放 -->
+      <div class="card" style="padding:16px;">
+        <h3 sub-title style="margin-bottom:10px;">💬 会话回放 <span class="tag tag-blue" style="float:right;font-size:10px;">Session Replay</span></h3>
+        <ul style="list-style:none;padding:0;font-size:13px;color:var(--text-secondary);line-height:1.7;">
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ 逐轮对话完整记录</b>：userMessage / aiResponse / intent / confidence / durationMs / tokens</li>
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ 分层意图链</b>：L0(DomainRouter) → L1(ContextRouter) → L2(BusinessAgent) 三层意图一目了然</li>
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ 三件套联动跳转</b>：
+            <span class="tag tag-blue" style="padding:1px 6px;font-size:10px;">traceId→链路</span>
+            <span class="tag tag-green" style="padding:1px 6px;font-size:10px;">sessionId→会话</span>
+            <span class="tag tag-purple" style="padding:1px 6px;font-size:10px;">logId→日志</span>
+          </li>
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ 满意度反馈</b>：每轮可标记满意/不满意，聚类共性问题</li>
+          <li><b style="color:var(--text-primary);">▸ 数据独立管道</b>：@Async fire-and-forget 上报，不依赖 Trace 成败</li>
+        </ul>
+        <img class="ui-shot" src="assets/v20_session.png" alt="会话回放" style="max-height:240px;margin-top:8px;width:100%;">
+      </div>
+
+      <!-- 右：链路追踪 -->
+      <div class="card" style="padding:16px;">
+        <h3 sub-title style="margin-bottom:10px;">🔗 链路追踪 <span class="tag tag-green" style="float:right;font-size:10px;">Trace Tracking</span></h3>
+        <ul style="list-style:none;padding:0;font-size:13px;color:var(--text-secondary);line-height:1.7;">
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ L0 → L1 → L2 瀑布图</b>：三层 Agent 调用时序可视化，每层耗时清晰</li>
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ 关键字段全覆盖</b>：TTFT / Token 总量 / duration / status / llm.confidence / intent 预测&实际值</li>
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ Agents 链显示</b>：确定性路由(L0:DomainRouter)与 LLM 路由(L0:qwen-plus)并列渲染</li>
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ IO 面板</b>：prompt / response 原文查看（已脱敏）</li>
+          <li><b style="color:var(--text-primary);">▸ 按 traceId 去重枚举</b>：跳过无业务 span 的噪声 trace</li>
+        </ul>
+        <img class="ui-shot" src="assets/v20_trace.png" alt="链路追踪" style="max-height:240px;margin-top:8px;width:100%;">
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== P6 AI 洞察 & 智能洞察 ==================== -->
+<section class="slide" id="s6">
+  <div class="content-layout">
+    <h1 class="slide-title">AI 洞察引擎 —— 从<span style="color:var(--accent-purple)">「看数据」</span>升级为<span style="color:var(--accent-purple)">「给行动」</span></h1>
+    <p class="body-text" style="margin-bottom:10px;">
+      双层架构：<b>AIInsightsService 族 (6 Service)</b> 提供基础聚合 +
+      <b>InsightsEngineService</b> 在其上做跨维度交叉分析与根因定位。
+    </p>
+
+    <div style="display:grid;grid-template-columns:1fr 1.1fr;gap:20px;flex:1;min-height:0;">
+      <!-- 左：三大诊断域 -->
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="card" style="padding:14px;flex:1;">
+          <h3 sub-title style="margin-bottom:8px;font-size:15px;">🔍 三大诊断域 × 提炼项</h3>
+          <table class="data-table" style="font-size:12px;">
+            <thead><tr><th>诊断域</th><th>提炼项</th><th>输出形式</th></tr></thead>
+            <tbody>
+              <tr><td><span class="tag tag-red">性能</span></td><td>Top3 慢 Agent / 慢会话根因Span / Token异常</td><td>排行榜 + 根因链路图</td></tr>
+              <tr><td><span class="tag tag-yellow">质量</span></td><td>低置信度意图分布 / 不满意会话模式</td><td>置信矩阵 + 特征画像</td></tr>
+              <tr><td><span class="tag tag-purple">业务</span></td><td>漏斗流失阶段 / 高价值路径</td><td>漏斗图 + 桑基图</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card" style="padding:14px;background:#F9F0FF;border-color:var(--accent-purple);">
+          <h3 sub-title style="margin-bottom:6px;font-size:14px;color:#531DAB;">⚡ 慢会话根因分析示例</h3>
+          <pre style="font-family:'SF Mono',Consolas,monospace;font-size:11px;line-height:1.5;color:#333;white-space:pre-wrap;background:transparent;border:none;padding:0;margin:0;">
+总耗时 12s (P95=3s)
+├─ RAG检索 6.2s (独占5.8s) ← 根因#1
+│   ├─ VectorStore.search 4.1s ← 外部API超时
+│   └─ Reranker.rerank 1.7s
+├─ LLM推理 4.3s
+│   ├─ GPT4o.chat 3.8s ← TTFT=2.1s (基线0.8s)
+│   └─ Input=8200 tokens ← 上下文过长
+└─ BankAPI.query 1.5s ← 超时重试2次
+          </pre>
+        </div>
+      </div>
+
+      <!-- 右：UI 截图 -->
+      <div class="content-side">
+        <img class="ui-shot" src="assets/v20_intelligence.png" alt="智能洞察" style="max-height:480px;">
+        <div class="ui-caption">智能洞察驾驶舱 — TOP5行动建议 + Agent P95 vs 错误率散点图</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== P7 日志 & 告警 ==================== -->
+<section class="slide" id="s7">
+  <div class="content-layout">
+    <h1 class="slide-title">日志 &amp; 告警 —— <span style="color:var(--warning)">主动感知</span> + <span style="color:var(--error)">快速响应</span></h1>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;flex:1;min-height:0;">
+      <!-- 左：日志 -->
+      <div class="card" style="padding:16px;">
+        <h3 sub-title style="margin-bottom:10px;">📋 集中式日志查询</h3>
+        <ul style="list-style:none;padding:0;font-size:13px;color:var(--text-secondary);line-height:1.7;">
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ Loki + Vector</b>：标签索引 + 对象存储后端，成本低廉易扩展</li>
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ MDC 自动注入</b>：trace_id / span_id / session_id 写入每条日志</li>
+          <li style="margin-bottom:4px;"><b style="color:var(--text-primary);">▸ 三件套跳转</b>：从错误日志一键跳转到对应 Trace 或 Session</li>
+          <li><b style="color:var(--text-primary);">▸ P2 增强</b>：core.log 经 Vector 采集 → Loki → Grafana 统一检索</li>
+        </ul>
+        <img class="ui-shot" src="assets/v20_logs.png" alt="日志查询" style="max-height:210px;margin-top:8px;width:100%;">
+      </div>
+
+      <!-- 右：告警 -->
+      <div class="card" style="padding:16px;">
+        <h3 sub-title style="margin-bottom:10px;">🔔 智能告警系统</h3>
+        <table class="data-table compact-table" style="margin-bottom:8px;">
+          <thead><tr><th>告警规则</th><th>阈值</th><th>严重度</th></tr></thead>
+          <tbody>
+            <tr><td>LLM 错误率</td><td>&gt; 0 （任何错误）</td><td><span class="tag tag-red" style="font-size:10px;">CRITICAL</span></td></tr>
+            <tr><td>TTFT P95</td><td>&gt; 3000ms</td><td><span class="tag tag-yellow" style="font-size:10px;">WARNING</span></td></tr>
+            <tr><td>转账槽位完成率骤降</td><td>&lt; 50%</td><td><span class="tag tag-red" style="font-size:10px;">CRITICAL</span></td></tr>
+            <tr><td>脱敏明文 PII 检测 ★V6</td><td>任何明文卡号/身份证</td><td><span class="tag tag-red" style="font-size:10px;">CRITICAL</span></td></tr>
+            <tr><td>交易 Trace 缺失 ★V6</td><td>交易 intent 非100%采样</td><td><span class="tag tag-yellow" style="font-size:10px;">WARNING</span></td></tr>
+          </tbody>
+        </table>
+        <ul style="list-style:none;padding:0;font-size:12px;color:var(--text-secondary);line-height:1.6;">
+          <li><b>通知渠道：</b>钉钉 Webhook / 飞书 / 邮件</li>
+          <li><b>状态机：</b>TRIGGERED → ACKED → RESOLVED</li>
+          <li><b>抑制策略：</b>同规则 5 分钟内不重复通知</li>
+          <li><b>P2 迁移：</b>自研引擎 → Grafana Alerting 统一管理</li>
+        </ul>
+        <img class="ui-shot" src="assets/v20_alerts.png" alt="告警规则" style="max-height:140px;margin-top:6px;width:100%;">
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== P8 方案对比 ==================== -->
+<section class="slide" id="s8">
+  <div class="content-layout">
+    <h1 class="slide-title">POC-DEMO 方案 vs <span style="color:var(--primary)">生产方案</span>落地差异</h1>
+    <p class="body-text" style="margin-bottom:10px;">
+      DEMO 验证了技术可行性，生产方案在此基础上补齐了银行级的<strong>高可用、合规、安全、性能</strong>要求。
+    </p>
+
+    <table class="data-table compact-table">
+      <thead>
+        <tr><th style="width:130px;">维度</th><th style="width:280px;">POC-DEMO 方案</th><th style="width:380px;">生产方案 (V6 整合终稿)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><b>数据库</b></td><td>H2 文件库（单文件、独占锁）</td><td><b>PostgreSQL</b> + Patroni 主从切换 + PgBouncer 连接池 + 月分区表</td></tr>
+        <tr><td><b>规模支撑</b></td><td>Demo 级百万人次</td><td>日均 <b>500~1500 万</b> AI交互 · <b>2000~6000 万</b> Span/天 · 半年 <b>9~27 亿</b> Session</td></tr>
+        <tr><td><b>数据脱敏</b></td><td class="highlight-cross">✗ 未做</td><td class="highlight-check">✓ 字段级脱敏</td> 卡号前4后4 / 身份证前6后4 / 手机号前3后4 / 用户ID哈希化 · <b>Core 端完成，后端收到的已是脱敏数据</b></td></tr>
+        <tr><td><b>访问控制</b></td><td class="highlight-cross">✗ 无 RBAC</td><td class="highlight-check">✓ 五角色权限</td> admin(全部) / ops(不含会话) / analyst(仅聚合) / auditor(只读+审计) / viewer(仅总览)</td></tr>
+        <tr><td><b>加密传输</b></td><td class="highlight-cross">✗ HTTP 明文</td><td class="highlight-check">✓ TLS 全链路</td> Core→Collector / Collector→Backend / Core→Backend(HTTP) / Backend→前端(HTTPS+WSS)</td></tr>
+        <tr><td><b>高可用</b></td><td class="highlight-cross">✗ 单实例</td><td class="highlight-check">✓ 全面消除 SPOF</td> Collector 3实例+Nginx LB / Redis Sentinel(1主2从) / PG Patroni(1主2从) / VM集群3节点</td></tr>
+        <tr><td><b>组件选型</b></td><td>纯自研 Backend + H2 + Redis</td><td><b>Alloy + Tempo + VictoriaMetrics + Loki + Grafana</b> 全 Grafana 系五件套 · 一套心智、一套告警、一套权限</td></tr>
+        <tr><td><b>采样策略</b></td><td class="highlight-cross">✗ 无 Tail Sampling</td><td class="highlight-check">✓ 按 Intent 分级采样</td> 交易类 100% · 错误/慢&gt;1s/LLM失败 全采 · 其余概率采样</td></tr>
+        <tr><td><b>内存优化</b></td><td>ZSet 存储分位数（高基数）</td><td class="highlight-check">✓ TDigest 流式分位</td> 内存占用降低 <b>50000 倍</b> · HyperLogLog DAU · Bitmap 精确在线用户</td></tr>
+        <tr><td><b>审计追溯</b></td><td class="highlight-cross">✗ 无</td><td class="highlight-check">✓ audit_logs 表</td> 记录谁何时查看了哪个会话/链路 + PII 明文扫描 CRITICAL 告警</td></tr>
+      </tbody>
+    </table>
+
+    <div class="footer-note">
+      <b>💡 银行业务适配要点：</b>
+      本方案充分考虑了银行业的特殊约束——<b>千万级用户量</b>下 PostgreSQL 替代 H2 解决独占锁与容量瓶颈；
+      <b>字段级脱敏 + RBAC + TLS + 审计</b> 四位一体满足银保监合规要求；
+      <b>TDigest / Bitmap / 月分区</b> 等优化确保在亿级数据量下仍保持秒级查询性能。
+      分五阶段平滑迁移（P0 修复数据链路 → P1 洞察引擎+Collector增强 → P2 标准栈+前端终稿），每个阶段均可独立交付价值。
+    </div>
+  </div>
+</section>
+
+</div><!-- /presenter -->
+
+<!-- ══════════════════════════════════════
+     ⌨️  导航逻辑
+     ══════════════════════════════════════ -->
+<div class="toolbar">
+  <button class="btn-nav" onclick="go(-1)" title="上一页">◀</button>
+  <button class="btn-nav" onclick="go(1)" title="下一页">▶</button>
+</div>
+<div class="hint-bar">← → 翻页　·　空格键下一页</div>
+<div class="page-indicator" id="pageIndicator"></div>
+
+<script>
+(function(){
+  const slides = document.querySelectorAll('.slide');
+  const total = slides.length;
+  let current = 0;
+  const presenter = document.getElementById('presenter');
+  const dots = document.getElementById('pageIndicator');
+
+  function show(n){
+    if(n<0)n=total-1;if(n>=total)n=0;
+    current=n;
+    slides.forEach((s,i)=>s.classList.toggle('active',i===n));
+    // update dots
+    let html='';
+    for(let i=0;i<total;i++)html+='<div class="page-dot'+(i===n?' on':'')+'"></div>';
+    dots.innerHTML=html;
+  }
+
+  function go(d){show(current+d);}
+
+  function scale(){
+    const vw=window.innerWidth,vh=window.innerHeight;
+    const s=Math.min(vw/1440,(vh-50)/810)*0.98; // -50 for toolbar/hint
+    presenter.style.transform='scale('+s+')';
+  }
+
+  window.addEventListener('keydown',function(e){
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown')go(1);
+    else if(e.key==='ArrowLeft'||e.key==='PageUp')go(-1);
+    else if(e.key==='Home')show(0);
+    else if(e.key==='End')show(total-1);
+  });
+
+  // touch swipe
+  let tx=0,touching=false;
+  presenter.addEventListener('touchstart',e=>{tx=e.touches[0].clientX;touching=true;},{passive:true});
+  presenter.addEventListener('touchend',e=>{
+    if(!touching)return;touching=false;
+    const dx=e.changedTouches[0].clientX-tx;
+    if(Math.abs(dx)>50)go(dx>0?-1:1);
+  },{passive:true});
+
+  window.addEventListener('resize',scale);
+  scale();
+  show(0);
+})();
+</script>
+
+</body>
+</html>
