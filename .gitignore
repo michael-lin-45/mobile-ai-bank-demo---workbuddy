@@ -39,5 +39,29 @@ observability/backend/data/
 core.log
 dump.rdb
 scripts/logs/
+test/logs/
 __pycache__/
 *.pyc
+
+### 依赖与构建产物 ###
+/node_modules/
+/artifacts/
+
+### 本地工具 / 工作区产物（不交付） ###
+.cloudstudio
+.workbuddy/artifacts/
+.workbuddy/memory/
+
+### 前端本地产物（ppt-frontend，含 node_modules，纯本地） ###
+/frontend/
+
+### PPT 预览用的浏览器 profile（本地产物，如 Playwright/Edge 缓存） ###
+ppt/.edge_profile/
+
+### 配置备份与副本（非交付文件） ###
+*.bak
+* - 备份*.yml
+* - 副本*.yml
+
+### 文档站点索引（自动生成，不交付） ###
+docs/project.json
