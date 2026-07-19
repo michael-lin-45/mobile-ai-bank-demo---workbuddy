@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Empty, Spin } from 'antd';
+import ApiErrorAlert from '../components/ApiErrorAlert';
 import ReactEChartsCore from 'echarts-for-react';
 import HeatmapChart from '../components/charts/HeatmapChart';
 import { fetchAIAccuracyReport } from '../api/client';
@@ -17,16 +18,19 @@ function AccuracyTab() {
   const [loading, setLoading] = useState(true);
   const [accuracyData, setAccuracyData] = useState(null);
   const [confusionData, setConfusionData] = useState(null);
+  const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
+      setError(null);
       // 单端点消费统一准确率报告（趋势+改写表+根因+混淆矩阵），修复契约错配
       const data = await fetchAIAccuracyReport();
       setAccuracyData(data);
       setConfusionData(data?.confusion || null);
     } catch (err) {
       console.error('Failed to load accuracy data:', err);
+      setError(err.message || '准确率数据加载失败');
     } finally {
       setLoading(false);
     }
@@ -43,6 +47,7 @@ function AccuracyTab() {
   return (
     <Spin spinning={loading}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <ApiErrorAlert error={error} onRetry={loadData} />
         {/* ── 意图识别准确率趋势 ── */}
         <Card
           title="意图识别准确率趋势"

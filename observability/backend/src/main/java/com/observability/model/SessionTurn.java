@@ -58,6 +58,10 @@ public class SessionTurn {
     @Column(name = "trace_id", length = 64)
     private String traceId;
 
+    /** 待定项 B：reRoute 原报文透传标记，该轮是否经过二次路由 */
+    @Column(name = "reroute_triggered", columnDefinition = "BOOLEAN DEFAULT FALSE")
+    private Boolean rerouteTriggered;
+
     @Column(name = "\"timestamp\"", nullable = false)
     private Instant timestamp;
 }

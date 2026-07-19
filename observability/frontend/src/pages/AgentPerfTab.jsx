@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Empty, Spin } from 'antd';
+import ApiErrorAlert from '../components/ApiErrorAlert';
 import BoxplotChart from '../components/charts/BoxplotChart';
 import ScatterChart from '../components/charts/ScatterChart';
 import { fetchAgentPerformance } from '../api/client';
@@ -18,14 +19,17 @@ function AgentPerfTab() {
   const [dimension, setDimension] = useState('agent');
   const [loading, setLoading] = useState(true);
   const [perfData, setPerfData] = useState(null);
+  const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await fetchAgentPerformance({ dimension });
       setPerfData(data);
     } catch (err) {
       console.error('Failed to load agent performance:', err);
+      setError(err.message || 'Agent 性能数据加载失败');
     } finally {
       setLoading(false);
     }
@@ -45,6 +49,7 @@ function AgentPerfTab() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <ApiErrorAlert error={error} onRetry={loadData} />
       {/* 子页签 */}
       <Card bodyStyle={{ padding: '0 0 12px' }}>
         <div style={{ display: 'flex', gap: 0, borderBottom: 'none' }}>

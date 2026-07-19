@@ -58,9 +58,28 @@ app:
   cors:
     allowed-origins: http://localhost:3000,http://127.0.0.1:3000
 
+# ==================== 可观测 V4 治理 ====================
+# T-L (P13 三层边界治理)：InsightsEngineService 只读闸门。
+# true = 禁止引擎执行任何写操作（L3 动作仅审计，不落地）。默认开启。
+insights:
+  readonly: true
+
 # ==================== 日志 ====================
 logging:
   level:
     com.observability: DEBUG
     org.springframework.web: INFO
     org.hibernate: WARN
+
+# ==================== Actuator 暴露（供指标验证） ====================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}

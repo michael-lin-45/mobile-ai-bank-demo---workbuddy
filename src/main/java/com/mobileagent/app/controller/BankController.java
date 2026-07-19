@@ -133,7 +133,9 @@ public class BankController {
                                 currentDomainRef.get() != null ? "L0→L1→L2(" + currentDomainRef.get() + ")" : "L0→L1(CHAT)",
                                 currentConfidenceRef.get(), // P0-1 整改：真实置信度（原硬编码 0.0）
                                 System.currentTimeMillis() - pipelineStartMs,
-                                0, getCurrentTraceId(), "COMPLETED"); // tokens 暂为 0（规则模式无 LLM；LLM 模式待接入 token 计量）
+                                0, getCurrentTraceId(), "COMPLETED",
+                                rerouteCount.get() > 0,  // T-N 待定项 B：发生过 reRoute → reRouted=true
+                                userInput);              // T-N：originalQuery = 原始用户输入（透传，不重新生成）
                     }
                 });
     }

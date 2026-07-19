@@ -64,9 +64,25 @@ public class AlertService {
         if (update.getSeverity() != null) existing.setSeverity(update.getSeverity());
         if (update.getEnabled() != null) existing.setEnabled(update.getEnabled());
         if (update.getNotifyChannels() != null) existing.setNotifyChannels(update.getNotifyChannels());
+        if (update.getEvaluationInterval() != null) existing.setEvaluationInterval(update.getEvaluationInterval());
 
         log.info("[Alert] Updating rule id={}: {}", id, existing.getRuleName());
         return alertRuleRepository.save(existing);
+    }
+
+    /** 获取单条事件 */
+    public AlertEvent getEvent(Long id) {
+        return alertEventRepository.findById(id).orElse(null);
+    }
+
+    /** 确认告警事件（状态机 FIRING/ACKED → ACKED） */
+    @Transactional
+    public AlertEvent ackEvent(Long id) {
+        AlertEvent event = alertEventRepository.findById(id).orElse(null);
+        if (event == null) return null;
+        event.setStatus("ACKED");
+        log.info("[Alert] Event id={} acknowledged", id);
+        return alertEventRepository.save(event);
     }
 
     /** 删除规则 */
@@ -127,6 +143,10 @@ public class AlertService {
         vo.put("firedAt", event.getTriggeredAt() != null ? event.getTriggeredAt().toString() : null);
         vo.put("resolvedAt", event.getResolvedAt() != null ? event.getResolvedAt().toString() : null);
         vo.put("message", event.getMessage());
+        // T-B DDL 增强字段透出
+        vo.put("notifiedChannels", event.getNotifiedChannels());
+        vo.put("notifyResult", event.getNotifyResult());
+        vo.put("suppressionCount", event.getSuppressionCount());
         return vo;
     }
 }

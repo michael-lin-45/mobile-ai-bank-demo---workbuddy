@@ -127,6 +127,43 @@ export function submitSatisfaction(data) {
   return client.post('/ai/satisfaction', data);
 }
 
+// ── Insights Engine API（诊断驾驶舱 / 智能洞察 T-H 数据源）──
+
+/** 聚合洞察报告（带缓存）— GET /ai/insights-report */
+export function fetchInsightsReport() {
+  return client.get('/ai/insights-report');
+}
+
+/** 性能 / 准确率 / 转化瓶颈（L1）— GET /ai/insights/bottlenecks */
+export function fetchBottlenecks() {
+  return client.get('/ai/insights/bottlenecks');
+}
+
+/** 慢会话根因（L2）— GET /ai/insights/root-cause/{sessionId} */
+export function fetchRootCause(sessionId) {
+  return client.get(`/ai/insights/root-cause/${encodeURIComponent(sessionId)}`);
+}
+
+/** 不满意会话共性聚类（L2）— GET /ai/insights/unsatisfied */
+export function fetchUnsatisfied() {
+  return client.get('/ai/insights/unsatisfied');
+}
+
+/** 转化漏斗（L1）— GET /ai/insights/conversion */
+export function fetchInsightsConversion() {
+  return client.get('/ai/insights/conversion');
+}
+
+/** 优化建议 Top10（L2）— GET /ai/insights/actions */
+export function fetchInsightsActions() {
+  return client.get('/ai/insights/actions');
+}
+
+/** 清缓存重算 — POST /ai/insights/refresh */
+export function refreshInsights() {
+  return client.post('/ai/insights/refresh');
+}
+
 // ── Health API ──
 
 export function fetchHealth() {
@@ -165,6 +202,11 @@ export function fetchAlertEvents(params = {}) {
 /** 获取系统设置 — GET /settings */
 export function fetchSettings() {
   return client.get('/settings');
+}
+
+/** 获取存储配置（含 redisStatus，用于数据健康三态角标 T-I）— GET /settings/storage */
+export function fetchStorageConfig() {
+  return client.get('/settings/storage');
 }
 
 export default client;

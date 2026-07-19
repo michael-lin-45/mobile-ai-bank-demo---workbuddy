@@ -5,6 +5,7 @@ import com.alibaba.cloud.ai.graph.streaming.OutputType;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.mobileagent.app.data.StreamChunk;
 import com.mobileagent.app.data.WorkflowOutput;
+import com.mobileagent.app.observability.MetricsRegistry;
 import com.mobileagent.app.observability.ObservabilityMetrics;
 import com.mobileagent.app.router.registry.SubGraphRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -35,11 +36,14 @@ public class GraphExecutionEngine {
 
     private final SubGraphRegistry subGraphRegistry;
     private final ObservabilityMetrics obsMetrics;
+    private final MetricsRegistry metricsRegistry;
 
     public GraphExecutionEngine(SubGraphRegistry subGraphRegistry,
-                                ObservabilityMetrics obsMetrics) {
+                                ObservabilityMetrics obsMetrics,
+                                MetricsRegistry metricsRegistry) {
         this.subGraphRegistry = subGraphRegistry;
         this.obsMetrics = obsMetrics;
+        this.metricsRegistry = metricsRegistry;
     }
 
     /** 生成包含 threadId 的 config */
@@ -126,6 +130,8 @@ public class GraphExecutionEngine {
                 if (output.getStatus() == com.mobileagent.app.data.WorkflowStatus.INTERRUPTED) {
                     obsMetrics.recordWorkflowInterrupt();
                     obsMetrics.recordWorkflowInterrupt(intent, "interruptBefore");
+                    // T-J P7：人工中断 → 待审批 +1（deepflux.workflow.pending_approval）
+                    metricsRegistry.addUpDown("workflow.pending_approval", +1L, "intent", intent);
                 }
                 if (output.getStatus() == com.mobileagent.app.data.WorkflowStatus.COMPLETED) {
                     obsMetrics.recordBusinessSuccess();
@@ -169,6 +175,11 @@ public class GraphExecutionEngine {
                 if (output.getStatus() == com.mobileagent.app.data.WorkflowStatus.INTERRUPTED) {
                     obsMetrics.recordWorkflowInterrupt();
                     obsMetrics.recordWorkflowInterrupt(intent, "interruptBefore");
+                    // T-J P7：resume 仍中断（再次挂起）→ 待审批 +1
+                    metricsRegistry.addUpDown("workflow.pending_approval", +1L, "intent", intent);
+                } else if (output.getStatus() == com.mobileagent.app.data.WorkflowStatus.COMPLETED) {
+                    // T-J P7：审批完成后图执行完成 → 待审批 -1
+                    metricsRegistry.addUpDown("workflow.pending_approval", -1L, "intent", intent);
                 }
                 return Flux.just(StreamChunk.fromWorkflowOutput(output));
             } catch (Exception e) {

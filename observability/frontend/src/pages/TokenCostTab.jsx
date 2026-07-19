@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Empty, Spin } from 'antd';
+import ApiErrorAlert from '../components/ApiErrorAlert';
 import ReactEChartsCore from 'echarts-for-react';
 import { fetchTokenCost } from '../api/client';
 
@@ -16,9 +17,11 @@ function TokenCostTab() {
   const [trendData, setTrendData] = useState(null);
   const [breakdownData, setBreakdownData] = useState(null);
   const [detailData, setDetailData] = useState(null);
+  const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const [trendRes, breakdownRes, detailRes] = await Promise.allSettled([
         fetchTokenCost({ type: 'trend' }),
@@ -30,6 +33,7 @@ function TokenCostTab() {
       if (detailRes.status === 'fulfilled') setDetailData(detailRes.value?.content || detailRes.value || []);
     } catch (err) {
       console.error('Failed to load token cost data:', err);
+      setError(err.message || 'Token 成本数据加载失败');
     } finally {
       setLoading(false);
     }
@@ -42,6 +46,7 @@ function TokenCostTab() {
   return (
     <Spin spinning={loading}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <ApiErrorAlert error={error} onRetry={loadData} />
         {/* Token 消耗趋势 + 成本拆解 */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
           <Card title="Token 消耗趋势（按模型）">

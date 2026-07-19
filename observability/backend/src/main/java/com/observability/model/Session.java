@@ -64,4 +64,8 @@ public class Session {
     /** 反馈原因（可选） */
     @Column(name = "satisfaction_reason", length = 512)
     private String satisfactionReason;
+
+    /** 待定项 B：reRoute 原报文透传标记，该会话是否经过二次路由 */
+    @Column(name = "reroute_triggered", columnDefinition = "BOOLEAN DEFAULT FALSE")
+    private Boolean rerouteTriggered;
 }

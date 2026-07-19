@@ -57,6 +57,19 @@ public class AlertRule {
     @Column(name = "updated_at")
     private Instant updatedAt;
 
+    // ===== T-B DDL 增强（§3.2③）=====
+    /** 求值周期（秒），默认 30 */
+    @Column(name = "evaluation_interval")
+    private Integer evaluationInterval;
+
+    /** 最近一次 @Scheduled 求值时间 */
+    @Column(name = "last_evaluated_at")
+    private Instant lastEvaluatedAt;
+
+    /** 最近一次求值得到的指标当前值 */
+    @Column(name = "current_value")
+    private Double currentValue;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) {

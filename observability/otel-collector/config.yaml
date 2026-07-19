@@ -1,3 +1,9 @@
+# =============================================================================
+# OpenTelemetry Collector 配置
+# Distro : otelcol-contrib 0.156.0 (从 otelcol-contrib_0.156.0_windows_x64.msi 提取)
+# 说明   : 由 0.124.1 core 升级到 0.156.0 contrib，还原 tail_sampling（core 构建不含此 processor）
+# =============================================================================
+
 receivers:
   otlp:
     protocols:
@@ -5,7 +11,7 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 exporters:
-  otlphttp/json_backend:
+  otlp_http/json_backend:
     endpoint: http://127.0.0.1:9090
     tls:
       insecure: true
@@ -13,7 +19,7 @@ exporters:
     compression: none
 
 # 内部遥测 Prometheus 端口改为 8887（避免与其它 Collector 8888 冲突）
-# 注意: address 字段在 v0.123+ 已弃用，必须用 readers/prometheus 格式
+# 注: address 字段在 v0.123+ 已弃用，0.156.0 必须用 readers/prometheus 格式
 processors:
   memory_limiter:
     check_interval: 1s
@@ -22,6 +28,54 @@ processors:
   batch:
     timeout: 5s
     send_batch_size: 1024
+
+  # T-C (§4.7) ① 过滤噪声：traces 管道丢弃健康检查等 Span，避免污染 Backend 的 span-stats
+  # 0.156.0 filterprocessor 中 traces.span 为 OTTL 条件字符串数组，命中即被排除(exclude，各条件 OR)。
+  # IsMatch() 为正则匹配函数（OTTL 不支持 'name matches "..."' 运算符）。
+  filter:
+    error_mode: ignore
+    traces:
+      span:
+        - 'IsMatch(name, ".*[Hh]ealth.*")'
+        - 'IsMatch(name, ".*actuator.*")'
+
+  # T-C (§4.7) ② 属性注入：统一追加 env / service.version，便于跨环境归因
+  # 注: attributesprocessor 无 error_mode 字段（其动作为确定性的 upsert），故不配置
+  attributes:
+    actions:
+      - key: env
+        value: production
+        action: upsert
+      - key: service.version
+        value: "1.0.0"
+        action: upsert
+
+  # T-C (§4.7) ③ 尾部采样（tail_sampling）：升级到 contrib 0.156.0 后可用（core 构建不含该 processor）
+  # 四策略: errors:(status_code ERROR) / slow:(latency >1000ms) /
+  #         llm-failure:(string_attribute error_type) / normal-sampling:(probabilistic 10%)
+  # 语义: 错误链路 / 慢链路(>1s) / LLM 失败(error_type) 必留样，正常链路仅抽样 10%
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 10
+    policies:
+      - name: errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: slow
+        type: latency
+        latency:
+          threshold_ms: 1000
+      - name: llm-failure
+        type: string_attribute
+        string_attribute:
+          key: error_type
+          values: [timeout, auth_error, rate_limit]
+      - name: normal-sampling
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
 
 service:
   telemetry:
@@ -33,15 +87,18 @@ service:
                 host: 127.0.0.1
                 port: 8887
   pipelines:
+    # traces：memory_limiter → tail_sampling → filter → attributes → batch
+    # 注: tail_sampling 必须在 batch 之前（先按完整 trace 决策，再批量导出）
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [otlphttp/json_backend]
+      processors: [memory_limiter, tail_sampling, filter, attributes, batch]
+      exporters: [otlp_http/json_backend]
+    # metrics / logs：仅 filter + attributes（不含 tail_sampling，尾部采样仅针对 trace）
     metrics:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [otlphttp/json_backend]
+      processors: [memory_limiter, filter, attributes, batch]
+      exporters: [otlp_http/json_backend]
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [otlphttp/json_backend]
+      processors: [memory_limiter, filter, attributes, batch]
+      exporters: [otlp_http/json_backend]

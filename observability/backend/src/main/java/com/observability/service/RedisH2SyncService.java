@@ -110,11 +110,8 @@ public class RedisH2SyncService {
             addGaugeIfNotNull(snapshots, "online_users", redisMetrics.getOnlineUsers(), now);
             addGaugeIfNotNull(snapshots, "total_visits", redisMetrics.getTotalVisits(), now);
 
-            addDoubleGauge(snapshots, "accuracy:intent", redisMetrics.getIntentAccuracy(), now);
-            addDoubleGauge(snapshots, "accuracy:rewrite", redisMetrics.getRewriteAccuracy(), now);
-            addDoubleGauge(snapshots, "reroute_rate", redisMetrics.getRerouteRate(), now);
-            addDoubleGauge(snapshots, "business_completion", redisMetrics.getBusinessCompletionRate(), now);
-            addDoubleGauge(snapshots, "conversion", redisMetrics.getConversionRate(), now);
+            // T-E (T30): 删除 5 个恒为 null 的死 key 同步（accuracy:intent / accuracy:rewrite /
+            // reroute_rate / business_completion / conversion）。主指标已改 H2 读时算，删除无副作用。
 
             // Batch save all snapshots
             if (!snapshots.isEmpty()) {
@@ -128,9 +125,5 @@ public class RedisH2SyncService {
 
     private void addGaugeIfNotNull(List<RedisMetricsSnapshot> list, String key, long value, Instant now) {
         list.add(new RedisMetricsSnapshot(key, "gauge", (double) value, null, now));
-    }
-
-    private void addDoubleGauge(List<RedisMetricsSnapshot> list, String key, Double value, Instant now) {
-        list.add(new RedisMetricsSnapshot(key, "gauge", value != null ? value : 0.0, null, now));
     }
 }

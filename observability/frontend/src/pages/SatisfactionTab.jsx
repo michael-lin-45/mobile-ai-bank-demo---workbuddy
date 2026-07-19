@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Empty, Spin } from 'antd';
+import ApiErrorAlert from '../components/ApiErrorAlert';
 import ReactEChartsCore from 'echarts-for-react';
 import { fetchSatisfaction } from '../api/client';
 
@@ -15,14 +16,17 @@ import { fetchSatisfaction } from '../api/client';
 function SatisfactionTab() {
   const [loading, setLoading] = useState(true);
   const [satData, setSatData] = useState(null);
+  const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await fetchSatisfaction();
       setSatData(data);
     } catch (err) {
       console.error('Failed to load satisfaction data:', err);
+      setError(err.message || '满意度数据加载失败');
     } finally {
       setLoading(false);
     }
@@ -38,6 +42,7 @@ function SatisfactionTab() {
   return (
     <Spin spinning={loading}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <ApiErrorAlert error={error} onRetry={loadData} />
         {/* 满意度分布 */}
         <Card
           title="用户满意度分布"

@@ -50,4 +50,16 @@ public interface AlertEventRepository extends JpaRepository<AlertEvent, Long> {
      * 按规则 ID 查询全部事件
      */
     List<AlertEvent> findByRuleIdOrderByTriggeredAtDesc(Long ruleId);
+
+    /**
+     * T-B：统计某规则某状态的事件数（用于抑制计数）
+     */
+    long countByRuleIdAndStatus(Long ruleId, String status);
+
+    /**
+     * T-B：查询某规则处于给定状态集合中的事件（按触发时间倒序），用于状态机恢复判定
+     */
+    List<AlertEvent> findByRuleIdAndStatusInOrderByTriggeredAtDesc(
+            @Param("ruleId") Long ruleId,
+            @Param("statuses") java.util.List<String> statuses);
 }

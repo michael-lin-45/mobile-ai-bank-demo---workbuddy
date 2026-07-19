@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import MetricCard from '../components/MetricCard';
 import TrendChart from '../components/charts/TrendChart';
 import PieChart from '../components/charts/PieChart';
+import HealthBadge from '../components/HealthBadge';
 import { fetchRealtimeMetrics, fetchMetricsTrend } from '../api/client';
 import usePolling from '../hooks/usePolling';
 
@@ -115,6 +116,9 @@ function DashboardPage() {
             A
           </span>
           系统健康
+          <span style={{ marginLeft: 'auto' }}>
+            <HealthBadge />
+          </span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
           <MetricCard

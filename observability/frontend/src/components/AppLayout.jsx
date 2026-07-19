@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Layout, Typography, Select, Button, Tag } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import Sidebar from './Sidebar';
+import HealthBadge from './HealthBadge';
 import DashboardPage from '../pages/DashboardPage';
 import SessionViewerPage from '../pages/SessionViewerPage';
 import TraceExplorerPage from '../pages/TraceExplorerPage';
@@ -72,6 +73,7 @@ function AppLayout() {
             </Tag>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <HealthBadge />
             <Select
               value={state.timeRange}
               onChange={handleTimeChange}

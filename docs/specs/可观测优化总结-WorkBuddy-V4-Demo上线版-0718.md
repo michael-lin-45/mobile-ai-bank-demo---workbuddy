@@ -8,6 +8,7 @@
 >   - §14.3 待定项 A（L0 确定性 span → 方案A 已实施）与 C（Langfuse 引入 → 已确认 DEMO 可选/生产必装）更新状态。
 >   - 新增 §14.6 OpenLLMetry 评估结论（Java 栈保留自研 ObsChatModel）、§14.7 Langfuse 确认项。
 >   - 新增 §15 0718 整改汇总（已完成清单 + 待做 Backlog + GAP分析-v2 引用）。
+>   - **0719 补充**：新增 §14.8 FAQ & 术语表（tail_sampling 为何仅用于 trace、Collector 5 个 processor 详解）；同步见交付报告 §11.1。
 >   - **除上述增量外，全文档结构、架构图、代码示例、设计表、指标矩阵全部保持 0711 原样不动。**
 > 适用范围：移动 AI 银行 Demo（Core 8080 → OTel Collector 4318 → Backend 9090 / H2+Redis → React 前端 + 自研大屏 v20）
 > 合并依据：`docs/可观测设计方案差异分析-WorkBuddy-V3版本比较.md`（8 处分歧逐项比对）
@@ -1112,6 +1113,48 @@ Langfuse 经 OTel OTLP 消费同一份遥测，**无需改业务代码**，业�
 |---|---|---|
 | DEMO（可选启动） | `docker compose up` Langfuse；Collector 加 `otlphttp/langfuse` exporter | ~0.5 人日 |
 | 生产（必装） | 自托管 Langfuse（PG+对象存储）+ RBAC；提示词/P20 迁入；评估对接 | 随生产 P2 |
+
+### 14.8 FAQ & 术语表（0719 补充）
+
+**FAQ**
+
+**Q1：为什么 metrics / logs 不走尾部采样（tail_sampling）？**
+
+`tail_sampling` 在 OTel 中是「trace 专属」采样器，无法套到 metrics / logs：
+
+1. **没有"等齐"的对象**：尾部采样按 `trace_id` 把一条 trace 的所有 span 缓存进内存，等整条 trace 结束或 `decision_wait` 超时后再判生死。metric 是独立的一个数据点（如 `CPU=50%`），log 是独立一条记录，没有"trace 结束了"的完成信号。
+2. **缺少分组键与完成语义**：tail_sampling 状态机靠 `trace_id` 把零散 span 聚成「一条链」；metrics/logs 即便带 `trace_id` 也只是关联字段，不存在"何时算收齐"的概念。
+3. **内存代价不划算**：tail_sampling 在 `decision_wait` 期间把 `num_traces` 条 trace 的 span 全占 RAM，对 metrics/logs 这么做内存爆掉却无收益。
+4. **metrics / logs 有更便宜的降量手段**：metrics 体量天然比 span 小、常全量保留，真要降量用 `probabilistic_sampler`（头采样）或 `filter`；logs 用 `filter` 按级别/关键字丢。
+
+→ 本项目 `tail_sampling` 只挂 `traces` 管道；`metrics`/`logs` 管道明确不含它（见 §11.1 配置）。
+
+**Q2：Collector 的 5 个 processor 各是什么、怎么工作？**
+
+`traces` 管道实际装配 5 个：`memory_limiter → tail_sampling → filter → attributes → batch`；`metrics`/`logs` 管道为 4 个（同序列但无 `tail_sampling`）。均在 otelcol-contrib 0.156.0 内置：
+
+| 处理器 | 角色 | 处理逻辑（本项目配置） |
+|--------|------|------------------------|
+| `memory_limiter` | 内存守门员（不碰数据） | 每 `check_interval=1s` 查堆内存；`limit_mib=512` 硬上限、`spike_limit_mib=128` 允许突增；超线即发背压、强制丢新数据并 GC，保进程不死。必须排第一。 |
+| `tail_sampling` | 尾部采样（仅 trace） | 按 `trace_id` 缓存 span（`num_traces=50000`），等 `decision_wait=10s` 或 trace 结束，逐条跑策略，任一命中即保留（OR）：`errors`(status_code=ERROR)/`slow`(latency>1000ms)/`llm-failure`(error_type∈{timeout,auth_error,rate_limit}) 必留；`normal-sampling`(probabilistic 10%) 正常链路随机留 10%。必须在 `batch` 之前。 |
+| `filter` | 噪音过滤器 | 按 OTTL 条件排除匹配数据。本项目仅配 `traces.span`：`IsMatch(name,".*[Hh]ealth.*")` 或 `".*[aA]ctuator.*"` 命中即排除（丢健康检查/探针 span）；metrics/logs 管道无对应规则故为 no-op。`error_mode: ignore` 表示条件解析出错时忽略。 |
+| `attributes` | 属性注入器 | 确定性 `upsert` 固定属性：`env=production`、`service.version=1.0.0`。无 `error_mode` 字段。目的：跨环境归因。 |
+| `batch` | 批量导出（末环） | `timeout=5s` 或 `send_batch_size=1024` 攒批后发给 Backend(9090, json, 无压缩)。减网络往返、提吞吐。必须排最后。 |
+
+**顺序约束**：`memory_limiter` 必须在最前（先护内存）；`tail_sampling` 必须在 `batch` 前（先决策后打包）。`filter` 置于 `tail_sampling` 之后、`attributes` 之前。
+
+**术语表**
+
+| 术语 | 含义 |
+|------|------|
+| **tail_sampling（尾部采样）** | 等一条 trace 的所有 span 到齐、判定好/坏后再决定保留或丢弃的采样策略。坏链路（错误/慢/关键失败）100% 留样，正常链路按成本抽。对比 *head sampling*（头部采样：trace 一创建就随机决定抽不抽）。 |
+| **memory_limiter** | Collector 自身内存保护处理器，超阈值即背压丢数据防 OOM，不修改业务数据。 |
+| **filter** | 按 OTTL 条件排除匹配数据的处理器（本项目用于丢健康检查/探针 span）。 |
+| **attributes** | 向遥测注入/修改属性的处理器（本项目注入 `env`/`service.version` 用于跨环境归因）。 |
+| **batch** | 将零散遥测攒批后统一导出的处理器，降低网络开销、提升吞吐。 |
+| **decision_wait** | tail_sampling 的等待窗口（本项目 10s）：一条 trace 的 span 至少缓存这么久，等可能的慢/错 span 到达后再决策。 |
+| **OTTL** | OpenTelemetry Transformation Language，Collector 处理器（如 filter）内描述匹配/转换条件的表达式语言。 |
+| **OTLP** | OpenTelemetry Protocol，Collector 与 SDK/后端之间传输遥测的协议（本项目用 HTTP 4318）。 |
 
 ---
 

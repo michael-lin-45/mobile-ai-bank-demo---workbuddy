@@ -1,6 +1,7 @@
 package com.mobileagent.app.observability;
 
 import io.micrometer.core.instrument.Counter;
+import com.mobileagent.app.observability.MetricsRegistry;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -49,6 +50,9 @@ public class ObservabilityMetrics {
 
     private final MeterRegistry meterRegistry;
 
+    /** 集中式指标注册表（T-K P6）：新指标走 deepflux.* 前缀；存量 22 个调用保持不变 */
+    private final MetricsRegistry metricsRegistry;
+
     // ── Atomic 状态（供 Gauge 使用）──
     private final AtomicLong suspendDepth = new AtomicLong(0);
     private final AtomicLong activeSessionCount = new AtomicLong(0);
@@ -81,8 +85,9 @@ public class ObservabilityMetrics {
     private Timer llmCallDuration;
     private Timer toolCallDuration;
 
-    public ObservabilityMetrics(MeterRegistry meterRegistry) {
+    public ObservabilityMetrics(MeterRegistry meterRegistry, MetricsRegistry metricsRegistry) {
         this.meterRegistry = meterRegistry;
+        this.metricsRegistry = metricsRegistry;
     }
 
     @PostConstruct
@@ -505,6 +510,18 @@ public class ObservabilityMetrics {
     }
 
     // ==================== 新增指标方法 ====================
+
+    /**
+     * 待审批任务计数（UpDownCounter，T-J P7 §4.5）。
+     * 人工中断 +1，审批完成 -1；经集中式 MetricsRegistry 暴露为 deepflux.workflow.pending_approval。
+     *
+     * @param delta 变化量（+1 中断 / -1 审批完成）
+     * @param intent 触发意图（tag）
+     */
+    public void recordPendingApproval(long delta, String intent) {
+        metricsRegistry.addUpDown("workflow.pending_approval", delta,
+                "intent", (intent != null && !intent.isBlank()) ? intent : "UNKNOWN");
+    }
 
     /**
      * 意图准确率 — 四态标签 (§5.7)。

@@ -72,6 +72,15 @@ src/main/resources/application -*.yml
 ### 文档站点索引（自动生成，不交付） ###
 docs/project.json
 
+### 本会话运行时产物（pid 跟踪 / 构建与运行日志 / 验证日志，纯本地不交付） ###
+_corepid*.txt
+core-build*.log
+core.stdout.log
+core_run*.log
+obs_v4_*.log
+nul
+
+
 ### Office 临时锁定文件（PPT/Excel 打开时生成的 ~$ 文件，纯本地） ###
 ~$*.pptx
 ~$*.docx

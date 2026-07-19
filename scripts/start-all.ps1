@@ -132,7 +132,7 @@ function global:Stop-AllServices {
   $global:CleanedUp = $true
   Write-Host "`n=== 正在清理已启动的服务 (Ctrl+C / 失败退出) ===" -ForegroundColor Yellow
   # Kill otelcol by process name (它不监听单一可预测端口)
-  Get-Process -Name otelcol -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-Process -Name otelcol-contrib -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   # Kill all known service ports using the robust Stop-PortOccupier
   $ports = @(6379, 9090, 4318, 8887, 8080, 3000)
   $labels = @{6379='Redis'; 9090='Backend'; 4318='Collector'; 8887='Collector-Prometheus'; 8080='Core'; 3000='Frontend'}
@@ -243,7 +243,7 @@ if (-not $redisUp) {
 Write-Host "`n=== 2/6 启动 Collector ($COLLECTOR_PORT) ===" -ForegroundColor Green
 
 # 清理旧 otelcol 进程：按进程名杀（避免按端口杀的顺序竞态）
-Get-Process -Name otelcol -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name otelcol-contrib -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 # 等待端口释放（OS 释放端口有延迟）
 for ($pw = 0; $pw -lt 10; $pw++) {
   $c4 = Get-NetTCPConnection -LocalPort $COLLECTOR_PORT -ErrorAction SilentlyContinue
@@ -252,7 +252,7 @@ for ($pw = 0; $pw -lt 10; $pw++) {
   Start-Sleep 1
 }
 
-$collectorExe = Join-Path $COLLECTOR_PATH "otelcol.exe"
+$collectorExe = Join-Path $COLLECTOR_PATH "otelcol-contrib.exe"
 $collectorCfg = Join-Path $COLLECTOR_PATH "config.yaml"
 
 if (Test-Path $collectorExe) {
@@ -278,7 +278,7 @@ cd /d "$COLLECTOR_PATH"
   Stop-AllAndExit
   }
 } else {
-  Write-Warning "  未找到 otelcol.exe, 请手动启动"
+  Write-Warning "  未找到 otelcol-contrib.exe, 请手动启动"
   Stop-AllAndExit
 }
 

@@ -1,6 +1,7 @@
 package com.observability.controller;
 
 import com.observability.dto.ApiResponse;
+import com.observability.model.AlertEvent;
 import com.observability.model.AlertRule;
 import com.observability.service.AlertService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -110,6 +111,34 @@ public class AlertController {
             return ApiResponse.ok(result);
         } catch (Exception e) {
             return ApiResponse.error(500, "Failed to list alert events: " + e.getMessage());
+        }
+    }
+
+    /** 告警事件详情 */
+    @GetMapping("/events/{id}")
+    public ApiResponse<AlertEvent> getEvent(@PathVariable Long id) {
+        try {
+            AlertEvent event = alertService.getEvent(id);
+            if (event == null) {
+                return ApiResponse.error(404, "Alert event not found: " + id);
+            }
+            return ApiResponse.ok(event);
+        } catch (Exception e) {
+            return ApiResponse.error(500, "Failed to get alert event: " + e.getMessage());
+        }
+    }
+
+    /** T-B 状态机：人工确认事件（FIRING/ACKED → ACKED） */
+    @PostMapping("/events/{id}/ack")
+    public ApiResponse<AlertEvent> ackEvent(@PathVariable Long id) {
+        try {
+            AlertEvent event = alertService.ackEvent(id);
+            if (event == null) {
+                return ApiResponse.error(404, "Alert event not found: " + id);
+            }
+            return ApiResponse.ok(event, "Alert event acknowledged");
+        } catch (Exception e) {
+            return ApiResponse.error(500, "Failed to ack alert event: " + e.getMessage());
         }
     }
 }

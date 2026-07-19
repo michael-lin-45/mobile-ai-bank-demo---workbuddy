@@ -208,3 +208,48 @@ CREATE TABLE IF NOT EXISTS redis_metrics_snapshot (
 );
 CREATE INDEX IF NOT EXISTS idx_rms_key_ts ON redis_metrics_snapshot(metric_key, "timestamp");
 CREATE INDEX IF NOT EXISTS idx_rms_ts ON redis_metrics_snapshot("timestamp");
+
+-- ============================================================
+-- ★ Phase 2 V4 增强（T-N / T-B / T-M / T-L）
+-- ============================================================
+
+-- T-N 待定项 B：reRoute 原报文透传标记（sessions / session_turns）
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS reroute_triggered BOOLEAN DEFAULT FALSE;
+ALTER TABLE session_turns ADD COLUMN IF NOT EXISTS reroute_triggered BOOLEAN DEFAULT FALSE;
+
+-- T-B 告警引擎 DDL 增强（§3.2③）
+ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS evaluation_interval INT DEFAULT 30;
+ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS last_evaluated_at TIMESTAMP;
+ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS current_value DOUBLE;
+
+ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS notified_channels VARCHAR(128);
+ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS notify_result VARCHAR(64);
+ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS suppression_count INT DEFAULT 0;
+
+-- T-M P20 提示词版本化（§3.4①）
+CREATE TABLE IF NOT EXISTS prompt_versions (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    prompt_key VARCHAR(64) NOT NULL,
+    version INT NOT NULL,
+    content CLOB NOT NULL,
+    model VARCHAR(64),
+    status VARCHAR(16) DEFAULT 'DRAFT',
+    description VARCHAR(256),
+    created_by VARCHAR(64),
+    created_at TIMESTAMP,
+    UNIQUE (prompt_key, version)
+);
+CREATE INDEX IF NOT EXISTS idx_pv_key_status ON prompt_versions(prompt_key, status);
+
+-- T-L P13 三层边界治理审计表（§3.3②，本轮先建表不接业务）
+CREATE TABLE IF NOT EXISTS ai_action_audit (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    prompt_version_id BIGINT,
+    action_key VARCHAR(64),
+    boundary VARCHAR(8) DEFAULT 'L3',
+    suggested_by VARCHAR(64),
+    approved_by VARCHAR(64),
+    status VARCHAR(16) DEFAULT 'PENDING',
+    created_at TIMESTAMP,
+    executed_at TIMESTAMP
+);

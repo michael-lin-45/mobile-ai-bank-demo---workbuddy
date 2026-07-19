@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Empty, Spin } from 'antd';
+import ApiErrorAlert from '../components/ApiErrorAlert';
 import ReactEChartsCore from 'echarts-for-react';
 import { fetchToolStats } from '../api/client';
 
@@ -13,14 +14,17 @@ import { fetchToolStats } from '../api/client';
 function ToolCallTab() {
   const [loading, setLoading] = useState(true);
   const [toolData, setToolData] = useState(null);
+  const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await fetchToolStats();
       if (data) setToolData(data);
     } catch (err) {
       console.error('Failed to load tool stats:', err);
+      setError(err.message || '工具调用数据加载失败');
     } finally {
       setLoading(false);
     }
@@ -33,6 +37,7 @@ function ToolCallTab() {
   return (
     <Spin spinning={loading}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <ApiErrorAlert error={error} onRetry={loadData} />
         {/* 工具调用统计 + KPI 摘要 */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
           <Card title="MCP 工具调用统计">

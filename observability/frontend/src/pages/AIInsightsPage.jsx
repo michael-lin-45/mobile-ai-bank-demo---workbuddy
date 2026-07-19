@@ -8,6 +8,7 @@ import {
   FunnelPlotOutlined,
   SmileOutlined,
 } from '@ant-design/icons';
+import DiagnosisCockpit from '../components/DiagnosisCockpit';
 
 /**
  * AI 洞察页 — 6 TAB 框架
@@ -132,6 +133,9 @@ function AIInsightsPage() {
           LIVE
         </span>
       </div>
+
+      {/* 诊断驾驶舱（T-H）：5 区块真实数据 */}
+      <DiagnosisCockpit />
 
       {/* TAB 导航 + 内容 */}
       <Card bodyStyle={{ padding: '20px 20px 16px' }}>

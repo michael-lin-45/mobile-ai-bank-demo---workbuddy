@@ -35,12 +35,12 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,metrics,prometheus
+        include: health,info,metrics
   endpoint:
     health:
       show-details: always
     prometheus:
-      enabled: true
+      enabled: false
   observability:
     metrics:
       custom:

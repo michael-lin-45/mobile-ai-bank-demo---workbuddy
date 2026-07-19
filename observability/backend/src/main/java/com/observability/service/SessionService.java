@@ -10,6 +10,8 @@ import com.observability.model.SpanEntity;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -66,6 +68,10 @@ public class SessionService {
         if (size > 200) size = 200;
         if (page < 0) page = 0;
 
+        // 捕获为 effectively-final 局部变量，供下方 Specification lambda 使用
+        final Instant fromFinal = from;
+        final Instant toFinal = to;
+
         // 归一化筛选入参（去除首尾空白/换行，兼容 trace 携带的 sessionId 末尾 \n）
         String sidFilter = (sessionId != null && !sessionId.isBlank()) ? sessionId.trim() : null;
         String uidFilter = (userId != null && !userId.isBlank()) ? userId.trim() : null;
@@ -74,41 +80,34 @@ public class SessionService {
         String lvlFilter = (agentLevel != null && !agentLevel.isBlank()) ? agentLevel.trim() : null;
         String statusFilter = (status != null && !status.isBlank()) ? status.trim() : null;
 
-        // 全量拉取时间范围内的会话（不分页），再在内存做多条件筛选，避免只筛当前页导致漏数据
-        List<Session> all = (statusFilter != null)
-                ? sessionRepository.findAllByTimeRangeAndStatus(from, to, statusFilter)
-                : sessionRepository.findAllByTimeRange(from, to);
-
-        List<Session> filtered = new ArrayList<>();
-        for (Session s : all) {
-            String sSid = s.getSessionId() != null ? s.getSessionId().trim() : null;
-            if (sidFilter != null && !sidFilter.equals(sSid)) continue;
-            if (uidFilter != null) {
-                String sid = s.getUserId() != null ? s.getUserId().trim() : null;
-                if (sid == null || !uidFilter.equals(sid)) continue;
-            }
-            if (chFilter != null) {
-                String ch = s.getChannel() != null ? s.getChannel().trim() : null;
-                if (ch == null || !chFilter.equals(ch)) continue;
-            }
+        // T-D (T29)：DB 侧分页 + 多条件筛选，避免全量内存加载（大 offset 不再 OOM / 500）。
+        // 构造 Specification，将时间范围、等值（sessionId/userId/channel/status）、
+        // 模糊（intentFlow LIKE）条件全部下推到数据库。
+        Specification<Session> spec = (root, query, cb) -> {
+            List<jakarta.persistence.criteria.Predicate> preds = new ArrayList<>();
+            if (fromFinal != null) preds.add(cb.greaterThanOrEqualTo(root.get("startTime"), fromFinal));
+            if (toFinal != null) preds.add(cb.lessThanOrEqualTo(root.get("startTime"), toFinal));
+            if (sidFilter != null) preds.add(cb.equal(root.get("sessionId"), sidFilter));
+            if (uidFilter != null) preds.add(cb.equal(root.get("userId"), uidFilter));
+            if (chFilter != null) preds.add(cb.equal(root.get("channel"), chFilter));
+            if (statusFilter != null) preds.add(cb.equal(root.get("status"), statusFilter));
             if (intentFilter != null) {
-                String flow = s.getIntentFlow();
-                if (flow == null || !flow.toUpperCase().contains(intentFilter.toUpperCase())) continue;
+                preds.add(cb.like(cb.upper(root.get("intentFlow")),
+                        "%" + intentFilter.toUpperCase().replace("%", "\\%") + "%"));
             }
             if (lvlFilter != null) {
-                String flow = s.getIntentFlow();
-                if (flow == null || !flow.contains(lvlFilter)) continue;
+                preds.add(cb.like(root.get("intentFlow"),
+                        "%" + lvlFilter.replace("%", "\\%") + "%"));
             }
-            filtered.add(s);
-        }
+            return cb.and(preds.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        };
 
-        long totalElements = filtered.size();
-        int totalPages = (int) Math.ceil((double) totalElements / size);
-        if (totalPages < 1) totalPages = 1;
+        Page<Session> pageResult = sessionRepository.findAll(spec,
+                PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "startTime")));
 
-        int fromIdx = Math.min(page * size, filtered.size());
-        int toIdx = Math.min(fromIdx + size, filtered.size());
-        List<Session> pageSlice = filtered.subList(fromIdx, toIdx);
+        List<Session> pageSlice = pageResult.getContent();
+        long totalElements = pageResult.getTotalElements();
+        int totalPages = pageResult.getTotalPages();
 
         // 批量加载 token（仅当前页切片）
         Map<String, Long> sessionTokenMap = new HashMap<>();
@@ -161,6 +160,7 @@ public class SessionService {
     /**
      * 接收主应用桥接的会话数据，对 sessions 表做 upsert（同 sessionId 覆盖写）
      */
+    @SuppressWarnings("unchecked")
     public void upsertSession(Map<String, Object> body) {
         String sessionId = (String) body.get("sessionId");
         if (sessionId != null) sessionId = sessionId.trim();
@@ -185,8 +185,6 @@ public class SessionService {
         session.setUserId(userId);
 
         // 实时指标：DAU（按 userId 去重，幂等）+ 在线用户（5 分钟滑动窗口）
-        // 修复 GAP-A2/A3：原 setDau/setOnlineUsers 全库无调用方，DAU/在线永远为 null。
-        // 这里挂到 SessionBridge 的每次会话交互上，Core 上报会话即产生真实数据。
         if (!"unknown".equals(userId)) {
             redisMetricsService.recordDauUser(userId);
             redisMetricsService.recordOnlineUser(userId);
@@ -196,10 +194,25 @@ public class SessionService {
         Integer turnCount = session.getTurnCount();
         session.setTurnCount(turnCount != null ? turnCount + 1 : 1);
 
-        // 追加意图流
-        String intent = (String) body.getOrDefault("intent", "UNKNOWN");
-        String flow = session.getIntentFlow();
-        session.setIntentFlow(flow != null ? flow + " → " + intent : intent);
+        // 追加意图流：优先使用显式传入的 intentFlow，否则按 intent 追加
+        String intentFlowIn = (String) body.get("intentFlow");
+        if (intentFlowIn != null && !intentFlowIn.isBlank()) {
+            session.setIntentFlow(intentFlowIn);
+        } else {
+            String intent = (String) body.getOrDefault("intent", "UNKNOWN");
+            String flow = session.getIntentFlow();
+            session.setIntentFlow(flow != null ? flow + " → " + intent : intent);
+        }
+
+        // 待定项 B：reRoute 原报文透传。reRouted / originalQuery 透传，仅落 rerouteTriggered 标记；
+        // originalQuery 按设计 §6.2 不新增列（仅透传，回填原始 query），故不持久化。
+        Boolean reRouted = toBoolean(body.get("reRouted"));
+        String originalQuery = (String) body.get("originalQuery");
+        boolean sessionReroute = Boolean.TRUE.equals(reRouted);
+        if (originalQuery != null && !originalQuery.isBlank()) {
+            log.debug("[SessionBridge] reRoute originalQuery 透传: sessionId={}, originalQuery={}",
+                    sessionId, originalQuery);
+        }
 
         // 更新状态
         String status = (String) body.getOrDefault("status", "active");
@@ -218,34 +231,107 @@ public class SessionService {
 
         sessionRepository.save(session);
 
-        // 写入 session_turns
-        String userInput = (String) body.getOrDefault("userInput", "");
-        String aiResponse = (String) body.getOrDefault("aiResponse", "");
-        String agentPath = (String) body.getOrDefault("agentPath", "");
-        String traceId = (String) body.getOrDefault("traceId", "");
-        Object durObj = body.get("durationMs");
-        long durationMs = durObj instanceof Number ? ((Number) durObj).longValue() : 0L;
-        Object confObj = body.get("confidence");
-        double confidence = confObj instanceof Number ? ((Number) confObj).doubleValue() : 0.0;
+        // 构建 turns：优先使用 body.turns 数组（QA 测试 / 未来桥接约定），
+        // 否则从顶层字段构造单轮（兼容 Core SessionBridge 既有调用）。
+        List<Map<String, Object>> turns = toMapList(body.get("turns"));
+        if (turns.isEmpty()) {
+            turns = List.of(singleTurnFromBody(body));
+        }
 
-        SessionTurn turn = new SessionTurn();
-        turn.setSessionId(sessionId);
-        turn.setTurnNumber(session.getTurnCount());
-        turn.setUserMessage(userInput);
-        turn.setAiResponse(aiResponse);
-        turn.setIntent(intent);
-        turn.setAgentPath(agentPath);
-        turn.setConfidence(confidence);
-        turn.setDurationMs(durationMs);
-        turn.setTokens((int) tokens);
-        turn.setTraceId(traceId);
-        turn.setStatus(status);
-        turn.setTimestamp(now);
+        boolean anyTurnReroute = false;
+        for (Map<String, Object> t : turns) {
+            Boolean tReroute = toBoolean(t.get("rerouteTriggered"));
+            if (Boolean.TRUE.equals(tReroute)) anyTurnReroute = true;
 
-        sessionTurnRepository.save(turn);
+            SessionTurn turn = new SessionTurn();
+            turn.setSessionId(sessionId);
+            turn.setTurnNumber(session.getTurnCount());
+            turn.setUserMessage(str(t.get("userMessage"), str(t.get("userInput"), "")));
+            turn.setAiResponse(str(t.get("aiResponse"), ""));
+            turn.setIntent(str(t.get("intent"), "UNKNOWN"));
+            turn.setAgentPath(str(t.get("agentPath"), ""));
+            turn.setConfidence(toDouble(t.get("confidence")));
+            turn.setDurationMs(toLong(t.get("durationMs")));
+            turn.setTokens(toLong(t.get("tokens")).intValue());
+            turn.setTraceId(str(t.get("traceId"), ""));
+            turn.setStatus(str(t.get("status"), status));
+            turn.setRerouteTriggered(Boolean.TRUE.equals(tReroute));
+            turn.setTimestamp(now);
+            sessionTurnRepository.save(turn);
+        }
 
-        log.info("[SessionBridge] Upserted session: sessionId={}, turn={}, status={}",
-                sessionId, session.getTurnCount(), status);
+        // 会话级 reroute 标记：任意来源为真即标记
+        session.setRerouteTriggered(sessionReroute || anyTurnReroute);
+        sessionRepository.save(session);
+
+        log.info("[SessionBridge] Upserted session: sessionId={}, turn={}, status={}, reRouted={}",
+                sessionId, session.getTurnCount(), status,
+                Boolean.TRUE.equals(session.getRerouteTriggered()));
+    }
+
+    /** 从顶层 body 字段构造单轮（兼容 Core SessionBridge 既有调用约定） */
+    private Map<String, Object> singleTurnFromBody(Map<String, Object> body) {
+        Map<String, Object> t = new LinkedHashMap<>();
+        t.put("userMessage", body.getOrDefault("userInput", ""));
+        t.put("aiResponse", body.getOrDefault("aiResponse", ""));
+        t.put("intent", body.getOrDefault("intent", "UNKNOWN"));
+        t.put("agentPath", body.getOrDefault("agentPath", ""));
+        t.put("confidence", body.get("confidence"));
+        t.put("durationMs", body.get("durationMs"));
+        t.put("tokens", body.get("tokens"));
+        t.put("traceId", body.get("traceId"));
+        t.put("status", body.getOrDefault("status", "active"));
+        t.put("rerouteTriggered", body.get("reRouted"));
+        return t;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> toMapList(Object obj) {
+        if (obj instanceof List<?> list) {
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> m) {
+                    result.add((Map<String, Object>) m);
+                }
+            }
+            return result;
+        }
+        return List.of();
+    }
+
+    private Boolean toBoolean(Object obj) {
+        if (obj instanceof Boolean b) return b;
+        if (obj instanceof Number n) return n.intValue() != 0;
+        if (obj instanceof String s) return "true".equalsIgnoreCase(s) || "1".equals(s);
+        return null;
+    }
+
+    private String str(Object obj, String def) {
+        return obj != null ? obj.toString() : def;
+    }
+
+    private Double toDouble(Object obj) {
+        if (obj instanceof Number n) return n.doubleValue();
+        if (obj instanceof String s && !s.isBlank()) {
+            try {
+                return Double.parseDouble(s);
+            } catch (Exception e) {
+                return 0.0;
+            }
+        }
+        return 0.0;
+    }
+
+    private Long toLong(Object obj) {
+        if (obj instanceof Number n) return n.longValue();
+        if (obj instanceof String s && !s.isBlank()) {
+            try {
+                return Long.parseLong(s);
+            } catch (Exception e) {
+                return 0L;
+            }
+        }
+        return 0L;
     }
 
     private String extractUserId(String sessionId) {
@@ -349,6 +435,7 @@ public class SessionService {
         vo.put("status", s.getStatus());
         vo.put("satisfactionRating", s.getSatisfactionRating());
         vo.put("satisfactionReason", s.getSatisfactionReason());
+        vo.put("rerouteTriggered", Boolean.TRUE.equals(s.getRerouteTriggered())); // 待定项 B
 
         // Frontend-aligned aliases (SessionDetailModal.jsx expects these names)
         vo.put("duration", durationMs);
@@ -413,7 +500,7 @@ public class SessionService {
         vo.put("tokenOutput", 0);
         vo.put("tokens", t.getTokens() != null ? t.getTokens() : 0); // alias used by SessionDetailModal
         vo.put("ttftMs", resolvedTtft); // P0-2 整改：真实 TTFT（首 LLM span 起始 - 首 span 起始，毫秒）
-        vo.put("rerouteTriggered", false);
+        vo.put("rerouteTriggered", Boolean.TRUE.equals(t.getRerouteTriggered())); // 待定项 B：读真实字段，不再硬编码 false
         vo.put("businessOutcome", t.getStatus());
         vo.put("status", t.getStatus()); // used by SessionDetailModal for turn status badges
         // Additional fields used by SessionDetailModal

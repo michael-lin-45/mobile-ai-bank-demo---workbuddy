@@ -54,11 +54,13 @@ public class SessionBridge {
     @Async
     public void reportSession(String sessionId, String userInput, String aiResponse,
                                String intent, String agentPath, double confidence,
-                               long durationMs, int tokens, String traceId, String status) {
+                               long durationMs, int tokens, String traceId, String status,
+                               boolean reRouted, String originalQuery) {
         try {
             if (sessionId != null) sessionId = sessionId.trim();
             String body = buildSessionJson(sessionId, userInput, aiResponse,
-                    intent, agentPath, confidence, durationMs, tokens, traceId, status);
+                    intent, agentPath, confidence, durationMs, tokens, traceId, status,
+                    reRouted, originalQuery);
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(observabilityBaseUrl + "/api/v1/sessions"))
                     .header("Content-Type", "application/json; charset=UTF-8")
@@ -82,7 +84,8 @@ public class SessionBridge {
 
     private String buildSessionJson(String sessionId, String userInput, String aiResponse,
                                      String intent, String agentPath, double confidence,
-                                     long durationMs, int tokens, String traceId, String status) {
+                                     long durationMs, int tokens, String traceId, String status,
+                                     boolean reRouted, String originalQuery) {
         // 改用 Jackson 序列化（P0-3 整改）：避免手工 String.format 拼接 JSON
         // 漏转义 Unicode 控制字符（\u0000-\u001F 等）导致后端解析失败的隐患。
         Map<String, Object> m = new LinkedHashMap<>();
@@ -97,6 +100,11 @@ public class SessionBridge {
         m.put("tokens", tokens);
         m.put("traceId", traceId);
         m.put("status", status);
+        // T-N 待定项 B：reRoute 原报文透传（设计 §3.5，最小改动、不重新生成）
+        m.put("reRouted", reRouted);
+        if (originalQuery != null && !originalQuery.isBlank()) {
+            m.put("originalQuery", originalQuery);
+        }
         try {
             return SESSION_MAPPER.writeValueAsString(m);
         } catch (Exception e) {
