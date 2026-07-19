@@ -210,6 +210,7 @@ public class RedisMetricsService {
     public void updateIntentDistribution(String intent) {
         safeOp(() -> {
             redis.opsForHash().increment(PREFIX + "intent_distribution", intent, 1);
+            redis.expire(PREFIX + "intent_distribution", 24, TimeUnit.HOURS);
         });
     }
 
