@@ -1184,7 +1184,7 @@ Langfuse 经 OTel OTLP 消费同一份遥测，**无需改业务代码**，业�
 | # | 项 | 来源 | 改动量 | 优先级 |
 |---|---|---|---|---|
 | **告警验收** | 确认 AlertEngine 规则+钉钉生效 | DEMO | 配置 | 🔴 高 |
-| **T29** | `listSessions` 全量拉内存→DB 分页 | 外部审阅 P1 | ~15 行 | 🟡 DEMO量级可接受 |
+| **T29** | `listSessions` 全量拉内存→DB 分页 | 外部审阅 P1 | ~15 行 | ✅ 已完成（`SessionService:83` Specification+`PageRequest` 下推 DB，见 `:105`） |
 | **T30** | 清理 Redis 死 key（accuracy:intent/dead gauge 同步） | 外部审阅 P1 | 小 | 🟡 主指标不受影响 |
 | **Langfuse** | DEMO 可选启动（docker-compose + OTel exporter） | 0718 确认（§14.7） | ~0.5人日 | 🟢 建议 |
 | **P6/P7/P8** | 集中式注册表 / UpDownCounter / GenAI 钉注 | web 合入 | 各极小 | 🟢 轻量建议 |
