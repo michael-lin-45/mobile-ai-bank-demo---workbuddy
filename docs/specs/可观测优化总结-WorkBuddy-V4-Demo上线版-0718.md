@@ -470,7 +470,7 @@ span.setAttribute("intent.L2.actual", l2Intent);
 - 语义计数用 **Counter + 规范 tag** 落 H2 `metrics_agg`，**不在 Redis 另存比率 key**。
 - 高基数字段（user_id / trace_id / prompt / response）**不入 Metric Tag**，归 Span attributes。
 - **★web合入 P6**：采用**集中式指标注册表**模式（来自 A1），定义 `Metrics` 结构体集中管理所有 Meter/Counter/Timer，命名规范 `deepflux.<domain>.<measure>`，提供 `RecordXxx` 助手方法，防止 `otel.Meter("xxx")` 散落各处导致命名漂移。
-- **★web合入 P7**：新增 `UpDownCounter` `agent.pending_approval`，人工中断+1、审批完成-1，实时反映"当前卡多少条待审批"，运营一眼可看。
+- **★web合入 P7**：新增 `UpDownCounter` `deepflux.workflow.pending_approval`（**实现统一走 `deepflux.*` 前缀，与 §3.1① 集中式注册表一致；早期方案稿曾写 `agent.pending_approval`，为历史命名，以代码 `deepflux.workflow.pending_approval` 为准**，二者等价）。人工中断+1、审批完成-1，实时反映"当前卡多少条待审批"，运营一眼可看。
 - **★web合入 P8**：若 P1 引入 OpenLLMetry 补齐 `gen_ai.*` 语义 span，必须在 `pom.xml` 钉注版本号并在本文档记录版本（因 GenAI 语义约定存在**版本漂移**——vLLM 用 `prompt_tokens` 而非 `input_tokens`，env 属性名 1.27 起改 `deployment.environment.name`，来自 A2）。**0718 结论：Java 栈保留自研 ObsChatModel（§14.6），OpenLLMetry 仅可选且当前不适用。**
 
 ---
@@ -1190,6 +1190,8 @@ Langfuse 经 OTel OTLP 消费同一份遥测，**无需改业务代码**，业�
 | **P6/P7/P8** | 集中式注册表 / UpDownCounter / GenAI 钉注 | web 合入 | 各极小 | 🟢 轻量建议 |
 | **P13/P20** | 三层边界治理 / 提示词版本化 | web 合入 | 文档+轻代码 | 🟢 轻量建议 |
 | **前端对齐** | 数据健康三态角标真实化 + 诊断驾驶舱真实数据 | DEMO | 前端 | 🟡 按排期 |
+| **RAG-start-all** | `start-all.ps1` 加 RAG 启用参数（`--spring.profiles.active=dev --observability.rag.reference.enabled=true`；⚠️ `-D` 须放 `-jar` 前或改用 `--`，否则静默忽略），使一键启动 demo 也能出 `deepflux.rag.*` 指标 | 0719 五问① | ~1 行 | 🟡 P2（待接真实 VectorStore 或 demo 需展示时） |
+| **RAG-hit阈值** | `RagConstants.RELEVANCE_HIT_THRESHOLD` 0.5→0.3（或调 `MinimalReferenceReRanker.PRIORITY_WEIGHT`），让诊断参考检索器 `hit_rate` 更有意义 | 0719 五问④ | ~1 行 | 🟡 P2（接真实检索器前低优先） |
 
 ### 15.3 GAP分析-v2 关键结论（引用）
 
@@ -1199,6 +1201,41 @@ Langfuse 经 OTel OTLP 消费同一份遥测，**无需改业务代码**，业�
 - **0718 闭环**：T1 LLM 置信度（T27/T28）、T2 分层意图（方案A）。**至此 GAP-v2 的 P0 项全部闭环。**
 - **仍开放**：D2 violationRate（需安全围栏对接）、I5 L2 意图识别（需 L2 链路数据）、C4/D1 转化率独立埋点（当前以业务成功率近似）。
 - **GAP-v2 待定项**：待定项 A 已于 0714 实施方案A（§14.3）；待定项 C 已于 0718 确认 Langfuse（§14.7）；待定项 B 仍待定。
+
+### 15.4 0719 收敛记录（OTLP 主线 + RAG 指标 + 五问修订）
+
+> 本节汇总 2026-07-19 当晚的终态：ADR 定型、RAG 可观测埋点层落地、以及用户"五问"的修订处理结论。细节见交付报告 `deliverables/software-company/可观测V4-delivery-2026-07-19.md` §12.3–§12.5。
+
+**① ADR 状态**：`docs/specs/遥测架构决策-ADR-2026-07-19.md` 由 **Accepted → Confirmed**（用户已确认，ADR 第 7 行生效）。核心结论：OTLP Push 为唯一遥测主线；`micrometer-registry-prometheus` 与 `/actuator/prometheus` 端点已回退（out-of-design）；保留 ObsChatModel + 集中式 MetricsRegistry。
+
+**② 提交（本地 `feat/demo-v4`，待 push）**：
+- `87a05a2` 可观测遥测 OTLP 主线定型与全链路增强
+- `23a7c41` RAG 可观测埋点层（`deepflux.rag.*` 5 核心指标 + 2 防御 Counter + 内存参考检索器 + 诊断端点）
+- `ff9eeea` 交付报告 §12.4 补充与 §12.3 闭环状态
+
+**③ 用户"五问"处理结论**：
+
+| 问 | 主题 | 处理 |
+|---|---|---|
+| ① | `start-all.ps1` 是否同步加 RAG flag | **遗留 P2**（§15.2 `RAG-start-all`）：待接真实 VectorStore 或 demo 需展示时再做；改动量 ~1 行 |
+| ② | `/actuator/metrics` 是否仍需 | **修订（确认保留）**：`/actuator/metrics`（JSON）保留为本地验证端点与 QA 探针来源；`/actuator/prometheus` 已移除（404）。见 ADR |
+| ③ | `deepflux` 具体是什么数据 | **修订（文档对齐）**：`deepflux` 是集中式 `MetricsRegistry` 的**业务指标命名前缀**（`deepflux.<domain>.<measure>`），非数据源；§5.3 P7 命名漂移已修正为 `deepflux.workflow.pending_approval`。完整目录见下 |
+| ④ | `hit_rate` 调什么阈值 | **遗留 P2**（§15.2 `RAG-hit阈值`）：`RagConstants.RELEVANCE_HIT_THRESHOLD` 0.5→0.3（或调 `PRIORITY_WEIGHT`） |
+| ⑤ | RAG 指标有无前台仪表盘 | **现状**：RAG 指标已 Core→OTLP→Backend 入库，但前端 `DashboardPage` 暂未可视化（仅精选 KPI）；待接真实 VectorStore 时一并规划面板 |
+
+**④ `deepflux.*` 指标目录（已实现，截至 0719）**：
+
+| 指标 | 类型 | 含义 |
+|---|---|---|
+| `deepflux.workflow.pending_approval` | Gauge(UpDownCounter) | 待人工审批数 |
+| `deepflux.rag.retrieval.latency` | Timer(Histogram) | 检索耗时 |
+| `deepflux.rag.retrieval.documents` | Summary | 召回文档数 |
+| `deepflux.rag.retrieval.hit_rate` | Summary(二值) | 命中率（0/1 均值，阈值 `RELEVANCE_HIT_THRESHOLD=0.5`） |
+| `deepflux.rag.rerank.latency` | Timer | 重排耗时 |
+| `deepflux.rag.topk.relevance` | Summary | Top-K 平均相关性 0..1 |
+| `deepflux.rag.retrieval.error` / `rerank.error` | Counter | 防御性异常计数 |
+
+**⑤ 测试**：`test/obs_v4_tests/test_rag.py`（TC-RAG-001/002/003）复跑 **PASS 3 / SKIP 0**；OTLP 主线 T-K/T-J 探测读 `/actuator/metrics` → **PASS 3 / SKIP 1**。
 
 ---
 
