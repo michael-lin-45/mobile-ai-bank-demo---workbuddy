@@ -38,6 +38,7 @@ MODULES = [
     "test_metrics",     # T-K + T-J
     "test_prompt_version",  # T-M
     "test_reroute",     # T-N
+    "test_rag",         # T-RAG：RAG 可观测埋点层端到端（需 Core dev + observability.rag.reference.enabled=true）
 ]
 
 

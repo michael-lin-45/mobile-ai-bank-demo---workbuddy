@@ -1,0 +1,153 @@
+classDiagram
+    %% ===== 数据模型 =====
+    class RagDocument {
+        +String id
+        +String content
+        +Map~String,Object~ metadata
+        +double score
+        +RagDocument(id, content, score)
+        +getters / setters
+    }
+
+    class RagRetrieveResult {
+        +String query
+        +int topK
+        +List~RagDocument~ documents
+        +long retrievalLatencyMs
+        +long rerankLatencyMs
+        +double hitRate
+        +double topKRelevance
+        +RagRetrieveResult(...)
+    }
+
+    class RagConstants {
+        <<constants>>
+        +String METRIC_RETRIEVAL_LATENCY = "rag.retrieval.latency"
+        +String METRIC_RETRIEVAL_DOCUMENTS = "rag.retrieval.documents"
+        +String METRIC_RETRIEVAL_HIT_RATE = "rag.retrieval.hit_rate"
+        +String METRIC_RERANK_LATENCY = "rag.rerank.latency"
+        +String METRIC_TOPK_RELEVANCE = "rag.topk.relevance"
+        +String METRIC_RETRIEVAL_ERROR = "rag.retrieval.error"
+        +String METRIC_RERANK_ERROR = "rag.rerank.error"
+        +String TAG_COLLECTION = "collection"
+        +String TAG_RETRIEVER = "retriever"
+        +String TAG_RERANKER = "reranker"
+        +String TAG_ERROR_TYPE = "error_type"
+    }
+
+    %% ===== 检索 / 重排契约 =====
+    class DocumentRetriever {
+        <<interface>>
+        +List~RagDocument~ retrieve(String query, int topK)
+    }
+    class ReRanker {
+        <<interface>>
+        +List~RagDocument~ rerank(String query, List~RagDocument~ candidates, int topK)
+    }
+
+    %% ===== 最小参考实现（端到端可测）=====
+    class MinimalReferenceRetriever {
+        -List~RagDocument~ corpus
+        -double relevanceThreshold
+        +retrieve(query, topK) List~RagDocument~
+        +setCorpus(List~RagDocument~)
+    }
+    class MinimalReferenceReRanker {
+        +rerank(query, candidates, topK) List~RagDocument~
+    }
+
+    %% ===== 埋点装饰器（沿用 ObsChatModel 模式）=====
+    class ObsDocumentRetriever {
+        -DocumentRetriever delegate
+        -RagMetrics ragMetrics
+        -MeterRegistry meterRegistry
+        -String retrieverName
+        -String defaultAgentLayer
+        -String defaultAgentName
+        +retrieve(query, topK) List~RagDocument~
+        -resolve() ResolvedCtx
+        -startSpan(ctx) Span
+        -recordError(Throwable)
+    }
+    class ObsReRanker {
+        -ReRanker delegate
+        -RagMetrics ragMetrics
+        -String rerankerName
+        -String defaultAgentLayer
+        -String defaultAgentName
+        +rerank(query, candidates, topK) List~RagDocument~
+        -resolve() ResolvedCtx
+        -startSpan(ctx) Span
+        -recordError(Throwable)
+    }
+
+    %% ===== 指标门面（走 MetricsRegistry → deepflux.* 前缀）=====
+    class RagMetrics {
+        -MetricsRegistry metricsRegistry
+        +recordRetrieval(latencyMs, docCount, hitRate, tags)
+        +recordRerank(latencyMs, topKRelevance, tags)
+        +recordRetrievalError(retriever, errorType)
+        +recordRerankError(reranker, errorType)
+    }
+
+    %% ===== 装配 / 编排 / 暴露 =====
+    class RagPipeline {
+        -ObsDocumentRetriever retriever
+        -ObsReRanker reranker
+        +RagRetrieveResult retrieveAndRerank(query, topK)
+    }
+    class RagConfig {
+        +MinimalReferenceRetriever minimalReferenceRetriever()
+        +MinimalReferenceReRanker minimalReferenceReRanker()
+        +ObsDocumentRetriever obsDocumentRetriever(...)
+        +ObsReRanker obsReRanker(...)
+        +RagPipeline ragPipeline(...)
+        +RagController ragController(...)
+    }
+    class RagSampleCorpus {
+        +List~RagDocument~ defaultCorpus()
+    }
+    class RagController {
+        -RagPipeline ragPipeline
+        +retrieve(query, topK) RagRetrieveResult
+    }
+
+    %% ===== 外部依赖 =====
+    class MetricsRegistry {
+        +recordTimer(measure, ms, tags)
+        +recordSummary(measure, value, tags)
+        +recordCounter(measure, tags)
+    }
+    class AgentSpanContext {
+        +get() AgentSpanContext
+        +set(layer, name, intent, session, user)
+    }
+
+    %% ===== 关系 =====
+    DocumentRetriever <|.. MinimalReferenceRetriever
+    DocumentRetriever <|.. ObsDocumentRetriever
+    ReRanker <|.. MinimalReferenceReRanker
+    ReRanker <|.. ObsReRanker
+
+    ObsDocumentRetriever --> DocumentRetriever : delegate
+    ObsReRanker --> ReRanker : delegate
+
+    ObsDocumentRetriever --> RagMetrics
+    ObsReRanker --> RagMetrics
+    RagMetrics --> MetricsRegistry
+
+    RagPipeline --> ObsDocumentRetriever
+    RagPipeline --> ObsReRanker
+    RagController --> RagPipeline
+    RagPipeline ..> RagRetrieveResult : returns
+
+    RagConfig ..> MinimalReferenceRetriever : builds
+    RagConfig ..> MinimalReferenceReRanker : builds
+    RagConfig ..> ObsDocumentRetriever : builds
+    RagConfig ..> ObsReRanker : builds
+    RagConfig ..> RagPipeline : builds
+    RagConfig ..> RagController : builds
+    RagSampleCorpus ..> MinimalReferenceRetriever : feeds corpus
+
+    ObsDocumentRetriever ..> AgentSpanContext : resolve layer/name/intent
+    ObsReRanker ..> AgentSpanContext : resolve layer/name/intent

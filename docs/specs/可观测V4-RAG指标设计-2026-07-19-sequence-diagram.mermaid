@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    participant C as RagController (诊断端点)
+    participant P as RagPipeline
+    participant OR as ObsDocumentRetriever
+    participant R as MinimalReferenceRetriever
+    participant ORe as ObsReRanker
+    participant Re as MinimalReferenceReRanker
+    participant RM as RagMetrics → MetricsRegistry
+    participant OT as OpenTelemetry (GlobalOpenTelemetry)
+
+    Note over C,ORe: 端到端检索 + 重排（retrieveAndRerank）
+
+    C->>P: retrieveAndRerank(query, topK)
+    P->>OR: retrieve(query, topK)
+
+    OR->>OT: startSpan("RAG:retrieve")  (解析 AgentSpanContext)
+    OT-->>OR: Span
+    OR->>R: retrieve(query, topK)
+    R-->>OR: List~RagDocument~ (已打分 score)
+    OR->>RM: recordTimer("rag.retrieval.latency", ms)
+    OR->>RM: recordSummary("rag.retrieval.documents", docCount)
+    OR->>RM: recordSummary("rag.retrieval.hit_rate", hitRate)
+    OR->>OT: span.end()
+    OR-->>P: 候选 docs
+
+    P->>ORe: rerank(query, candidates, topK)
+    ORe->>OT: startSpan("RAG:rerank")  (解析 AgentSpanContext)
+    ORe->>Re: rerank(query, candidates, topK)
+    Re-->>ORe: List~RagDocument~ (重排后 topK)
+    ORe->>RM: recordTimer("rag.rerank.latency", ms)
+    ORe->>RM: recordSummary("rag.topk.relevance", meanTopKScore)
+    ORe->>OT: span.end()
+    ORe-->>P: 最终 top-K docs
+
+    P-->>C: RagRetrieveResult(query, topK, docs, latencies, hitRate, topKRelevance)
+
+    Note over OR: 异常路径（与 ObsChatModel 一致：try/catch 包 metrics，span 标错并 end，不吞异常）
+    rect rgb(255,240,240)
+        OR->>R: retrieve(...)
+        R-->>OR: throw RuntimeException
+        OR->>RM: recordCounter("rag.retrieval.error", retriever, error_type)
+        OR->>OT: span.setStatus(ERROR); span.recordException(e); span.end()
+        OR-->>P: re-throw
+    end

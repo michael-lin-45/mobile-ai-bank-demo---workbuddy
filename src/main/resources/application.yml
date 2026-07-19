@@ -279,3 +279,12 @@ transfer:
     params:
       environment: "111-小红_积分转账通用账户.json"
       node_check: "NO"
+
+# ==================== RAG 可观测埋点层（诊断/参考实现，默认关闭，仅 dev 暴露） ====================
+# 本期仅交付内存参考实现（MinimalReferenceRetriever / MinimalReferenceReRanker）。
+# 诊断端点 /api/v1/rag/retrieve 经 @Profile("dev") + 本开关双重守卫，生产不暴露。
+# 启用示例（dev 环境 E2E 验证）：--spring.profiles.active=dev -Dobservability.rag.reference.enabled=true
+observability:
+  rag:
+    reference:
+      enabled: false
