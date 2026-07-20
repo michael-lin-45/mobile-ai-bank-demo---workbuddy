@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 多模型配置 - L0/L1/L2各层独立ChatClient
@@ -44,6 +45,12 @@ import java.util.Map;
 public class ModelConfig {
 
     private final MeterRegistry meterRegistry;
+
+    /**
+     * 匹配 base-url 结尾的版本段，如 /v1、/v2、/v3（大小写不敏感）。
+     * 用于推导 completionsPath，避免版本已包含在 base-url 时再叠加 /v1 造成 /v1/v1 重复。
+     */
+    private static final Pattern VERSION_SUFFIX = Pattern.compile("/v\\d+$", Pattern.CASE_INSENSITIVE);
 
     public ModelConfig(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
@@ -170,6 +177,31 @@ public class ModelConfig {
     // ==================== 工具方法 ====================
 
     /**
+     * 根据 base-url 推导 OpenAI 兼容接口的 completionsPath。
+     *
+     * <p>Spring AI 1.1.2 的 OpenAiApi.Builder 默认把 completionsPath 硬编码为
+     * {@code /v1/chat/completions}。当 base-url 自身已经以 {@code /vN}（N 为数字，
+     * 大小写不敏感，且为结尾段，如 /v1、/v2、/v3）结尾时，再叠加默认 /v1 会变成
+     * {@code .../vN/v1/chat/completions}（重复/错误）。因此：
+     *
+     * <ul>
+     *   <li>base-url 以 {@code /vN} 结尾 → 返回 {@code /chat/completions}（版本已含在 base-url）；</li>
+     *   <li>否则 → 返回 {@code /v1/chat/completions}（回退 OpenAI 约定，对历史不带版本段的配置兼容）。</li>
+     * </ul>
+     *
+     * <p>可见性设为包级，便于同包下的单元测试直接调用（无需反射）。
+     *
+     * @param baseUrl 模型 base-url
+     * @return 推导出的 completionsPath
+     */
+    static String deriveCompletionsPath(String baseUrl) {
+        if (baseUrl != null && VERSION_SUFFIX.matcher(baseUrl.trim()).find()) {
+            return "/chat/completions";
+        }
+        return "/v1/chat/completions";
+    }
+
+    /**
      * 构建 OpenAiChatModel 并用 ObsChatModel 包装以采集 llm.* 指标。
      * 业务模型强制 enable_thinking=false（关闭思维链，降低延迟）。
      *
@@ -183,6 +215,7 @@ public class ModelConfig {
                                            String defaultAgentLayer, String defaultAgentName) {
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(baseUrl)
+                .completionsPath(deriveCompletionsPath(baseUrl))
                 .apiKey(apiKey)
                 .build();
         OpenAiChatModel originalModel = OpenAiChatModel.builder()
@@ -203,6 +236,7 @@ public class ModelConfig {
                                     String defaultAgentLayer, String defaultAgentName) {
         OpenAiApi api = OpenAiApi.builder()
                 .baseUrl(baseUrl)
+                .completionsPath(deriveCompletionsPath(baseUrl))
                 .apiKey(apiKey)
                 .build();
         OpenAiChatModel originalModel = OpenAiChatModel.builder()
