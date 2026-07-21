@@ -411,10 +411,10 @@ public abstract class AbstractGraphConfig {
             log.info("[{}.askNode] Cancel signal detected", getGraphName());
             return Map.of("_cancelSignal", true);
         }
-        if (detectCancelFromInput(state)) {
-            log.info("[{}.askNode] Cancel intent detected from user input", getGraphName());
-            return Map.of("_cancelSignal", true);
-        }
+        // if (detectCancelFromInput(state)) {
+        //    log.info("[{}.askNode] Cancel intent detected from user input", getGraphName());
+        //    return Map.of("_cancelSignal", true);
+        //}
         return null;
     }
 
