@@ -25,7 +25,7 @@ import static org.mockito.Mockito.lenient;
  * <p>InsightsEngineService 仅注入只读 Repo/Service；通过 {@code @Value("${insights.readonly:true}")}
  * 的 readOnly 字段在 generateReport()/refresh() 入口经 assertReadOnly() 拦截写操作。
  *
- * <p>本测试用 Mockito mock 6 个只读依赖，构造纯单元测试（不启动 Spring 上下文）：
+ * <p>本测试用 Mockito mock 7 个只读依赖，构造纯单元测试（不启动 Spring 上下文）：
  * <ul>
  *   <li>readOnly=false → 调用 generateReport()/refresh() 必须抛 UnsupportedOperationException；</li>
  *   <li>readOnly=true（默认）→ 不抛，正常返回报告 Map。</li>
@@ -46,11 +46,14 @@ class InsightsEngineReadonlyTest {
     private AIInsightsService aiInsightsService;
     @Mock
     private RedisMetricsService redisMetricsService;
+    @Mock
+    private MetricsQueryService metricsQueryService;
 
     /** 构造引擎（纯 new，readOnly 为 Java 原始默认值 false，需经反射显式设置） */
     private InsightsEngineService newService() {
         return new InsightsEngineService(metricsAggRepository, spanRepository,
-                sessionRepository, sessionTurnRepository, aiInsightsService, redisMetricsService);
+                sessionRepository, sessionTurnRepository, aiInsightsService, redisMetricsService,
+                metricsQueryService);
     }
 
     /** 经反射设置 private readOnly 字段（绕过 @Value 注入，模拟配置切换） */
