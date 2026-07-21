@@ -88,3 +88,12 @@ nul
 ~$*.xlsx
 ~$*.ppt
 ~$*.xls
+
+# 前端/脚本运行日志（start-all.ps1 等生成，禁止入库）
+frontend.log
+observability/frontend/frontend.log
+scripts/log/
+
+# Node / 构建产物（任何层级的依赖与打包输出，禁止入库）
+node_modules/
+dist/

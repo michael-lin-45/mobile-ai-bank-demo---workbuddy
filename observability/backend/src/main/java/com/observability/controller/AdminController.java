@@ -9,7 +9,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.IntSupplier;
 
@@ -39,6 +41,49 @@ public class AdminController {
         this.metricsAggRepository = metricsAggRepository;
         this.snapshotRepository = snapshotRepository;
         this.logRepository = logRepository;
+    }
+
+    /**
+     * 死 key 5 元组（与 test_dead_keys.py:DEAD_KEYS 必须一致，设计 §9.1）。
+     * T30 已删除 RedisH2SyncService 中这 5 个 addDoubleGauge 调用，快照表应不再含这些 key。
+     */
+    private static final List<String> DEAD_KEYS = List.of(
+            "accuracy:intent", "accuracy:rewrite", "reroute_rate",
+            "business_completion", "conversion");
+
+    /**
+     * 只读诊断端点（Q1/T-A）：直查 redis_metrics_snapshot，返回 5 死 key 的命中行数与总量。
+     *
+     * <p>无副作用、不暴露业务数据；仅用于自动断言「T30 死 key 已清理（totalDead == 0）」。
+     * 端点不可达时由 Python 侧优雅 SKIP，守住 0 FAIL 不变量。
+     */
+    @GetMapping("/diagnostics/dead-keys")
+    public ApiResponse<Map<String, Object>> deadKeys() {
+        List<Object[]> grouped = snapshotRepository.countDeadKeysGrouped(DEAD_KEYS);
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (Object[] row : grouped) {
+            String key = (String) row[0];
+            long count = ((Number) row[1]).longValue();
+            counts.put(key, count);
+        }
+
+        List<Map<String, Object>> deadKeysList = new ArrayList<>();
+        long totalDead = 0L;
+        for (String key : DEAD_KEYS) {
+            long c = counts.getOrDefault(key, 0L);
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("metricKey", key);
+            item.put("count", c);
+            deadKeysList.add(item);
+            totalDead += c;
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("deadKeys", deadKeysList);
+        data.put("totalDead", totalDead);
+        data.put("allClear", totalDead == 0L);
+        log.info("[Admin] dead-keys diagnostics: totalDead={} allClear={}", totalDead, totalDead == 0L);
+        return ApiResponse.ok(data);
     }
 
     /**

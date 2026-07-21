@@ -47,4 +47,22 @@ public interface RedisMetricsSnapshotRepository extends JpaRepository<RedisMetri
      */
     @Query("SELECT s.metricValue FROM RedisMetricsSnapshot s WHERE s.metricKey = :key ORDER BY s.timestamp DESC LIMIT 1")
     Optional<Double> findLatestValueByKey(@Param("key") String key);
+
+    /**
+     * 统计给定 key 列表在 redis_metrics_snapshot 表中的命中总行数（死 key 诊断，Q1/T-A）。
+     *
+     * @param keys 待诊断的 metricKey 集合（如 5 个死 key）
+     * @return 命中总行数；0 表示无任何死 key 行
+     */
+    @Query("SELECT COUNT(s) FROM RedisMetricsSnapshot s WHERE s.metricKey IN :keys")
+    long countDeadKeys(@Param("keys") List<String> keys);
+
+    /**
+     * 按 key 分组统计命中行数（死 key 诊断 DTO 组装，Q1/T-A）。
+     *
+     * @param keys 待诊断的 metricKey 集合
+     * @return 每行 [metricKey(String), count(Long)]；未被命中的 key 不会出现在结果中
+     */
+    @Query("SELECT s.metricKey, COUNT(s) FROM RedisMetricsSnapshot s WHERE s.metricKey IN :keys GROUP BY s.metricKey")
+    List<Object[]> countDeadKeysGrouped(@Param("keys") List<String> keys);
 }
