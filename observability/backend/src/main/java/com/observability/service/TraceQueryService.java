@@ -422,7 +422,7 @@ public class TraceQueryService {
      * "time to first token of the answer" far better than measuring to the first
      * routing LLM (L0), which would yield a near-zero, misleading value.
      */
-    private Long computeTTFT(List<SpanEntity> spans) {
+    public Long computeTTFT(List<SpanEntity> spans) {
         if (spans == null || spans.isEmpty()) return null;
 
         // Locate the HTTP root span (SERVER /api/bank/chat) as the time base.

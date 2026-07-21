@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,7 @@ public class MetricsQueryService {
     private final SpanRepository spanRepository;
     private final ObjectMapper objectMapper;
     private final AIInsightsService aiInsightsService;
+    private final TraceQueryService traceQueryService;
 
     /** H2 回退节流：距上次回退至少 60s 才再次执行 */
     private volatile long lastFallbackMs = 0L;
@@ -46,18 +48,31 @@ public class MetricsQueryService {
     private volatile long cachedL1 = 0L;
     private volatile long cachedL2 = 0L;
 
+    /** 基于 H2 spans 推导的 TTFT / E2E 时延百分位兜底缓存（60s 节流，避免无实时流量时反复全表扫描） */
+    private volatile long lastSpanLatencyMs = 0L;
+    private volatile long cachedTtftP50 = 0L;
+    private volatile long cachedTtftP95 = 0L;
+    private volatile long cachedTtftP99 = 0L;
+    private volatile boolean cachedTtftValid = false;
+    private volatile double cachedE2eAvg = 0.0;
+    private volatile double cachedE2eP50 = 0.0;
+    private volatile double cachedE2eP95 = 0.0;
+    private volatile boolean cachedE2eValid = false;
+
     public MetricsQueryService(RedisMetricsService redisMetrics,
                                MetricsAggRepository metricsAggRepository,
                                RedisMetricsSnapshotRepository snapshotRepository,
                                SpanRepository spanRepository,
                                ObjectMapper objectMapper,
-                               AIInsightsService aiInsightsService) {
+                               AIInsightsService aiInsightsService,
+                               TraceQueryService traceQueryService) {
         this.redisMetrics = redisMetrics;
         this.metricsAggRepository = metricsAggRepository;
         this.snapshotRepository = snapshotRepository;
         this.spanRepository = spanRepository;
         this.objectMapper = objectMapper;
         this.aiInsightsService = aiInsightsService;
+        this.traceQueryService = traceQueryService;
     }
 
     /**
@@ -123,9 +138,15 @@ public class MetricsQueryService {
         redisMetrics.setAgentCallCount("L1", countL1);
         redisMetrics.setAgentCallCount("L2", countL2);
 
+        // 基于 H2 spans 推导的 E2E/系统时延兜底（仅当 Redis/H2 快照均缺失时启用）。
+        SpanDerivedLatency spanDerived = getTtftAndLatencyFromSpans();
         Map<String, Double> redisLatency = redisMetrics.getLatencyStats("1m");
         Map<String, Double> latencyStats = getLatencyStatsWithFallback("1m", redisLatency);
-        if ((redisLatency == null || redisLatency.getOrDefault("avg", 0.0) == 0.0) && latencyStats.getOrDefault("avg", 0.0) > 0) fallbackMetrics.add("latency");
+        if ((redisLatency == null || redisLatency.getOrDefault("avg", 0.0) == 0.0)
+                && latencyStats.getOrDefault("avg", 0.0) == 0.0 && spanDerived.e2eValid) {
+            latencyStats = Map.of("avg", spanDerived.e2eAvg, "p50", spanDerived.e2eP50, "p95", spanDerived.e2eP95);
+            fallbackMetrics.add("latency");
+        }
         double avgLatency = latencyStats.getOrDefault("avg", 0.0);
         double p50Latency = latencyStats.getOrDefault("p50", 0.0);
         double p95Latency = latencyStats.getOrDefault("p95", 0.0);
@@ -153,7 +174,11 @@ public class MetricsQueryService {
         // ── Zone B: AI 性能 ──
         Map<String, Long> redisTTFT = redisMetrics.getTTFTStats("1m");
         Map<String, Long> ttftStats = getTTFTStatsWithFallback("1m", redisTTFT);
-        if ((redisTTFT == null || redisTTFT.getOrDefault("p50", 0L) == 0) && ttftStats.getOrDefault("p50", 0L) > 0) fallbackMetrics.add("ttft");
+        if ((redisTTFT == null || redisTTFT.getOrDefault("p50", 0L) == 0)
+                && ttftStats.getOrDefault("p50", 0L) == 0 && spanDerived.ttftValid) {
+            ttftStats = Map.of("p50", spanDerived.ttftP50, "p95", spanDerived.ttftP95, "p99", spanDerived.ttftP99);
+            fallbackMetrics.add("ttft");
+        }
         vo.setTtftP50Ms(ttftStats.getOrDefault("p50", 0L));
         vo.setTtftP95Ms(ttftStats.getOrDefault("p95", 0L));
         vo.setTtftP99Ms(ttftStats.getOrDefault("p99", 0L));
@@ -546,6 +571,138 @@ public class MetricsQueryService {
         } catch (Exception e) {
             log.debug("[MetricsQuery] span-based error rate failed: {}", e.getMessage());
             return cachedErrorRate;
+        }
+    }
+
+    // ==================== H2 spans 推导 TTFT / E2E 时延兜底 ====================
+    //
+    // 根因（Bug 2）：实时 P95 完全依赖 Core 上报的 OTel 直方图（OtlpParserService
+    //   setLatencyPercentiles / setTTFTPercentiles 写入 Redis latency:stats:* /
+    //   ttft:stats:*）。当 Core 未运行或无实时流量时，Redis 哈希缺失，H2 快照表也未
+    //   写入对应键，getTTFTStatsWithFallback / getLatencyStatsWithFallback 只能返 0，
+    //   导致总览大屏「首 Token 时延 P95」「P95 系统时延」恒为 0ms。
+    //
+    // 修复：此处基于 H2 spans 真实重算（复用 TraceQueryService.computeTTFT 成熟算法 +
+    //   SpanDurationNormalizer 校正畸大时长），作为缺数据时的兜底，使大屏显示真实历史值
+    //   而非 0。仍保留 Redis 实时值的优先级（实时流量下以 OTel 直方图为准）。
+    //   带 60s 节流，避免 3s 轮询频繁全表扫描。
+
+    /**
+     * 基于 H2 spans 真实推导 TTFT 与 E2E（系统时延）百分位。
+     * 取最近 2d 去重 trace，逐 trace 加载 span → 归一化畸大时长 →
+     * 用 computeTTFT 计算 TTFT、用根 span durationMs 计算 E2E，聚合 P50/P95/P99。
+     * 60s 节流缓存（无论是否有效均缓存，避免无数据时每 3s 全表扫描）。
+     */
+    private SpanDerivedLatency getTtftAndLatencyFromSpans() {
+        long now = System.currentTimeMillis();
+        if (now - lastSpanLatencyMs < 60_000) {
+            return new SpanDerivedLatency(cachedTtftP50, cachedTtftP95, cachedTtftP99, cachedTtftValid,
+                    cachedE2eAvg, cachedE2eP50, cachedE2eP95, cachedE2eValid);
+        }
+        lastSpanLatencyMs = now;
+        try {
+            Instant from = Instant.now().minusSeconds(2 * 86400L); // 最近 2d，与 H2 保留期一致
+            List<String> traceIds = spanRepository.findDistinctTraceIdsSince(from);
+            List<Long> ttftVals = new ArrayList<>();
+            List<Long> e2eVals = new ArrayList<>();
+            for (String traceId : traceIds) {
+                List<SpanEntity> spans = spanRepository.findByTraceIdOrderByStartTimeAsc(traceId);
+                if (spans.isEmpty()) continue;
+                // 校正偶发畸大 span 时长（Core OTel 曾上报 ~1000x 值），保证 E2E/TTFT 真实
+                SpanDurationNormalizer.normalize(spans);
+                Long ttft = traceQueryService.computeTTFT(spans);
+                if (ttft != null && ttft > 0) ttftVals.add(ttft);
+                Long e2e = computeE2eDurationMs(spans);
+                if (e2e != null && e2e > 0) e2eVals.add(e2e);
+            }
+            ttftVals.sort(Long::compareTo);
+            e2eVals.sort(Long::compareTo);
+
+            long t50 = percentileLong(ttftVals, 50);
+            long t95 = percentileLong(ttftVals, 95);
+            long t99 = percentileLong(ttftVals, 99);
+            boolean tv = !ttftVals.isEmpty() && (t50 > 0 || t95 > 0);
+
+            double eAvg = e2eVals.isEmpty() ? 0.0
+                    : e2eVals.stream().mapToLong(Long::longValue).average().orElse(0.0);
+            double e50 = percentileDouble(e2eVals, 50);
+            double e95 = percentileDouble(e2eVals, 95);
+            boolean ev = !e2eVals.isEmpty() && (eAvg > 0 || e95 > 0);
+
+            cachedTtftP50 = t50; cachedTtftP95 = t95; cachedTtftP99 = t99; cachedTtftValid = tv;
+            cachedE2eAvg = eAvg; cachedE2eP50 = e50; cachedE2eP95 = e95; cachedE2eValid = ev;
+            return new SpanDerivedLatency(t50, t95, t99, tv, eAvg, e50, e95, ev);
+        } catch (Exception e) {
+            log.debug("[MetricsQuery] span-based TTFT/latency fallback failed: {}", e.getMessage());
+            return new SpanDerivedLatency(cachedTtftP50, cachedTtftP95, cachedTtftP99, cachedTtftValid,
+                    cachedE2eAvg, cachedE2eP50, cachedE2eP95, cachedE2eValid);
+        }
+    }
+
+    /**
+     * E2E（系统时延）= 根 span（HTTP SERVER 入口 /api/bank/chat）归一化后的 durationMs；
+     * 无明确根时回退到整条 trace 的墙钟跨度（max(end) - min(start)）。
+     */
+    private Long computeE2eDurationMs(List<SpanEntity> spans) {
+        if (spans == null || spans.isEmpty()) return null;
+        SpanEntity root = null;
+        for (var s : spans) {
+            if (s.getParentSpanId() == null || s.getParentSpanId().isEmpty()) {
+                if ("SERVER".equals(s.getKind())
+                        || (s.getOperationName() != null && s.getOperationName().contains("/api/bank/chat"))) {
+                    root = s;
+                    break;
+                }
+            }
+        }
+        if (root == null) root = spans.get(0);
+        if (root.getDurationMs() != null && root.getDurationMs() > 0) return root.getDurationMs();
+        long minStart = Long.MAX_VALUE, maxEnd = Long.MIN_VALUE;
+        for (var s : spans) {
+            if (s.getStartTime() != null) minStart = Math.min(minStart, s.getStartTime().toEpochMilli());
+            if (s.getEndTime() != null) maxEnd = Math.max(maxEnd, s.getEndTime().toEpochMilli());
+        }
+        if (minStart != Long.MAX_VALUE && maxEnd != Long.MIN_VALUE && maxEnd >= minStart) return maxEnd - minStart;
+        return null;
+    }
+
+    /** 升序长整型列表的分位数（线性插值） */
+    private static long percentileLong(List<Long> sorted, double p) {
+        if (sorted == null || sorted.isEmpty()) return 0L;
+        if (sorted.size() == 1) return sorted.get(0);
+        double rank = (p / 100.0) * (sorted.size() - 1);
+        int lo = (int) Math.floor(rank);
+        int hi = (int) Math.ceil(rank);
+        if (lo == hi) return sorted.get(lo);
+        double frac = rank - lo;
+        long a = sorted.get(lo), b = sorted.get(hi);
+        return Math.round(a + (b - a) * frac);
+    }
+
+    /** 升序长整型列表的分位数（线性插值，返回 double 用于 E2E 时延） */
+    private static double percentileDouble(List<Long> sorted, double p) {
+        if (sorted == null || sorted.isEmpty()) return 0.0;
+        if (sorted.size() == 1) return sorted.get(0).doubleValue();
+        double rank = (p / 100.0) * (sorted.size() - 1);
+        int lo = (int) Math.floor(rank);
+        int hi = (int) Math.ceil(rank);
+        if (lo == hi) return sorted.get(lo).doubleValue();
+        double frac = rank - lo;
+        double a = sorted.get(lo).doubleValue(), b = sorted.get(hi).doubleValue();
+        return a + (b - a) * frac;
+    }
+
+    /** H2 spans 推导结果的不可变载体 */
+    private static final class SpanDerivedLatency {
+        final long ttftP50, ttftP95, ttftP99;
+        final boolean ttftValid;
+        final double e2eAvg, e2eP50, e2eP95;
+        final boolean e2eValid;
+
+        SpanDerivedLatency(long ttftP50, long ttftP95, long ttftP99, boolean ttftValid,
+                           double e2eAvg, double e2eP50, double e2eP95, boolean e2eValid) {
+            this.ttftP50 = ttftP50; this.ttftP95 = ttftP95; this.ttftP99 = ttftP99; this.ttftValid = ttftValid;
+            this.e2eAvg = e2eAvg; this.e2eP50 = e2eP50; this.e2eP95 = e2eP95; this.e2eValid = e2eValid;
         }
     }
 }

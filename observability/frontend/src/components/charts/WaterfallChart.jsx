@@ -35,7 +35,10 @@ function WaterfallChart({ spans = [], ttftMs, totalMs }) {
     'HTTP': '#8c8c8c',
   };
 
-  const ttftPct = ttftMs ? (ttftMs / maxMs) * 100 : null;
+  // TTFT 以「条形区」（flex:1，右移 180px 标签列 + 16px padding）为坐标基准，
+  // 与下方 span 条 left 算法一致；ttftFraction ∈ [0,1] 用于 calc 精确对齐。
+  const ttftFraction = ttftMs != null && maxMs > 0 ? ttftMs / maxMs : null;
+  const ttftPct = ttftFraction != null ? ttftFraction * 100 : null;
 
   return (
     <div
@@ -46,16 +49,22 @@ function WaterfallChart({ spans = [], ttftMs, totalMs }) {
         position: 'relative',
       }}
     >
-      {/* TTFT 虚线标记 */}
-      {ttftPct != null && (
+      {/* TTFT 虚线标记：竖直虚线定位到「首 Token」时间点在时间轴上的像素位置。
+          关键修复（Bug 1）：此前 left 用百分比相对「整个容器（含 180px 标签列）」，
+          而 span 条在 flex:1 区（右移约 196px），导致虚线整体偏左约 192px。
+          现改用 CSS calc 将虚线放入与 span 条相同的坐标系：
+          左边界 = padding(16px) + 标签列(180px) = 196px；
+          可用宽度 = 100% - 16px(right padding) - 196px = (100% - 212px)。 */}
+      {ttftPct != null && ttftFraction != null && (
         <div
           style={{
             position: 'absolute',
             top: 8,
             bottom: 8,
-            left: `${ttftPct}%`,
+            left: `calc(196px + (100% - 212px) * ${ttftFraction})`,
             borderLeft: '2px dashed #faad14',
             zIndex: 2,
+            pointerEvents: 'none',
           }}
         >
           <span
@@ -96,6 +105,7 @@ function WaterfallChart({ spans = [], ttftMs, totalMs }) {
             paddingRight: 12,
             textAlign: 'right',
             flexShrink: 0,
+            boxSizing: 'border-box',
           }}
         >
           E2E 总耗时
@@ -143,12 +153,13 @@ function WaterfallChart({ spans = [], ttftMs, totalMs }) {
                 width: 180,
                 fontSize: 12,
                 color: 'rgba(0,0,0,.65)',
-                paddingRight: 12,
-                textAlign: 'right',
-                flexShrink: 0,
-              }}
-            >
-              {span.label || span.operationName || '-'}
+            paddingRight: 12,
+            textAlign: 'right',
+            flexShrink: 0,
+            boxSizing: 'border-box',
+          }}
+        >
+          {span.label || span.operationName || '-'}
             </span>
 
             {/* 条形 */}
