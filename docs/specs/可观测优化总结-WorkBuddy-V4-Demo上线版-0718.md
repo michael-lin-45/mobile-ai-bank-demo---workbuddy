@@ -1276,6 +1276,27 @@ Langfuse 经 OTel OTLP 消费同一份遥测，**无需改业务代码**，业�
 | `51612d0` | build | start-all.ps1 强制 clean + 扫描 ECJ 残片 |
 | — | — | 时区统一北京 UTC+8（9 处，已实现**未提交**） |
 
+### 16.6 取消意图判定逻辑（L1 + L2 双层检测 → `_cancelSignal`，0721 去重优化）
+
+取消意图在 **L1（ContextRouter 路由分类）** 和 **L2（业务子图）** 两层分别判定，统一收敛到 L2 子图状态键 `_cancelSignal`，由 `cancelExecution` 节点干净结束。Trace 里看到的「L2 第一个 span 是 cancel 查询」属正常——它是 L2 自己的二次检测，layer 标 `L2`，并非 L1 的 `ContextRouter` 误挂。
+
+**L1 — ContextRouter 路由三分类（非单纯取消检测）**
+- `ContextRouter.route()`（`src/main/java/com/mobileagent/app/router/subgraph/ContextRouter.java:83-110`）：L85 标记 held span 为 `L1-LLM1`（故 Trace 里 L1 的取消相关 LLM 调用挂在 L1 组）；L88-92 一次 LLM 完成 **FOLLOW / SWITCH / CANCEL** 三分类；L109 回填 `intent`。
+- routeType == CANCEL 时意图进 `CANCELLED_L1_INTENTS` 状态键，供 L2 复用，避免二次 LLM 判断。
+
+**L1 → L2 信号传递（`cancelSignal` → `_cancelSignal`）**
+- `StepPreparator.processCancelledL1Intents()`（`src/main/java/com/mobileagent/app/orchestration/StepPreparator.java:444-511`）：对命中取消的 step 置 `cancelSignal=true`、写 `l2ThreadId`，保留 L2 checkpoint、仅释放 L1 `ActiveAgentInfo`。
+- `L2GraphTool.executeCancelStep()`（`src/main/java/com/mobileagent/app/orchestration/tool/L2GraphTool.java:577-604`）：`graphExecutionEngine.cancelGraph(...)` 向 L2 子图**注入 `_cancelSignal=true`** 并 resume → 子图 `cancelAware*` 检测后路由 `cancelExecution` → END，GES 完成后自动清理 checkpoint。
+
+**L2 — `cancelAware*` 系列 + `detectCancelFromInput`**（`src/main/java/com/mobileagent/app/workflow/AbstractGraphConfig.java`）
+- `isCancelled(state)`（L228）：读 `_cancelSignal == true` 即已取消。
+- `detectCancelFromInput()`（L247-318）分层：① 短路 `isCancelled`→true 直接返回（不调 LLM）；② 关键字匹配（L254-272，0ms）；③ LLM 兜底（L274-317，200-500ms），调用标为 `L2:<GraphName>-cancelCheck` span（L295）。前端 `SpanTree.jsx` 按 `L2:` 前缀将其正确归入 L2 组——**不是 L1 误挂**。
+- `cancelAwareExtractParams`（L368）/ `createCancelAwareRouter`（L488，纯读无 LLM）均经此链路。
+
+**0721 优化：去除 ask 节点的重复 LLM 判定**
+- `cancelAwareAsk`（L409）原本在 `isCancelled` 外再调一次 `detectCancelFromInput`（每反问轮一次 200-500ms LLM 往返）。因同轮输入在 `cancelAwareExtractParams` 已完整检测一次，属**重复判断**。
+- 已注释该调用（`AbstractGraphConfig.java:414-417`），`cancelAwareAsk` 现**仅保留 `isCancelled(state)` 短路**：L1 已判取消→立即结束；未被 L1 判出的模糊取消意图交由**下一轮 `cancelAwareExtractParams` 兜底**，取消语义完整，反问多轮响应更快。
+
 ---
 
 > 文档版本：0711 · WorkBuddy V4 · web文章合入 → **0718 刷新**（以 V4-web 原文为基底，仅刷新整改状态 + 追加 §14.6/§14.7/§15 + §16 补录）
