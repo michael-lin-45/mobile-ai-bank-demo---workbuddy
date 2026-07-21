@@ -1031,7 +1031,8 @@ Token TAB：trend(累计) + bar(按 intent)
 6. agent_performance / token_cost 表已弃用（全库无 INSERT）→ 不要读。
 7. Windows localhost → 127.0.0.1（IPv6 DNS 问题）。
 8. 二维管道独立：sessions 管道不依赖 spans 管道。
-9. 时区统一 `Asia/Shanghai`，避免会话/链路时间差 8h（0718 T34/T35）。
+9. 时区统一 `Asia/Shanghai`，避免会话/链路时间差 8h（0718 T34/T35 已闭环；07-20 收口剩余 9 处裸 `Instant.toString()`/UTC/前端裸渲染，详见 §16.1）。
+10. trace 耗时/TTFT 失真：根因是 **WebFlux 未启用 Reactor 自动上下文传播**导致手写 INTERNAL span 跨请求泄漏（非单位错、非 1000×）。后端 `SpanDurationNormalizer` 以 `CLIENT` span 墙钟包络兜底重算畸大 `duration_ms`；`TraceQueryService.computeTTFT` 对 >60s 污染值返回 `null`（前端显示「—」）而非假 `0L`；并在 Core 侧 `OtelContextConfig` 启用 `Hooks.enableAutomaticContextPropagation()` 治未病（详见 §16.2）。
 
 ### 14.2 组件速查 / 快速起步
 
@@ -1192,6 +1193,7 @@ Langfuse 经 OTel OTLP 消费同一份遥测，**无需改业务代码**，业�
 | **前端对齐** | 数据健康三态角标真实化 + 诊断驾驶舱真实数据 | DEMO | 前端 | 🟡 按排期 |
 | **RAG-start-all** | `start-all.ps1` 加 RAG 启用参数（`--spring.profiles.active=dev --observability.rag.reference.enabled=true`；⚠️ `-D` 须放 `-jar` 前或改用 `--`，否则静默忽略），使一键启动 demo 也能出 `deepflux.rag.*` 指标 | 0719 五问① | ~1 行 | 🟡 P2（待接真实 VectorStore 或 demo 需展示时） |
 | **RAG-hit阈值** | `RagConstants.RELEVANCE_HIT_THRESHOLD` 0.5→0.3（或调 `MinimalReferenceReRanker.PRIORITY_WEIGHT`），让诊断参考检索器 `hit_rate` 更有意义 | 0719 五问④ | ~1 行 | 🟡 P2（接真实检索器前低优先） |
+| **测试优化#3/#4** | 验收复盘遗留：#3（TC-E-002 H2 死 key 自动核查 + TC-J-002 `pending_approval` ±1 语义集成测试）已纳入交付排期 M3/W3 跟踪；#4（A 类可选字段）**已裁定不补**（PM建议，用户裁定），归 W3 考虑、不占构建工时 | 验收复盘 | 见《可观测V4-交付排期-0719.md》§3.2 W3（M3） | 🟡 遗留（M3：#3）/ 已裁定不补（#4） |
 
 ### 15.3 GAP分析-v2 关键结论（引用）
 
@@ -1239,7 +1241,44 @@ Langfuse 经 OTel OTLP 消费同一份遥测，**无需改业务代码**，业�
 
 ---
 
-> 文档版本：0711 · WorkBuddy V4 · web文章合入 → **0718 刷新**（以 V4-web 原文为基底，仅刷新整改状态 + 追加 §14.6/§14.7/§15）
+---
+
+## 16. V4 Demo 上线后可观测性修复补录（07-20 ~ 07-21）
+
+> 本节登记 Demo 上线（0718）后、收尾期补做的一批可观测性修复中，**功能实现与原设计预期存在差异**的项，作为主文档的设计澄清补录（对应《可观测V4-W3-交付报告-2026-07-20》附录 A、《可观测V4-详细设计-0719》§7）。分支均为 `feat/demo-v4`。
+
+### 16.1 时区统一北京 UTC+8 收口（落实 §14.1#9）
+
+- 原设计 §14.1#9 已要求 `Asia/Shanghai`，但 0719 核对仍有 9 处裸 UTC/前端裸渲染未收敛。07-20 收口：后端 `SessionService` 3 处 `Instant.toString()`→`BJ_FMT.format`（null 安全）、`SatisfactionService` `ZoneOffset.UTC`→`Asia/Shanghai`、`MetricsQueryService` `systemDefault`→`Asia/Shanghai`；前端 6 文件统一 `formatBeijingTime`（`utils/time.js`）。QA 运行时验证会话列表 `time="2026-07-20 19:08:34"`（+8 正确）、智能路由 NoOne。
+- **提交状态**：⚠️ 工作树已实现、**未提交**（属用户 W3 改动）。
+
+### 16.2 trace 耗时/TTFT 失真根因与双保险（设计新增组件）
+
+- **根因纠正**：原 §4.2/§4.3 假设 OTLP `duration_ms` 正确。实测 2373098ms 畸大 + TTFT=0：根因是 **WebFlux 未启用 Reactor 自动上下文传播** → 手写 INTERNAL span（`DomainRouter`/`ObsDocumentRetriever`/`ObsReRanker`）`Context.current()` 取到上一请求残留 → 跨请求泄漏、时长虚高、`intent` 串标。HTTP `SERVER` span 已是 javaagent 自动埋点（无需改）；L0/L1/L2 业务 span 必须手写，不能改自动埋点。
+- **治未病（Core）**：新增 `OtelContextConfig`（`src/main/java/com/mobileagent/app/observability/OtelContextConfig.java:26`，`@Configuration` + 静态块 `Hooks.enableAutomaticContextPropagation()` `:29`，幂等），激活 Reactor↔OTel 桥接（javaagent 运行期提供）。commit `130a62c`。
+- **治已病（Backend 存量兜底）**：新增 `SpanDurationNormalizer.normalize(List)`（在 `OtlpParserService.parseTraces` 写库前 `:232` 调用），以同 trace 真实 `CLIENT` span 墙钟包络（`min(start)/max(end)`）重算畸大 `duration_ms`/`end_time`。`TraceQueryService.computeTTFT`（`:425`）对 `>60000` 污染值改 `return null`（`:467`，前端显示「—」）。commit `cac889b`。
+
+### 16.3 主程序 LLM completionsPath 去写死（Core，原设计未规定）
+
+- 原默认依赖 Spring AI 字面值 `/v1/chat/completions`，对以 `/v1` 结尾或 `/v2`/`/v3` 的 base_url 不适配。现 `ModelConfig.deriveCompletionsPath(baseUrl)`（`:197`，正则 `/v\d+$`）按 base-url 版本段推导（以 `/vN` 结尾 → `/chat/completions`，否则兜底 `/v1/chat/completions`），两处 `.completionsPath(...)`（`:218`/`:239`）。`ModelConfigPathTest` 7/7。commit `fe55228`。
+
+### 16.4 start-all.ps1 ECJ 残片规避（构建硬化，运维约束）
+
+- `ObsChatModel` 在 IDE(ECJ) classpath 缺包时会生成「带错误的 class」残留进 `target/classes`，`mvnw package`（无 `clean`）增量编译跳过重编打进 jar，运行时才崩。构建硬化：两处 `mvnw.cmd package` → `mvnw.cmd clean package`；新增 `Assert-NoEcjErrorClasses` 扫描 `target/classes` 含 `Unresolved compilation` 即中止。commit `51612d0`。
+
+### 16.5 提交清单（分支 `feat/demo-v4`）
+
+| Commit | 类型 | 内容 |
+|:------:|:----:|------|
+| `fe55228` | fix | LLM completionsPath 去写死 /v1（`ModelConfig` + `ModelConfigPathTest`） |
+| `130a62c` | fix | WebFlux OTel 自动上下文传播（`OtelContextConfig` + 测试 + 根 pom 对齐 1.49.0） |
+| `cac889b` | fix | 后端归一化畸大 span 时长 + TTFT 返回 null |
+| `51612d0` | build | start-all.ps1 强制 clean + 扫描 ECJ 残片 |
+| — | — | 时区统一北京 UTC+8（9 处，已实现**未提交**） |
+
+---
+
+> 文档版本：0711 · WorkBuddy V4 · web文章合入 → **0718 刷新**（以 V4-web 原文为基底，仅刷新整改状态 + 追加 §14.6/§14.7/§15 + §16 补录）
 > 融合路径：WorkBuddy V2 + Codex V2 → WorkBuddy V3 + Codex V3 → V4 → web文章合入 → **0718 刷新**
 > 差异分析：`docs/可观测设计方案差异分析-WorkBuddy-V3版本比较.md`
 > 外部文章：`docs/外部参考文章与自有方案对比分析.md`（15 篇，§1–§8）
