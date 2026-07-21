@@ -205,29 +205,14 @@ function DashboardPage() {
             sparkColor="#722ed1"
           />
           <MetricCard
-            label="P95 系统时延 / 错误率"
+            label="系统时延 P95"
             icon="⚡"
             value={metrics.p95Latency != null ? Math.round(metrics.p95Latency) : '-'}
             unit="ms"
             delta={metrics.latencyDelta || null}
             deltaUp={metrics.latencyDeltaUp}
             deltaNote="P95较昨日"
-            sub={metrics.errorRate != null ? (
-              <span style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                padding: '2px 8px',
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 500,
-                background: '#f6ffed',
-                color: '#52c41a',
-                border: '1px solid #b7eb8f',
-              }}>
-                错误率 {(metrics.errorRate * 100).toFixed(2)}%
-              </span>
-            ) : '-'}
+            sub={`P50: ${metrics.p50Latency != null ? Math.round(metrics.p50Latency) : '-'}ms · P99: ${metrics.p99Latency != null ? Math.round(metrics.p99Latency) : '-'}ms`}
             sparkColor="#722ed1"
           />
         </div>
@@ -280,13 +265,31 @@ function DashboardPage() {
             sparkColor="#52c41a"
           />
           <MetricCard
-            label="业务完成率"
+            label="业务完成率 / 错误率"
             icon="✅"
             value={metrics.completionRate != null ? metrics.completionRate : '-'}
             unit="%"
             delta={metrics.completionRateDelta || null}
             deltaUp={metrics.completionRateDeltaUp}
-            sub={metrics.completionDetail || '-'}
+            sub={
+              <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  fontSize: 11,
+                  fontWeight: 500,
+                  background: (metrics.errorRate == null || metrics.errorRate < 0.01) ? '#f6ffed' : '#fff2f0',
+                  color: (metrics.errorRate == null || metrics.errorRate < 0.01) ? '#52c41a' : '#ff4d4f',
+                  border: '1px solid ' + ((metrics.errorRate == null || metrics.errorRate < 0.01) ? '#b7eb8f' : '#ffccc7'),
+                }}>
+                  错误率 {(metrics.errorRate != null ? (metrics.errorRate * 100).toFixed(2) : '0.00')}%
+                </span>
+                {metrics.completionDetail || '-'}
+              </span>
+            }
             sparkColor="#52c41a"
           />
         </div>

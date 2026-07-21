@@ -23,6 +23,7 @@ public class RealtimeMetricsVO {
     private long activeSessions;
     private double p50Latency;
     private double p95Latency;
+    private double p99Latency;
 
     // ── Zone A 系统健康（新增6个）──
     /** 日活跃用户数 */
@@ -101,7 +102,7 @@ public class RealtimeMetricsVO {
     public RealtimeMetricsVO(long requestCount, long errorCount, double avgLatency,
                              long tokenInput, long tokenOutput,
                              Map<String, Long> intentDistribution,
-                             long activeSessions, double p50Latency, double p95Latency) {
+                             long activeSessions, double p50Latency, double p95Latency, double p99Latency) {
         this.requestCount = requestCount;
         this.errorCount = errorCount;
         this.avgLatency = avgLatency;
@@ -111,6 +112,7 @@ public class RealtimeMetricsVO {
         this.activeSessions = activeSessions;
         this.p50Latency = p50Latency;
         this.p95Latency = p95Latency;
+        this.p99Latency = p99Latency;
     }
 
     // ── 保留字段 Getters/Setters ──
@@ -133,6 +135,8 @@ public class RealtimeMetricsVO {
     public void setP50Latency(double p50Latency) { this.p50Latency = p50Latency; }
     public double getP95Latency() { return p95Latency; }
     public void setP95Latency(double p95Latency) { this.p95Latency = p95Latency; }
+    public double getP99Latency() { return p99Latency; }
+    public void setP99Latency(double p99Latency) { this.p99Latency = p99Latency; }
 
     // ── Zone A Getters/Setters ──
 

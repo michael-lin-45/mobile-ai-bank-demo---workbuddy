@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ChatBubble from './ChatBubble';
 import { submitSatisfaction } from '../api/client';
 
@@ -29,6 +29,14 @@ function SessionDetailModal({
 }) {
   const [submittingRating, setSubmittingRating] = useState(false);
   const [submittedRating, setSubmittedRating] = useState(null);
+
+  // ESC 关闭弹窗（兼容遮罩/✕ 之外的键盘关闭）
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [visible, onClose]);
 
   if (!visible || !session) return null;
 

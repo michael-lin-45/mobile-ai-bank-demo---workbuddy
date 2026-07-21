@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import IOCards from './IOCards';
 import SpanTree from './SpanTree';
 import WaterfallChart from './charts/WaterfallChart';
@@ -17,6 +17,14 @@ import WaterfallChart from './charts/WaterfallChart';
  * - onClose: () => void
  */
 function TraceDetailModal({ trace, visible, onClose }) {
+  // ESC 关闭弹窗（兼容遮罩/✕ 之外的键盘关闭）
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [visible, onClose]);
+
   if (!visible || !trace) return null;
 
   // IOCards: try multiple field name conventions from backend
@@ -86,8 +94,8 @@ function TraceDetailModal({ trace, visible, onClose }) {
                 background: '#e6f4ff',
                 padding: '2px 8px',
                 borderRadius: 4,
-              }}>
-                {trace.traceId.length > 16 ? trace.traceId.substring(0, 16) + '…' : trace.traceId}
+              }} title={trace.traceId}>
+                {trace.traceId}
               </span>
             )}
             {trace.status && (

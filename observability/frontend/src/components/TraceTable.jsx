@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef } from 'react';
 import { formatBeijingTime } from '../utils/time';
 
 /**
@@ -49,7 +49,58 @@ const MONO_STYLE = {
   fontSize: 12,
 };
 
+// 列宽拖拽手柄样式（绝对定位于 th 右边缘）
+const RESIZE_HANDLE_STYLE = {
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  width: 5,
+  height: '100%',
+  cursor: 'col-resize',
+  userSelect: 'none',
+  zIndex: 1,
+};
+
 function TraceTable({ traces = [], onViewDetail, loading }) {
+  // ── 列宽可拖拽调整（宽度本地持久化）──
+  const DEFAULT_WIDTHS = { 0: 180, 1: 170, 2: 110, 3: 110, 4: 90, 5: 160, 6: 90, 7: 90, 8: 90, 9: 90, 10: 90 };
+  const [widths, setWidths] = useState(() => {
+    const merged = { ...DEFAULT_WIDTHS };
+    try {
+      const saved = localStorage.getItem('colWidths:traceTable');
+      if (saved) Object.assign(merged, JSON.parse(saved));
+    } catch (e) { /* ignore malformed storage */ }
+    return merged;
+  });
+  const widthsRef = useRef(widths);
+  widthsRef.current = widths;
+
+  const startResize = (e, colIndex) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = widthsRef.current[colIndex] || 120;
+    const onMove = (ev) => {
+      const newW = Math.max(60, startW + (ev.clientX - startX));
+      setWidths((prev) => {
+        const next = { ...prev, [colIndex]: newW };
+        widthsRef.current = next;
+        return next;
+      });
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      try {
+        localStorage.setItem('colWidths:traceTable', JSON.stringify(widthsRef.current));
+      } catch (e) { /* ignore quota errors */ }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
+  const totalWidth = Object.keys(widths).reduce((sum, k) => sum + (widths[k] || 0), 0);
+
   if (loading) {
     return (
       <div style={{ padding: 24, textAlign: 'center', color: 'rgba(0,0,0,.45)' }}>
@@ -68,20 +119,20 @@ function TraceTable({ traces = [], onViewDetail, loading }) {
 
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+      <table style={{ width: '100%', tableLayout: 'fixed', minWidth: `${totalWidth}px`, borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr>
-            <th style={TH_STYLE}>Trace</th>
-            <th style={TH_STYLE}>时间</th>
-            <th style={TH_STYLE}>Session</th>
-            <th style={TH_STYLE}>User</th>
-            <th style={TH_STYLE}>意图</th>
-            <th style={TH_STYLE}>Agents</th>
-            <th style={TH_STYLE}>耗时</th>
-            <th style={TH_STYLE}>TTFT</th>
-            <th style={TH_STYLE}>Token</th>
-            <th style={TH_STYLE}>状态</th>
-            <th style={TH_STYLE}></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[0] }}>TraceID<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 0)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[1] }}>时间<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 1)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[2] }}>Session<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 2)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[3] }}>User<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 3)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[4] }}>意图<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 4)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[5] }}>Agents<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 5)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[6] }}>耗时<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 6)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[7] }}>TTFT<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 7)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[8] }}>Token<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 8)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[9] }}>状态<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 9)} /></th>
+            <th style={{ ...TH_STYLE, position: 'relative', width: widths[10] }}><span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 10)} /></th>
           </tr>
         </thead>
         <tbody>
@@ -94,7 +145,7 @@ function TraceTable({ traces = [], onViewDetail, loading }) {
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
             >
               <td style={TD_STYLE}>
-                <span style={{ ...MONO_STYLE, color: '#1677ff', fontSize: 11 }}>
+                <span style={{ ...MONO_STYLE, color: '#1677ff', fontSize: 11 }} title={t.traceId}>
                   {shortId(t.traceId)}
                 </span>
               </td>

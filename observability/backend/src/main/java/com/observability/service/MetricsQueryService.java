@@ -57,6 +57,7 @@ public class MetricsQueryService {
     private volatile double cachedE2eAvg = 0.0;
     private volatile double cachedE2eP50 = 0.0;
     private volatile double cachedE2eP95 = 0.0;
+    private volatile double cachedE2eP99 = 0.0;
     private volatile boolean cachedE2eValid = false;
 
     public MetricsQueryService(RedisMetricsService redisMetrics,
@@ -144,17 +145,18 @@ public class MetricsQueryService {
         Map<String, Double> latencyStats = getLatencyStatsWithFallback("1m", redisLatency);
         if ((redisLatency == null || redisLatency.getOrDefault("avg", 0.0) == 0.0)
                 && latencyStats.getOrDefault("avg", 0.0) == 0.0 && spanDerived.e2eValid) {
-            latencyStats = Map.of("avg", spanDerived.e2eAvg, "p50", spanDerived.e2eP50, "p95", spanDerived.e2eP95);
+            latencyStats = Map.of("avg", spanDerived.e2eAvg, "p50", spanDerived.e2eP50, "p95", spanDerived.e2eP95, "p99", spanDerived.e2eP99);
             fallbackMetrics.add("latency");
         }
         double avgLatency = latencyStats.getOrDefault("avg", 0.0);
         double p50Latency = latencyStats.getOrDefault("p50", 0.0);
         double p95Latency = latencyStats.getOrDefault("p95", 0.0);
+        double p99Latency = latencyStats.getOrDefault("p99", 0.0);
 
         RealtimeMetricsVO vo = new RealtimeMetricsVO(
                 requestCount, errorCount, avgLatency,
                 tokenInput, tokenOutput,
-                intentDistribution, activeSessions, p50Latency, p95Latency
+                intentDistribution, activeSessions, p50Latency, p95Latency, p99Latency
         );
 
         // ── Zone A: 系统健康 ──
@@ -517,18 +519,19 @@ public class MetricsQueryService {
             double avg = snapshotRepository.findLatestValueByKey("latency_avg:" + window).orElse(0.0);
             double p50 = snapshotRepository.findLatestValueByKey("latency_p50:" + window).orElse(0.0);
             double p95 = snapshotRepository.findLatestValueByKey("latency_p95:" + window).orElse(0.0);
-            // 护栏：H2 快照中的 avg/p50/p95 任一超过 SANE_SPAN_CEILING_MS，视为陈旧垃圾值
+            double p99 = snapshotRepository.findLatestValueByKey("latency_p99:" + window).orElse(0.0);
+            // 护栏：H2 快照中的 avg/p50/p95/p99 任一超过 SANE_SPAN_CEILING_MS，视为陈旧垃圾值
             // （如某次泄漏 span 主导了历史聚合），按 0 处理，使调用方回退到已加护栏的 spanDerived 路径。
             long ceiling = SpanDurationNormalizer.SANE_SPAN_CEILING_MS;
-            if (avg > ceiling || p50 > ceiling || p95 > ceiling) {
+            if (avg > ceiling || p50 > ceiling || p95 > ceiling || p99 > ceiling) {
                 log.debug("[MetricsQuery] H2 latency snapshot for window={} exceeds sane ceiling ({}ms); "
                         + "treating as stale garbage and falling back to span-derived stats", window, ceiling);
-                return Map.of("avg", 0.0, "p50", 0.0, "p95", 0.0);
+                return Map.of("avg", 0.0, "p50", 0.0, "p95", 0.0, "p99", 0.0);
             }
-            return Map.of("avg", avg, "p50", p50, "p95", p95);
+            return Map.of("avg", avg, "p50", p50, "p95", p95, "p99", p99);
         } catch (Exception e) {
             log.debug("[MetricsQuery] H2 latency fallback failed: {}", e.getMessage());
-            return Map.of("avg", 0.0, "p50", 0.0, "p95", 0.0);
+            return Map.of("avg", 0.0, "p50", 0.0, "p95", 0.0, "p99", 0.0);
         }
     }
 
@@ -605,7 +608,7 @@ public class MetricsQueryService {
         long now = System.currentTimeMillis();
         if (now - lastSpanLatencyMs < 60_000) {
             return new SpanDerivedLatency(cachedTtftP50, cachedTtftP95, cachedTtftP99, cachedTtftValid,
-                    cachedE2eAvg, cachedE2eP50, cachedE2eP95, cachedE2eValid);
+                    cachedE2eAvg, cachedE2eP50, cachedE2eP95, cachedE2eP99, cachedE2eValid);
         }
         lastSpanLatencyMs = now;
         try {
@@ -641,15 +644,16 @@ public class MetricsQueryService {
                     : e2eVals.stream().mapToLong(Long::longValue).average().orElse(0.0);
             double e50 = percentileDouble(e2eVals, 50);
             double e95 = percentileDouble(e2eVals, 95);
+            double e99 = percentileDouble(e2eVals, 99);
             boolean ev = !e2eVals.isEmpty() && (eAvg > 0 || e95 > 0);
 
             cachedTtftP50 = t50; cachedTtftP95 = t95; cachedTtftP99 = t99; cachedTtftValid = tv;
-            cachedE2eAvg = eAvg; cachedE2eP50 = e50; cachedE2eP95 = e95; cachedE2eValid = ev;
-            return new SpanDerivedLatency(t50, t95, t99, tv, eAvg, e50, e95, ev);
+            cachedE2eAvg = eAvg; cachedE2eP50 = e50; cachedE2eP95 = e95; cachedE2eP99 = e99; cachedE2eValid = ev;
+            return new SpanDerivedLatency(t50, t95, t99, tv, eAvg, e50, e95, e99, ev);
         } catch (Exception e) {
             log.debug("[MetricsQuery] span-based TTFT/latency fallback failed: {}", e.getMessage());
             return new SpanDerivedLatency(cachedTtftP50, cachedTtftP95, cachedTtftP99, cachedTtftValid,
-                    cachedE2eAvg, cachedE2eP50, cachedE2eP95, cachedE2eValid);
+                    cachedE2eAvg, cachedE2eP50, cachedE2eP95, cachedE2eP99, cachedE2eValid);
         }
     }
 
@@ -718,13 +722,15 @@ public class MetricsQueryService {
     private static final class SpanDerivedLatency {
         final long ttftP50, ttftP95, ttftP99;
         final boolean ttftValid;
-        final double e2eAvg, e2eP50, e2eP95;
+        final double e2eAvg, e2eP50, e2eP95, e2eP99;
         final boolean e2eValid;
 
         SpanDerivedLatency(long ttftP50, long ttftP95, long ttftP99, boolean ttftValid,
-                           double e2eAvg, double e2eP50, double e2eP95, boolean e2eValid) {
+                           double e2eAvg, double e2eP50, double e2eP95, double e2eP99, boolean e2eValid) {
             this.ttftP50 = ttftP50; this.ttftP95 = ttftP95; this.ttftP99 = ttftP99; this.ttftValid = ttftValid;
-            this.e2eAvg = e2eAvg; this.e2eP50 = e2eP50; this.e2eP95 = e2eP95; this.e2eValid = e2eValid;
+            this.e2eAvg = e2eAvg; this.e2eP50 = e2eP50; this.e2eP95 = e2eP95; this.e2eP99 = e2eP99; this.e2eValid = e2eValid;
         }
+
+        public double getE2eP99() { return e2eP99; }
     }
 }
