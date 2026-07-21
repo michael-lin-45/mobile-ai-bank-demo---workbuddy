@@ -150,6 +150,23 @@ function Stop-AllAndExit {
   exit 1
 }
 
+# ECJ 残片检测：IDE(ECJ) 在 classpath 缺包时仍会生成"带错误的 class"，
+# 该 class 含 "Unresolved compilation" 字符串常量，会被 maven 增量编译当成
+# "已编译"而跳过，最终打进 jar，运行时才报 cannot be resolved。
+# 此函数扫描 target/classes 下的 .class 是否含该标记，发现即中止启动。
+function global:Assert-NoEcjErrorClasses {
+  param([string]$ProjectPath, [string]$Label)
+  $classesDir = Join-Path $ProjectPath "target\classes"
+  if (-not (Test-Path $classesDir)) { return }   # 尚未编译则跳过
+  $hit = Get-ChildItem -Recurse -Path $classesDir -Filter *.class | Where-Object {
+    try { Select-String -Path $_.FullName -Pattern "Unresolved compilation" -Quiet -ErrorAction SilentlyContinue } catch { $false }
+  } | Select-Object -First 1
+  if ($hit) {
+    Write-Error "[$Label] 检测到 ECJ 错误 class 残片: $($hit.FullName)`n  请清理 IDE 编译产物后重跑: 删除 target/ 或执行 'mvnw.cmd clean'。"
+    Stop-AllAndExit
+  }
+}
+
 # ======================================
 # Ctrl+C 安全清理：中断时杀掉所有已启动的进程/服务
 # ======================================
@@ -297,7 +314,7 @@ Set-Location $OBS_BACKEND_PATH
 
 # 编译后端 (确保最新代码生效)
 Write-Host "  编译可观测后端..." -ForegroundColor DarkGray
-$compileCmd = "cd '$OBS_BACKEND_PATH'; .\mvnw.cmd package -DskipTests -q"
+$compileCmd = "cd '$OBS_BACKEND_PATH'; .\mvnw.cmd clean package -DskipTests -q"
 $compileBytes = [System.Text.Encoding]::Unicode.GetBytes($compileCmd)
 $compileB64 = [Convert]::ToBase64String($compileBytes)
 $compileProc = Start-Process powershell -ArgumentList "-NoProfile", "-EncodedCommand", $compileB64 -WindowStyle Hidden -Wait -PassThru
@@ -314,6 +331,7 @@ if (-not (Test-Path $obsJarPath)) {
   Stop-AllAndExit
 }
 Write-Host "  JAR ready: $OBS_JAR" -ForegroundColor DarkGray
+Assert-NoEcjErrorClasses -ProjectPath $OBS_BACKEND_PATH -Label "Backend"
 
 $obsCmd = "cd '$OBS_BACKEND_PATH'; java $OBS_JVM_MEM -jar target/$OBS_JAR --server.port=$OBS_PORT > '$OBS_BACKEND_PATH\backend.log' 2>&1"
 $obsBytes = [System.Text.Encoding]::Unicode.GetBytes($obsCmd)
@@ -355,7 +373,7 @@ $dnsJvmArgs = if ($DNS_SERVER) { "-Dreactor.netty.dns.nameservers=$DNS_SERVER -D
 
 # 编译核心系统 (确保最新代码生效)
 Write-Host "  编译核心系统..." -ForegroundColor DarkGray
-$coreCompileCmd = "cd '$CORE_PROJECT_PATH'; .\mvnw.cmd package -DskipTests -q"
+$coreCompileCmd = "cd '$CORE_PROJECT_PATH'; .\mvnw.cmd clean package -DskipTests -q"
 $coreCompileBytes = [System.Text.Encoding]::Unicode.GetBytes($coreCompileCmd)
 $coreCompileB64 = [Convert]::ToBase64String($coreCompileBytes)
 $coreCompileProc = Start-Process powershell -ArgumentList "-NoProfile", "-EncodedCommand", $coreCompileB64 -WindowStyle Hidden -Wait -PassThru
@@ -372,6 +390,7 @@ if (-not (Test-Path $coreJarPath)) {
   Stop-AllAndExit
 }
 Write-Host "  JAR ready: $CORE_JAR" -ForegroundColor DarkGray
+Assert-NoEcjErrorClasses -ProjectPath $CORE_PROJECT_PATH -Label "Core"
 
 # 写临时 .cmd 批处理文件（避免 & / set 在 PowerShell Base64 中语法错误）
 $coreBat = "$env:TEMP\start-bank-core.cmd"
