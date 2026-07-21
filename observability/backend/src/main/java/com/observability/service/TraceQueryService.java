@@ -104,6 +104,10 @@ public class TraceQueryService {
             return new TraceDetailVO(traceId, List.of(), 0L, "unknown");
         }
 
+        // 归一化「畸大」span 时长（上游 Core OTel 偶发上报 ~1000x 畸大值），
+        // 用子树正常 CLIENT span 的墙钟包络兜底重算，确保 E2E / 业务层 / TTFT 展示正确。
+        SpanDurationNormalizer.normalize(spans);
+
         // Filter to last L0->L1->L2 agent chain (handles reRoute scenarios)
         List<SpanEntity> chainSpans = extractLastAgentChain(spans);
         // Build span tree from filtered chain
@@ -456,8 +460,11 @@ public class TraceQueryService {
 
         long ttft = bestExec.getStartTime().toEpochMilli() - rootStart;
         // If TTFT is unreasonably large (> 60s), the root span startTime is stale
-        // (instrumentation reused traceId across multiple HTTP requests).
-        if (ttft > 60000) return 0L;
+        // (instrumentation reused traceId across multiple HTTP requests). Returning a
+        // fake 0ms would mislead the UI; return null so the frontend shows "-".
+        // (With SpanDurationNormalizer correcting stale root/exec starts, a real TTFT is
+        //  typically recovered and returned above instead of hitting this guard.)
+        if (ttft > 60000) return null;
         return ttft > 0 ? ttft : null;
     }
 
@@ -1041,6 +1048,8 @@ public class TraceQueryService {
      */
     private TraceListVO buildTraceListVOFromSpans(List<SpanEntity> spans) {
         if (spans == null || spans.isEmpty()) return null;
+        // 归一化「畸大」span 时长（见 SpanDurationNormalizer），使列表「耗时」展示真实量级。
+        SpanDurationNormalizer.normalize(spans);
         String traceId = spans.get(0).getTraceId();
 
         // 必须有业务 span，否则是 OTLP 导出自 trace / 无埋点请求 → 跳过

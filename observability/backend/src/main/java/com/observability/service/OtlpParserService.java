@@ -16,6 +16,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -195,53 +197,85 @@ public class OtlpParserService {
         }
 
         int parsed = 0;
-        String serviceName = payload.extractServiceName();
-
+        // 1) collect all spans in this OTLP export (one export usually carries a whole trace)
+        List<SpanEntity> all = new ArrayList<>();
+        Map<SpanEntity, String> svcOf = new IdentityHashMap<>();
         for (var resourceSpan : payload.getResourceSpans()) {
             if (resourceSpan.getScopeSpans() == null) continue;
-
+            String serviceName = resourceSpan.getServiceName();
             for (var scopeSpan : resourceSpan.getScopeSpans()) {
                 if (scopeSpan.getSpans() == null) continue;
-
                 for (var span : scopeSpan.getSpans()) {
                     try {
-                        SpanEntity entity = new SpanEntity();
-                        entity.setTraceId(span.getTraceId());
-                        entity.setSpanId(span.getSpanId());
-                        entity.setParentSpanId(span.getParentSpanId());
-                        entity.setServiceName(resourceSpan.getServiceName());
-                        entity.setOperationName(span.getName());
-                        entity.setKind(OtlpTracePayload.Span.kindName(span.getKind()));
-
-                        long startMs = OtlpTracePayload.Span.nanoToMillis(span.getStartTimeUnixNano());
-                        long endMs = OtlpTracePayload.Span.nanoToMillis(span.getEndTimeUnixNano());
-                        entity.setStartTime(Instant.ofEpochMilli(startMs));
-                        entity.setEndTime(Instant.ofEpochMilli(endMs));
-                        entity.setDurationMs(endMs - startMs);
-
-                        if (span.getStatus() != null) {
-                            entity.setStatusCode(span.getStatus().codeName());
-                        } else {
-                            entity.setStatusCode("UNSET");
-                        }
-
-                        entity.setAttributes(buildAttributesJson(span.getAttributes()));
-                        spanRepository.save(entity);
-                        parsed++;
-
-                        // �?trace 推一�?recent list (去重�?Redis 层面处理)
-                        pushRecentTrace(span.getTraceId(), serviceName, span.getName());
-
+                        SpanEntity entity = buildSpanEntity(span, serviceName);
+                        all.add(entity);
+                        svcOf.put(entity, serviceName);
                     } catch (Exception e) {
-                        log.warn("[OtlpParser] Failed to process span traceId={}, spanId={}: {}",
+                        log.warn("[OtlpParser] Failed to build span traceId={}, spanId={}: {}",
                                 span.getTraceId(), span.getSpanId(), e.getMessage());
                     }
                 }
             }
         }
 
+        // 2) group by traceId; normalize degenerate durations BEFORE persisting.
+        //    Upstream Core's OTel instrumentation occasionally reports ~1000x inflated
+        //    durations (root=2373098ms / L0=1185064ms) while CLIENT spans (real HTTP
+        //    calls) are correct. SpanDurationNormalizer recomputes inflated spans from
+        //    their subtree's trustworthy CLIENT-span wall-clock envelope.
+        Map<String, List<SpanEntity>> byTrace = new LinkedHashMap<>();
+        for (SpanEntity e : all) {
+            byTrace.computeIfAbsent(e.getTraceId(), k -> new ArrayList<>()).add(e);
+        }
+        for (var entry : byTrace.entrySet()) {
+            List<SpanEntity> group = entry.getValue();
+            SpanDurationNormalizer.normalize(group);
+            for (SpanEntity e : group) {
+                try {
+                    spanRepository.save(e);
+                    parsed++;
+
+                    // push this trace into the recent list (Redis dedups)
+                    pushRecentTrace(e.getTraceId(), svcOf.get(e), e.getOperationName());
+                } catch (Exception ex) {
+                    log.warn("[OtlpParser] Failed to save span traceId={}, spanId={}: {}",
+                            e.getTraceId(), e.getSpanId(), ex.getMessage());
+                }
+            }
+        }
+
         log.info("[OtlpParser] Parsed {} spans", parsed);
         return parsed;
+    }
+
+    /**
+     * Build a SpanEntity from an OTLP span (without persisting).
+     * Parsing and unit conversion strictly follow the OTLP spec:
+     * nanoToMillis = ns/1e6, durationMs = endMs - startMs.
+     */
+    private SpanEntity buildSpanEntity(OtlpTracePayload.Span span, String serviceName) {
+        SpanEntity entity = new SpanEntity();
+        entity.setTraceId(span.getTraceId());
+        entity.setSpanId(span.getSpanId());
+        entity.setParentSpanId(span.getParentSpanId());
+        entity.setServiceName(serviceName);
+        entity.setOperationName(span.getName());
+        entity.setKind(OtlpTracePayload.Span.kindName(span.getKind()));
+
+        long startMs = OtlpTracePayload.Span.nanoToMillis(span.getStartTimeUnixNano());
+        long endMs = OtlpTracePayload.Span.nanoToMillis(span.getEndTimeUnixNano());
+        entity.setStartTime(Instant.ofEpochMilli(startMs));
+        entity.setEndTime(Instant.ofEpochMilli(endMs));
+        entity.setDurationMs(endMs - startMs);
+
+        if (span.getStatus() != null) {
+            entity.setStatusCode(span.getStatus().codeName());
+        } else {
+            entity.setStatusCode("UNSET");
+        }
+
+        entity.setAttributes(buildAttributesJson(span.getAttributes()));
+        return entity;
     }
 
     // ==================== Logs 解析 ====================
