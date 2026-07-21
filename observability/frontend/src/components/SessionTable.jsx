@@ -117,7 +117,7 @@ function SessionTable({ sessions = [], onViewSession, loading }) {
 
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', tableLayout: 'fixed', minWidth: `${totalWidth}px`, borderCollapse: 'collapse', fontSize: 13 }}>
+      <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr>
             <th style={{ ...TH_STYLE, position: 'relative', width: widths[0] }}>Session ID<span style={RESIZE_HANDLE_STYLE} onMouseDown={(e) => startResize(e, 0)} /></th>

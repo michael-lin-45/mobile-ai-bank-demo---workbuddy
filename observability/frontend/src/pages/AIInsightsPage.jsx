@@ -1,6 +1,7 @@
 import React, { useState, Suspense, lazy } from 'react';
 import { Card, Tabs, Spin } from 'antd';
 import {
+  ApartmentOutlined,
   CheckCircleOutlined,
   ThunderboltOutlined,
   DollarOutlined,
@@ -26,6 +27,13 @@ const FunnelTab = lazy(() => import('./FunnelTab'));
 const SatisfactionTab = lazy(() => import('./SatisfactionTab'));
 
 const TAB_ITEMS = [
+  {
+    key: 'cockpit',
+    label: '智能洞察诊断驾驶舱',
+    icon: <ApartmentOutlined />,
+    subtitle: '诊断看',
+    component: CockpitTab,
+  },
   {
     key: 'accuracy',
     label: '准确率分析',
@@ -74,7 +82,7 @@ const TAB_ITEMS = [
 const loadedTabs = new Set();
 
 function AIInsightsPage() {
-  const [activeKey, setActiveKey] = useState('accuracy');
+  const [activeKey, setActiveKey] = useState('cockpit');
 
   // 记录已加载的 TAB
   if (!loadedTabs.has(activeKey)) {
@@ -134,9 +142,6 @@ function AIInsightsPage() {
         </span>
       </div>
 
-      {/* 诊断驾驶舱（T-H）：5 区块真实数据 */}
-      <DiagnosisCockpit />
-
       {/* TAB 导航 + 内容 */}
       <Card bodyStyle={{ padding: '20px 20px 16px' }}>
         <Tabs
@@ -154,6 +159,13 @@ function AIInsightsPage() {
       </Card>
     </div>
   );
+}
+
+/**
+ * 诊断驾驶舱 TAB 内容：仅封装 DiagnosisCockpit 组件，使驾驶舱成为独立可切换视图。
+ */
+function CockpitTab() {
+  return <DiagnosisCockpit />;
 }
 
 function TabLoading() {

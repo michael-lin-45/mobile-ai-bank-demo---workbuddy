@@ -213,7 +213,7 @@ function DiagnosisCockpit() {
               三类瓶颈卡（性能 / 准确率 / 转化）
             </span>
           }
-          style={{ borderRadius: 8, marginTop: 16 }}
+          style={{ borderRadius: 8, marginTop: 12 }}
         >
           <BottleneckCards bottlenecks={bottlenecks} />
         </Card>
@@ -227,7 +227,7 @@ function DiagnosisCockpit() {
               慢会话根因表
             </span>
           }
-          style={{ borderRadius: 8, marginTop: 16 }}
+          style={{ borderRadius: 8, marginTop: 12 }}
         >
           <SlowSessionTable
             sessions={slowSessions}
@@ -246,7 +246,7 @@ function DiagnosisCockpit() {
               不满意会话共性表
             </span>
           }
-          style={{ borderRadius: 8, marginTop: 16 }}
+          style={{ borderRadius: 8, marginTop: 12 }}
         >
           <UnsatisfiedTable unsatisfied={unsatisfied} />
         </Card>
@@ -260,7 +260,7 @@ function DiagnosisCockpit() {
               Agent P95 时延 vs 错误率（红线 1500ms）
             </span>
           }
-          style={{ borderRadius: 8, marginTop: 16 }}
+          style={{ borderRadius: 8, marginTop: 12 }}
         >
           <PerfScatter perf={agentPerf} />
         </Card>
