@@ -29,6 +29,7 @@ import {
   fetchAgentPerformance,
   refreshInsights,
 } from '../api/client';
+import { formatBeijingTime } from '../utils/time';
 
 /**
  * DiagnosisCockpit — 智能洞察诊断驾驶舱（T-H，设计 §12.2）
@@ -167,7 +168,7 @@ function DiagnosisCockpit() {
         </span>
         {report?.generatedAt && (
           <span style={{ fontSize: 11, color: 'rgba(0,0,0,.45)', fontFamily: 'monospace' }}>
-            报告时间 {new Date(report.generatedAt).toLocaleString('zh-CN', { hour12: false })}
+            报告时间 {formatBeijingTime(report.generatedAt)}
           </span>
         )}
         {report?.summary && (

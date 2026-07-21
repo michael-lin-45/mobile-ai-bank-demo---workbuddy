@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, Empty, Tag, Space, Popconfirm, message, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, AlertOutlined } from '@ant-design/icons';
 import { fetchAlertRules, createAlertRule, updateAlertRule, deleteAlertRule, fetchAlertEvents } from '../api/client';
+import { formatBeijingTime } from '../utils/time';
 
 const { Title, Paragraph } = Typography;
 const { Option } = Select;
@@ -165,7 +166,7 @@ function AlertRulesPage() {
                   }}
                 >
                   <b style={{ color: evt.severity === 'error' ? '#ff4d4f' : evt.severity === 'warning' ? '#faad14' : '#52c41a' }}>
-                    {evt.time} {evt.title}
+                    {formatBeijingTime(evt.time) || '-'} {evt.title}
                   </b>
                   <p style={{ color: 'rgba(0,0,0,.45)', marginTop: 4 }}>{evt.description}</p>
                   {evt.links && evt.links.length > 0 && (

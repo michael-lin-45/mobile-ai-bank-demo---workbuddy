@@ -6,6 +6,7 @@ import {
   fetchStorageConfig,
   fetchTraces,
 } from '../api/client';
+import { formatBeijingTime } from '../utils/time';
 
 /**
  * HealthBadge — 数据健康三态角标（T-I）
@@ -145,7 +146,7 @@ function HealthBadge() {
       ))}
       {lastChecked && (
         <div style={{ marginTop: 4, color: 'rgba(255,255,255,.65)' }}>
-          最近检测：{lastChecked.toLocaleTimeString('zh-CN', { hour12: false })}
+          最近检测：{formatBeijingTime(lastChecked)}
         </div>
       )}
     </div>

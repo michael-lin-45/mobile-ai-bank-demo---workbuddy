@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatBeijingTime } from '../utils/time';
 
 /**
  * SessionTable — 会话列表表格
@@ -100,7 +101,7 @@ function SessionTable({ sessions = [], onViewSession, loading }) {
                 <span style={MONO_STYLE}>{s.userId || '-'}</span>
               </td>
               <td style={TD_STYLE}>{s.channel || '-'}</td>
-              <td style={TD_STYLE}>{s.time || '-'}</td>
+              <td style={TD_STYLE}>{formatBeijingTime(s.time) || '-'}</td>
               <td style={TD_STYLE}>{formatDuration(s.duration)}</td>
               <td style={{ ...TD_STYLE, fontFamily: MONO_STYLE.fontFamily }}>{s.rounds ?? '-'}</td>
               <td style={TD_STYLE}>

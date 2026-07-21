@@ -278,7 +278,7 @@ public class MetricsQueryService {
 
         // ── 时间标签（HH:mm）──
         List<String> times = new java.util.ArrayList<>();
-        java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+        java.time.ZoneId zone = java.time.ZoneId.of("Asia/Shanghai");
         for (int i = 0; i < buckets; i++) {
             java.time.LocalDateTime b = java.time.LocalDateTime.ofInstant(from.plusSeconds((long) i * bucketSec), zone);
             times.add(String.format("%02d:%02d", b.getHour(), b.getMinute()));

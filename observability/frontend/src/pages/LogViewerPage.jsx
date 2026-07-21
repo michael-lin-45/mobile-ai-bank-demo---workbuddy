@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { fetchLogs } from '../api/client';
+import { formatBeijingTime } from '../utils/time';
 
 /**
  * 日志查询页 — 表格 + 级别筛选 + 全文搜索 + TraceID/UserID/SessionID 输入
@@ -235,7 +236,7 @@ function LogViewerPage() {
 
               {/* 时间戳 */}
               <span style={{ color: 'rgba(0,0,0,.45)', whiteSpace: 'nowrap' }}>
-                {log.timestamp || '-'}
+                {formatBeijingTime(log.timestamp) || '-'}
               </span>
 
               {/* 消息内容 */}

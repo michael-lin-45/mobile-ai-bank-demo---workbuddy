@@ -3,6 +3,7 @@ import SessionFilter from '../components/SessionFilter';
 import SessionTable from '../components/SessionTable';
 import SessionDetailModal from '../components/SessionDetailModal';
 import { fetchSessions, fetchSessionDetail } from '../api/client';
+import { formatBeijingTime } from '../utils/time';
 
 /**
  * 会话回放页 — 筛选栏 + 列表 + 全屏 Modal
@@ -213,7 +214,7 @@ function transformSessionDetail(data) {
       ...data,
       turns: data.timeline.map((t, i) => ({
         turnIndex: i + 1,
-        time: t.timestamp || '-',
+        time: formatBeijingTime(t.timestamp) || '-',
         intent: t.intent || '-',
         agentPath: t.agentPath || '-',
         confidence: t.confidence || '-',

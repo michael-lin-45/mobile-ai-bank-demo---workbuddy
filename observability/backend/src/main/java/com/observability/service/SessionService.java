@@ -358,14 +358,15 @@ public class SessionService {
         vo.put("totalTokenOutput", 0L);
         vo.put("status", s.getStatus());
         vo.put("statusLabel", mapStatusLabel(s.getStatus()));
-        vo.put("createdAt", s.getStartTime() != null ? s.getStartTime().toString() : null);
-        vo.put("updatedAt", s.getEndTime() != null ? s.getEndTime().toString() : null);
+        // 所有面向前端的 Instant 必须经 BJ_FMT 输出，禁止 toString()（避免 UTC 串比北京慢 8h）
+        vo.put("createdAt", s.getStartTime() != null ? BJ_FMT.format(s.getStartTime()) : null);
+        vo.put("updatedAt", s.getEndTime() != null ? BJ_FMT.format(s.getEndTime()) : null);
 
         // Frontend-aligned aliases (SessionTable.jsx expects these names)
         vo.put("rounds", s.getTurnCount());
         vo.put("duration", durationMs);
         vo.put("tokens", tokenVal);
-        vo.put("time", s.getStartTime() != null ? s.getStartTime().toString() : null);
+        vo.put("time", s.getStartTime() != null ? BJ_FMT.format(s.getStartTime()) : null);
         // 意图（取首个，用于筛选/徽标）
         if (intentFlow != null) {
             String[] parts = intentFlow.split("\\s*→\\s*");

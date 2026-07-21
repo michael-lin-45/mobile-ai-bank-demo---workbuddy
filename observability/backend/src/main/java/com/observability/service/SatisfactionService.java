@@ -11,7 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.*;
 
 /**
@@ -112,13 +112,14 @@ public class SatisfactionService {
 
     private List<Map<String, Object>> buildTrend(Instant from, Instant to) {
         List<Map<String, Object>> trend = new ArrayList<>();
-        // 按天分组计算
-        LocalDate startDate = from.atZone(ZoneOffset.UTC).toLocalDate();
-        LocalDate endDate = to.atZone(ZoneOffset.UTC).toLocalDate();
+        // 按天分组计算（统一使用北京时间，使"今日满意度"边界与北京展示一致）
+        ZoneId beijing = ZoneId.of("Asia/Shanghai");
+        LocalDate startDate = from.atZone(beijing).toLocalDate();
+        LocalDate endDate = to.atZone(beijing).toLocalDate();
 
         for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
-            Instant dayStart = date.atStartOfDay(ZoneOffset.UTC).toInstant();
-            Instant dayEnd = date.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant();
+            Instant dayStart = date.atStartOfDay(beijing).toInstant();
+            Instant dayEnd = date.plusDays(1).atStartOfDay(beijing).toInstant();
 
             List<Session> daySessions = sessionRepository.findByTimeRange(dayStart, dayEnd,
                     PageRequest.of(0, Integer.MAX_VALUE)).getContent();
