@@ -96,6 +96,7 @@ public class ObsChatModel implements ChatModel {
     @Override
     public ChatResponse call(Prompt prompt) {
         long start = System.nanoTime();
+        long startEpochMs = System.currentTimeMillis();
         ResolvedCtx rc = resolve();
         String agentLevel = rc.layer;
         String agentName = rc.name;
@@ -131,6 +132,8 @@ public class ObsChatModel implements ChatModel {
                 String responseText = response.getResult() != null && response.getResult().getOutput() != null
                         ? response.getResult().getOutput().getText() : "";
                 setSpanAttribute(span, "ai.io.response", responseText);
+                // 首 token 绝对 epoch 毫秒（非流式 TTFT == 总耗时，首 token 时刻 ≈ 入口 epoch + ttftMs）
+                setSpanAttribute(span, "llm.first_token_time", String.valueOf(startEpochMs + ttftMs));
                 Usage usage0 = extractUsage(response);
                 if (usage0 != null) {
                     setSpanAttribute(span, "ai.token.input", String.valueOf(usage0.getPromptTokens() != null ? usage0.getPromptTokens() : 0));
@@ -180,6 +183,7 @@ public class ObsChatModel implements ChatModel {
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
         long start = System.nanoTime();
+        long startEpochMs = System.currentTimeMillis();
         ResolvedCtx rc = resolve();
         String agentLevel = rc.layer;
         String agentName = rc.name;
@@ -210,6 +214,11 @@ public class ObsChatModel implements ChatModel {
                 // 记录首 token 时间
                 if (firstChunk.getAndSet(false)) {
                     ttftNs.set(now - start);
+                    // now 为 System.nanoTime()（单调时钟，非 epoch），需用 入口 epoch + 相对耗时 推导首 token 绝对时刻
+                    long firstTokenEpoch = startEpochMs + TimeUnit.NANOSECONDS.toMillis(now - start);
+                    if (span != null) {
+                        setSpanAttribute(span, "llm.first_token_time", String.valueOf(firstTokenEpoch));
+                    }
                 }
                 // 检测末尾 usage chunk
                 Usage usage = extractUsage(response);
