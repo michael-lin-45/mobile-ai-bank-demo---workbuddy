@@ -517,6 +517,14 @@ public class MetricsQueryService {
             double avg = snapshotRepository.findLatestValueByKey("latency_avg:" + window).orElse(0.0);
             double p50 = snapshotRepository.findLatestValueByKey("latency_p50:" + window).orElse(0.0);
             double p95 = snapshotRepository.findLatestValueByKey("latency_p95:" + window).orElse(0.0);
+            // 护栏：H2 快照中的 avg/p50/p95 任一超过 SANE_SPAN_CEILING_MS，视为陈旧垃圾值
+            // （如某次泄漏 span 主导了历史聚合），按 0 处理，使调用方回退到已加护栏的 spanDerived 路径。
+            long ceiling = SpanDurationNormalizer.SANE_SPAN_CEILING_MS;
+            if (avg > ceiling || p50 > ceiling || p95 > ceiling) {
+                log.debug("[MetricsQuery] H2 latency snapshot for window={} exceeds sane ceiling ({}ms); "
+                        + "treating as stale garbage and falling back to span-derived stats", window, ceiling);
+                return Map.of("avg", 0.0, "p50", 0.0, "p95", 0.0);
+            }
             return Map.of("avg", avg, "p50", p50, "p95", p95);
         } catch (Exception e) {
             log.debug("[MetricsQuery] H2 latency fallback failed: {}", e.getMessage());
@@ -611,9 +619,15 @@ public class MetricsQueryService {
                 // 校正偶发畸大 span 时长（Core OTel 曾上报 ~1000x 值），保证 E2E/TTFT 真实
                 SpanDurationNormalizer.normalize(spans);
                 Long ttft = traceQueryService.computeTTFT(spans);
-                if (ttft != null && ttft > 0) ttftVals.add(ttft);
+                // 护栏：丢弃 > SANE_SPAN_CEILING_MS 的畸大值（如残留泄漏 span 导致 ~39 分钟墙钟跨度）。
+                // 即使归一化漏网，P95/P99 也不会被单个 outlier 主导。
+                if (ttft != null && ttft > 0 && ttft <= SpanDurationNormalizer.SANE_SPAN_CEILING_MS) {
+                    ttftVals.add(ttft);
+                }
                 Long e2e = computeE2eDurationMs(spans);
-                if (e2e != null && e2e > 0) e2eVals.add(e2e);
+                if (e2e != null && e2e > 0 && e2e <= SpanDurationNormalizer.SANE_SPAN_CEILING_MS) {
+                    e2eVals.add(e2e);
+                }
             }
             ttftVals.sort(Long::compareTo);
             e2eVals.sort(Long::compareTo);
@@ -662,7 +676,15 @@ public class MetricsQueryService {
             if (s.getStartTime() != null) minStart = Math.min(minStart, s.getStartTime().toEpochMilli());
             if (s.getEndTime() != null) maxEnd = Math.max(maxEnd, s.getEndTime().toEpochMilli());
         }
-        if (minStart != Long.MAX_VALUE && maxEnd != Long.MIN_VALUE && maxEnd >= minStart) return maxEnd - minStart;
+        if (minStart != Long.MAX_VALUE && maxEnd != Long.MIN_VALUE && maxEnd >= minStart) {
+            long wallClock = maxEnd - minStart;
+            // 护栏：墙钟跨度超过 SANE_SPAN_CEILING_MS（10min）说明该 trace 含泄漏/畸大 span，
+            // 归一化未能校正（无 CLIENT 子树包络）。返回 null 而非巨大值，避免污染 P95/E2E 统计。
+            if (wallClock > SpanDurationNormalizer.SANE_SPAN_CEILING_MS) {
+                return null;
+            }
+            return wallClock;
+        }
         return null;
     }
 

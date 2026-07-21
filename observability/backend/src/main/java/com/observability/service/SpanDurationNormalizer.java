@@ -42,6 +42,9 @@ public final class SpanDurationNormalizer {
      * 单条 span 的合理时长上限：10 分钟。
      * 本应用真实 agent / HTTP 调用均为秒级；超过即视为畸大（实测 19.75min / 39.5min）。
      * 若未来出现合法超过 10 分钟的长耗时操作，请上调此阈值。
+     *
+     * <p>可见性为 {@code public}：使用方（如 {@code MetricsQueryService} 的 P95 护栏）直接复用此常量，
+     * 避免重复魔法数字；{@link #normalize(List)} 的归一化逻辑本身保持幂等不变。</p>
      */
     public static final long SANE_SPAN_CEILING_MS = 10L * 60 * 1000;
 

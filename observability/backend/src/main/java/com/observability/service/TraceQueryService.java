@@ -414,18 +414,32 @@ public class TraceQueryService {
     }
 
     /**
-     * Compute TTFT = startTime of the FINAL execution LLM (the one producing the
-     * user-visible answer) minus the trace root startTime.
+     * 计算 TTFT（首 Token 时延）= 从请求开始，到「最深层执行 Agent（L2 > L1 > L0）最终产出
+     * 完整回复的 answer span 首 TOKEN 起点」的时间差。
      *
-     * Rationale: the user only sees tokens streamed from the deepest execution agent
-     * (L2 if present, else L1, else L0). Measuring to that span's start approximates
-     * "time to first token of the answer" far better than measuring to the first
-     * routing LLM (L0), which would yield a near-zero, misleading value.
+     * <p>用户权威定义：TTFT 应累加中间各 Agent 层的处理耗时 + 最深层多次 LLM/RAG/MCP 调用中最终
+     * 回到 L0 的那一次「首 TOKEN」时间。整体等价于「请求起点 → 最深层最终 answer span 首 TOKEN」的
+     * 墙钟跨度（与逐层 TPOT+TOPT 累加数值相等），与最深层内部几次调用本身无关。
+     *
+     * <p>实现要点：
+     * <ol>
+     *   <li>层级判定优先用 span 属性 {@code agent.layer}（Core 在 ObsChatModel / ObsReRanker /
+     *       ObsDocumentRetriever 中可靠写入 L0/L1/L2），其次回退到 operationName 前缀
+     *       （L2 / L1 / L0 / llm:）。{@code L2-LLM1}、{@code L1-LLM2} 等 LLM 调用 span 与对应层同 rank。</li>
+     *   <li>在最深层中选取「真正产出 TOKEN 的 answer span」（带 {@code llm.first_token_time} 或
+     *       {@code ai.token.output}，或 operationName 为 LLM 调用 span），取其中首 TOKEN 事件最晚者
+     *       —— 即最终回复那一次调用的首 TOKEN。这排除了末尾非答案的收尾 span，避免抓到 trace 尾部的
+     *       起点而夸大 TTFT（旧实现取「最晚开始的最深层 span」导致 2873ms 类错误）。</li>
+     *   <li>首 TOKEN 绝对时间：优先用 {@code llm.first_token_time} 属性；缺失时用该 span 自身
+     *       startTime 作为保守下界。</li>
+     *   <li>护栏：TTFT 必须 &gt; 0 且 ≤ trace 总时长；越界说明选错了 span，回退到 answer span
+     *       起点 − 请求起点（仍在 trace 内），仍无效则返回 null（前端显示 "-"）。</li>
+     * </ol>
      */
     public Long computeTTFT(List<SpanEntity> spans) {
         if (spans == null || spans.isEmpty()) return null;
 
-        // Locate the HTTP root span (SERVER /api/bank/chat) as the time base.
+        // 1) 请求时间基：HTTP 根 span（SERVER /api/bank/chat）；保持与旧逻辑一致
         SpanEntity rootSpan = null;
         for (var s : spans) {
             if (s.getParentSpanId() == null || s.getParentSpanId().isEmpty()) {
@@ -440,42 +454,148 @@ public class TraceQueryService {
         if (rootSpan.getStartTime() == null) return null;
         long rootStart = rootSpan.getStartTime().toEpochMilli();
 
-        // Pick the execution span with the highest layer rank (L2 > L1 > L0);
-        // tie-break by latest start time (the final answer-generating LLM).
-        SpanEntity bestExec = null;
-        int bestRank = -1;
+        // 2) 整体 trace 总时长（护栏上界）
+        long totalDurationMs = traceTotalDurationMs(spans, rootSpan);
+
+        // 3) 最深层 rank
+        int maxRank = -1;
         for (var s : spans) {
-            String op = s.getOperationName();
-            if (op == null || s.getStartTime() == null) continue;
-            int rank = layerRank(op);
-            if (rank <= 0) continue;
-            long st = s.getStartTime().toEpochMilli();
-            if (rank > bestRank
-                    || (rank == bestRank && (bestExec == null || st > bestExec.getStartTime().toEpochMilli()))) {
-                bestRank = rank;
-                bestExec = s;
+            int r = layerRankOf(s);
+            if (r > maxRank) maxRank = r;
+        }
+        if (maxRank <= 0) return null;
+
+        // 4) 最深层中选取 answer span（产出最终回复首 TOKEN 的那个）
+        SpanEntity answerSpan = null;
+        long bestFirstTokenAbs = -1;
+        boolean foundAnswer = false;
+        for (var s : spans) {
+            if (layerRankOf(s) != maxRank) continue;
+            if (!isAnswerProducing(s)) continue;
+            foundAnswer = true;
+            long ft = firstTokenAbsMs(s, rootStart);
+            if (answerSpan == null || ft > bestFirstTokenAbs) {
+                answerSpan = s;
+                bestFirstTokenAbs = ft;
             }
         }
-        if (bestExec == null) return null;
+        // 兜底：最深层没有任何「产出 TOKEN」的 span（如仅有一个无 token 的 L2 包装 span），
+        // 则在最深层里取 startTime 最晚者作为近似。
+        if (!foundAnswer) {
+            for (var s : spans) {
+                if (layerRankOf(s) != maxRank) continue;
+                if (s.getStartTime() == null) continue;
+                long st = s.getStartTime().toEpochMilli();
+                if (answerSpan == null || st > bestFirstTokenAbs) {
+                    answerSpan = s;
+                    bestFirstTokenAbs = st;
+                }
+            }
+        }
+        if (answerSpan == null) return null;
 
-        long ttft = bestExec.getStartTime().toEpochMilli() - rootStart;
-        // If TTFT is unreasonably large (> 60s), the root span startTime is stale
-        // (instrumentation reused traceId across multiple HTTP requests). Returning a
-        // fake 0ms would mislead the UI; return null so the frontend shows "-".
-        // (With SpanDurationNormalizer correcting stale root/exec starts, a real TTFT is
-        //  typically recovered and returned above instead of hitting this guard.)
-        if (ttft > 60000) return null;
-        return ttft > 0 ? ttft : null;
+        long ttft = bestFirstTokenAbs - rootStart;
+
+        // 5) 护栏
+        if (ttft <= 0) return null;
+        if (ttft > totalDurationMs) {
+            // 选错了 span（如抓到 trace 尾部泄漏 span）。回退到 answer span 自身起点 − 请求起点
+            // （必在 [0, totalDurationMs] 内），仍不合理则返回 null。
+            log.debug("[TraceQuery] computeTTFT guardrail: ttft={}ms exceeds totalDuration={}ms, "
+                    + "falling back to answer span start", ttft, totalDurationMs);
+            long safe = (answerSpan.getStartTime() != null)
+                    ? (answerSpan.getStartTime().toEpochMilli() - rootStart) : totalDurationMs;
+            return (safe > 0 && safe <= totalDurationMs) ? safe : null;
+        }
+        return ttft;
     }
 
     /**
-     * Layer rank for TTFT selection: L2=3, L1 / L1-LLM* / llm: =2, L0 / DomainRouter =1, else 0.
+     * 基于 span 的层级 rank：L2=3 &gt; L1=2 &gt; L0=1 &gt; 其它=0。
+     * 优先用属性 {@code agent.layer}（Core 可靠写入 L0/L1/L2），回退到 operationName 前缀。
+     * 注意 {@code L2-LLM1}、{@code L1-LLM2} 等 LLM 调用 span 与对应层同 rank。
+     */
+    private int layerRankOf(SpanEntity s) {
+        Map<String, String> attrs = parseAttributes(s.getAttributes());
+        String layer = attrs.get("agent.layer");
+        if (layer != null && !layer.isBlank()) {
+            if (layer.startsWith("L2")) return 3;
+            if (layer.startsWith("L1")) return 2;
+            if (layer.startsWith("L0")) return 1;
+        }
+        return layerRank(s.getOperationName());
+    }
+
+    /**
+     * 基于 operationName 的层级 rank（agent.layer 缺失时的回退）：
+     * L2 / L2-LLM* =3，L1 / L1-LLM* / llm: =2，L0 / L0-LLM* / DomainRouter =1，其它=0。
      */
     private int layerRank(String opName) {
-        if (opName.startsWith("L2:")) return 3;
-        if (opName.startsWith("L1") || opName.startsWith("llm:")) return 2;
-        if (opName.startsWith("L0:") || opName.contains("DomainRouter")) return 1;
+        if (opName == null) return 0;
+        if (opName.startsWith("L2")) return 3;          // L2: 或 L2-LLM*
+        if (opName.startsWith("L1")) return 2;          // L1: 或 L1-LLM*
+        if (opName.startsWith("L0")) return 1;          // L0: 或 L0-LLM*
+        if (opName.startsWith("llm:")) return 2;        // 通用 LLM 调用 ~ 执行层
+        if (opName.contains("DomainRouter")) return 1;
         return 0;
+    }
+
+    /**
+     * 是否「真正产出 TOKEN / 完整回复」的 span（用于最深层 answer span 选择）。
+     * 判定：带 {@code llm.first_token_time} 或 {@code ai.token.output} 属性，或 operationName
+     * 为 LLM 调用 span（llm: / *-LLM*）。自动排除末尾无 token 的收尾 / 包装 span
+     * （如 {@code L2:Cleanup}、{@code L2:Finalize} 之类以 L2 开头但不产出 TOKEN 的 span），
+     * 否则会误抓 trace 尾部起点而夸大 TTFT（2873ms 类 bug）。
+     */
+    private boolean isAnswerProducing(SpanEntity s) {
+        Map<String, String> attrs = parseAttributes(s.getAttributes());
+        if (attrs.containsKey("llm.first_token_time")) return true;
+        if (attrs.containsKey("ai.token.output")) return true;
+        String op = s.getOperationName();
+        if (op == null) return false;
+        return op.startsWith("llm:") || op.contains("-LLM");
+    }
+
+    /**
+     * answer span 首 TOKEN 的绝对墙钟时间（epoch ms）。
+     * 优先用属性 {@code llm.first_token_time}；缺失时用该 span 自身 startTime 作为保守下界。
+     *
+     * <p>单位说明：Core 当前只写 {@code llm.first_token.latency}（Histogram，相对耗时 ms），
+     * 并不写 {@code llm.first_token_time} 属性，因此该属性在现有数据里通常缺失、走 startTime 兜底。
+     * 若未来被写入，按名称 {@code ...time} 推断为「绝对 epoch 毫秒」（与 {@code ...latency} 相对耗时区分）：
+     * 值 ≥ 1e12 视为绝对 epoch，直接返回；否则视为「相对请求起点的耗时 ms」，返回 rootStart + v。
+     */
+    private long firstTokenAbsMs(SpanEntity s, long rootStart) {
+        Map<String, String> attrs = parseAttributes(s.getAttributes());
+        String ft = attrs.get("llm.first_token_time");
+        if (ft != null) {
+            try {
+                long v = Long.parseLong(ft.trim());
+                if (v >= 1_000_000_000_000L) {
+                    return v; // 绝对 epoch 毫秒
+                }
+                return rootStart + v; // 相对耗时（ms，从请求起点计）
+            } catch (NumberFormatException ignored) {
+                // 解析失败 → 回退 startTime
+            }
+        }
+        return s.getStartTime() != null ? s.getStartTime().toEpochMilli() : rootStart;
+    }
+
+    /** 整体 trace 总时长（墙钟跨度，用于 TTFT 护栏上界）。 */
+    private long traceTotalDurationMs(List<SpanEntity> spans, SpanEntity rootSpan) {
+        if (rootSpan.getDurationMs() != null && rootSpan.getDurationMs() > 0) {
+            return rootSpan.getDurationMs();
+        }
+        long minStart = Long.MAX_VALUE, maxEnd = Long.MIN_VALUE;
+        for (var s : spans) {
+            if (s.getStartTime() != null) minStart = Math.min(minStart, s.getStartTime().toEpochMilli());
+            if (s.getEndTime() != null) maxEnd = Math.max(maxEnd, s.getEndTime().toEpochMilli());
+        }
+        if (minStart != Long.MAX_VALUE && maxEnd != Long.MIN_VALUE && maxEnd >= minStart) {
+            return maxEnd - minStart;
+        }
+        return Long.MAX_VALUE; // 无法判定时放宽护栏
     }
 
     /**
