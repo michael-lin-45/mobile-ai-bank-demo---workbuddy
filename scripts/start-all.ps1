@@ -162,7 +162,7 @@ function global:Assert-NoEcjErrorClasses {
     try { Select-String -Path $_.FullName -Pattern "Unresolved compilation" -Quiet -ErrorAction SilentlyContinue } catch { $false }
   } | Select-Object -First 1
   if ($hit) {
-    Write-Error "[$Label] 检测到 ECJ 错误 class 残片: $($hit.FullName)`n  请清理 IDE 编译产物后重跑: 删除 target/ 或执行 'mvnw.cmd clean'。"
+    Write-Warning "[$Label] 检测到 ECJ 错误 class 残片: $($hit.FullName)`n  请清理 IDE 编译产物后重跑: 删除 target/ 或执行 'mvnw.cmd clean'。"
     Stop-AllAndExit
   }
 }
