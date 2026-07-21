@@ -252,6 +252,23 @@ public class MetricsQueryService {
     }
 
     /**
+     * 解析指定窗口的 E2E/系统时延 P95，与大屏 getRealtime() 同源：
+     * Redis 分位数优先，缺失时回退到基于 H2 spans 推导的 e2eP95。
+     */
+    public double getE2eP95Ms(String window) {
+        Map<String, Double> redisLatency = redisMetrics.getLatencyStats(window);
+        Map<String, Double> latencyStats = getLatencyStatsWithFallback(window, redisLatency);
+        if ((redisLatency == null || redisLatency.getOrDefault("avg", 0.0) == 0.0)
+                && latencyStats.getOrDefault("avg", 0.0) == 0.0) {
+            SpanDerivedLatency sd = getTtftAndLatencyFromSpans();
+            if (sd.e2eValid) {
+                latencyStats = Map.of("avg", sd.e2eAvg, "p50", sd.e2eP50, "p95", sd.e2eP95, "p99", sd.e2eP99);
+            }
+        }
+        return latencyStats.getOrDefault("p95", 0.0);
+    }
+
+    /**
      * 获取历史指标（H2 温层）
      */
     public List<MetricsAgg> getHistory(Instant from, Instant to, String step) {

@@ -23,7 +23,7 @@ import java.util.stream.Collectors;
  *
  * <p>设计约束（§3.3②）：本服务为<b>只读</b>引擎，构造器只注入只读 Repository / Service
  * （SpanRepository、SessionRepository、SessionTurnRepository、MetricsAggRepository、AIInsightsService、
- * RedisMetricsService），<b>绝不注入</b>任何可写组件（GraphExecutionEngine / DomainService 等），
+ * RedisMetricsService、MetricsQueryService），<b>绝不注入</b>任何可写组件（GraphExecutionEngine / DomainService 等），
  * 编译期即杜绝误调用写操作。
  *
  * <p>每个洞察输出卡均显式标注边界（§3.3③）：
@@ -43,6 +43,7 @@ public class InsightsEngineService {
     private final SessionTurnRepository sessionTurnRepository;
     private final AIInsightsService aiInsightsService;
     private final RedisMetricsService redisMetricsService;
+    private final MetricsQueryService metricsQueryService;
 
     /** T-L：只读闸门。true = 禁止任何写操作（L3 动作仅审计不落地）。 */
     @Value("${insights.readonly:true}")
@@ -58,13 +59,15 @@ public class InsightsEngineService {
                                  SessionRepository sessionRepository,
                                  SessionTurnRepository sessionTurnRepository,
                                  AIInsightsService aiInsightsService,
-                                 RedisMetricsService redisMetricsService) {
+                                 RedisMetricsService redisMetricsService,
+                                 MetricsQueryService metricsQueryService) {
         this.metricsAggRepository = metricsAggRepository;
         this.spanRepository = spanRepository;
         this.sessionRepository = sessionRepository;
         this.sessionTurnRepository = sessionTurnRepository;
         this.aiInsightsService = aiInsightsService;
         this.redisMetricsService = redisMetricsService;
+        this.metricsQueryService = metricsQueryService;
     }
 
     // ==================== 6 个 REST API ====================
@@ -110,7 +113,7 @@ public class InsightsEngineService {
     public List<Map<String, Object>> analyzePerformance() {
         List<Map<String, Object>> result = new ArrayList<>();
 
-        double p95 = redisMetricsService.getLatencyStats("6h").getOrDefault("p95", 0.0);
+        double p95 = metricsQueryService.getE2eP95Ms("6h");
         Map<String, Object> perf = boundaryCard("L1", null, false);
         perf.put("category", "PERFORMANCE");
         perf.put("title", "P95 端到端时延");
