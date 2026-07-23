@@ -164,6 +164,36 @@ export function refreshInsights() {
   return client.post('/ai/insights/refresh');
 }
 
+// ── Business Events API（V23 M1/M2 真实业务埋点）──
+
+/** 业务埋点入库 — POST /business-events */
+export function ingestBusinessEvent(data) {
+  return client.post('/business-events', data);
+}
+
+/** 业务事件计数 — GET /business-events/count?event=&from=&to= */
+export function fetchBusinessEventCount(event, from, to) {
+  return client.get('/business-events/count', {
+    params: { event, from, to },
+  });
+}
+
+/** 业务事件聚合 — GET /business-events/agg?event=&groupBy=&from=&to= */
+export function fetchBusinessEventAgg(event, groupBy, from, to) {
+  return client.get('/business-events/agg', {
+    params: { event, groupBy, from, to },
+  });
+}
+
+// ── External Invocation API（V23 M5/M10 统一外部调用台账）──
+
+/** 外部调用记录 — GET /invocations?category={all|rag|tool|skill|mcp} */
+export function fetchInvocations(category = 'all', provider, range) {
+  return client.get('/invocations', {
+    params: { category, provider, range },
+  });
+}
+
 // ── Health API ──
 
 export function fetchHealth() {

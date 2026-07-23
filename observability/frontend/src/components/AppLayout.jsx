@@ -11,6 +11,7 @@ import AIInsightsPage from '../pages/AIInsightsPage';
 import LogViewerPage from '../pages/LogViewerPage';
 import AlertRulesPage from '../pages/AlertRulesPage';
 import SettingsPage from '../pages/SettingsPage';
+import SessionReplay from './SessionReplay';
 import { useAppContext } from '../context/AppContext';
 
 const { Content } = Layout;
@@ -111,6 +112,9 @@ function AppLayout() {
           </Routes>
         </Content>
       </Layout>
+
+      {/* 全局会话回放（响应 openSessionReplay / session:replay） */}
+      <SessionReplay />
     </Layout>
   );
 }

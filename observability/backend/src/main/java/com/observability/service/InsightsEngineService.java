@@ -1,5 +1,7 @@
 package com.observability.service;
 
+import com.observability.dto.SlowSessionBlock;
+import com.observability.dto.UnsatisfiedBlock;
 import com.observability.model.Session;
 import com.observability.model.SessionTurn;
 import com.observability.model.SpanEntity;
@@ -99,11 +101,18 @@ public class InsightsEngineService {
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("generatedAt", Instant.now().toString());
         report.put("boundary", "L1");
+
+        SlowSessionBlock slowBlock = slowSessionSummaries();
+        UnsatisfiedBlock unsatBlock = clusterUnsatisfied();
+
         report.put("bottlenecks", analyzePerformance());
         report.put("qualityIssues", analyzePerformance());
         report.put("conversionGaps", List.of(analyzeConversion()));
-        report.put("slowSessions", slowSessionSummaries());
-        report.put("unsatisfied", clusterUnsatisfied());
+        report.put("slowSessions", slowBlock);
+        report.put("unsatisfied", unsatBlock);
+        // B4 触发标志：前端「智能诊断」TAB 据此高亮告警卡
+        report.put("slowSessionsTriggered", slowBlock.isTriggered());
+        report.put("unsatisfiedTriggered", unsatBlock.isTriggered());
         report.put("actions", suggestActions());
         report.put("summary", buildSummary(report));
         return report;
@@ -185,31 +194,44 @@ public class InsightsEngineService {
         return result;
     }
 
-    /** GET /api/v1/ai/insights/unsatisfied — L2 不满意会话共性聚类 */
-    public List<Map<String, Object>> clusterUnsatisfied() {
-        List<Map<String, Object>> result = new ArrayList<>();
+    /** GET /api/v1/ai/insights/unsatisfied — L2 不满意会话共性聚类（触发块） */
+    public UnsatisfiedBlock clusterUnsatisfied() {
         Instant from = Instant.now().minusSeconds(7 * 86400);
         Instant to = Instant.now();
+        long total = sessionRepository.countByStartTimeBetween(from, to);
         Page<Session> neg = sessionRepository.findBySatisfactionRating(
                 "unsatisfied", from, to, PageRequest.of(0, 50));
-        if (neg.getContent().isEmpty()) {
-            return result; // 无负面满意度数据 → 空列表（测试软跳过，非失败）
+        long unsat = neg.getTotalElements();
+        double rate = total > 0 ? round2(unsat * 100.0 / total) : 0.0;
+        // 不满意率 > 10% 触发告警
+        boolean triggered = total > 0 && rate > 10.0;
+
+        List<UnsatisfiedBlock.UnsatisfiedCluster> clusters = new ArrayList<>();
+        if (!neg.getContent().isEmpty()) {
+            Map<String, List<Session>> groups = new LinkedHashMap<>();
+            for (var s : neg.getContent()) {
+                String flow = s.getIntentFlow();
+                String key = flow != null ? flow.split("\\s*→\\s*")[0] : "UNKNOWN";
+                groups.computeIfAbsent(key, k -> new ArrayList<>()).add(s);
+            }
+            for (var e : groups.entrySet()) {
+                UnsatisfiedBlock.UnsatisfiedCluster c = UnsatisfiedBlock.UnsatisfiedCluster.builder()
+                        .dimension(e.getKey())
+                        .count(e.getValue().size())
+                        .examples(e.getValue().stream().map(Session::getSessionId).limit(5).toList())
+                        .commonPattern("不满意会话多集中于「" + e.getKey() + "」意图，建议优化该领域话术与工具调用")
+                        .build();
+                clusters.add(c);
+            }
         }
-        Map<String, List<Session>> groups = new LinkedHashMap<>();
-        for (var s : neg.getContent()) {
-            String flow = s.getIntentFlow();
-            String key = flow != null ? flow.split("\\s*→\\s*")[0] : "UNKNOWN";
-            groups.computeIfAbsent(key, k -> new ArrayList<>()).add(s);
-        }
-        for (var e : groups.entrySet()) {
-            Map<String, Object> c = boundaryCard("L2", 0.65, false);
-            c.put("dimension", e.getKey());
-            c.put("count", e.getValue().size());
-            c.put("examples", e.getValue().stream().map(Session::getSessionId).limit(5).toList());
-            c.put("commonPattern", "不满意会话多集中于「" + e.getKey() + "」意图，建议优化该领域话术与工具调用");
-            result.add(c);
-        }
-        return result;
+
+        return UnsatisfiedBlock.builder()
+                .triggered(triggered)
+                .rate(rate)
+                .total(total)
+                .unsatisfied(unsat)
+                .clusters(clusters)
+                .build();
     }
 
     /** GET /api/v1/ai/insights/conversion — L1 确定性漏斗 */
@@ -255,11 +277,11 @@ public class InsightsEngineService {
             actions.add(a);
         }
 
-        for (var u : clusterUnsatisfied()) {
+        for (var u : clusterUnsatisfied().getClusters()) {
             Map<String, Object> a = boundaryCard("L2", 0.6, false);
-            a.put("id", "act-unsat-" + u.get("dimension"));
-            a.put("title", "改善「" + u.get("dimension") + "」不满意会话");
-            a.put("description", (String) u.get("commonPattern"));
+            a.put("id", "act-unsat-" + u.getDimension());
+            a.put("title", "改善「" + u.getDimension() + "」不满意会话");
+            a.put("description", u.getCommonPattern());
             a.put("category", "SATISFACTION");
             a.put("priority", 60);
             a.put("severity", "MED");
@@ -285,35 +307,61 @@ public class InsightsEngineService {
 
     // ==================== 辅助 ====================
 
-    private List<Map<String, Object>> slowSessionSummaries() {
+    private SlowSessionBlock slowSessionSummaries() {
         Instant from = Instant.now().minusSeconds(7 * 86400);
         Instant to = Instant.now();
-        List<Map<String, Object>> list = new ArrayList<>();
+        // 触发阈值：P90 时延 > 3s
+        double thresholdSeconds = 3.0;
+
+        List<SlowSessionBlock.SlowSessionRow> rows = new ArrayList<>();
+        double p90 = 0.0;
         try {
-            List<Session> sessions = sessionRepository.findByTimeRange(from, to, PageRequest.of(0, 5))
+            List<Session> sessions = sessionRepository.findByTimeRange(from, to, PageRequest.of(0, 50))
                     .getContent().stream()
+                    .filter(s -> s.getDurationSeconds() != null)
                     .sorted((a, b) -> Long.compare(
                             b.getDurationSeconds() != null ? b.getDurationSeconds() : 0,
                             a.getDurationSeconds() != null ? a.getDurationSeconds() : 0))
-                    .limit(5).toList();
-            for (var s : sessions) {
-                Map<String, Object> m = boundaryCard("L1", null, false);
-                m.put("sessionId", s.getSessionId());
-                m.put("durationSeconds", s.getDurationSeconds());
-                m.put("turnCount", s.getTurnCount());
-                m.put("intentFlow", s.getIntentFlow());
-                list.add(m);
+                    .toList();
+
+            // P90 时延（基于近 7 天时长分布）
+            List<Long> durations = sessions.stream()
+                    .map(Session::getDurationSeconds)
+                    .sorted()
+                    .toList();
+            if (!durations.isEmpty()) {
+                int idx = Math.min(durations.size() - 1, (int) Math.ceil(0.9 * durations.size()) - 1);
+                p90 = durations.get(Math.max(0, idx));
+            }
+
+            // Top5 最慢会话明细
+            for (var s : sessions.stream().limit(5).toList()) {
+                rows.add(SlowSessionBlock.SlowSessionRow.builder()
+                        .sessionId(s.getSessionId())
+                        .durationSeconds(s.getDurationSeconds())
+                        .turnCount(s.getTurnCount())
+                        .intentFlow(s.getIntentFlow())
+                        .build());
             }
         } catch (Exception e) {
             log.debug("[Insights] slowSessionSummaries failed: {}", e.getMessage());
         }
-        return list;
+
+        boolean triggered = p90 > thresholdSeconds && !rows.isEmpty();
+        return SlowSessionBlock.builder()
+                .triggered(triggered)
+                .p90Seconds(round2(p90))
+                .thresholdSeconds(thresholdSeconds)
+                .rows(rows)
+                .build();
     }
 
     private String buildSummary(Map<String, Object> report) {
         int bottlenecks = ((List<?>) report.get("bottlenecks")).size();
         int actions = ((List<?>) report.get("actions")).size();
-        int unsat = ((List<?>) report.get("unsatisfied")).size();
+        UnsatisfiedBlock unsatBlock = (UnsatisfiedBlock) report.get("unsatisfied");
+        int unsat = unsatBlock != null && unsatBlock.getClusters() != null
+                ? unsatBlock.getClusters().size() : 0;
         return String.format("洞察摘要：%d 类瓶颈、%d 条待办建议、%d 类不满意聚类。", bottlenecks, actions, unsat);
     }
 

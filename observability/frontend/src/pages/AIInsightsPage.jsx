@@ -1,32 +1,45 @@
-import React, { useState, Suspense, lazy } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { Card, Tabs, Spin } from 'antd';
 import {
+  SafetyCertificateOutlined,
   ApartmentOutlined,
   CheckCircleOutlined,
   ThunderboltOutlined,
   DollarOutlined,
-  ToolOutlined,
+  ApiOutlined,
   FunnelPlotOutlined,
   SmileOutlined,
 } from '@ant-design/icons';
 import DiagnosisCockpit from '../components/DiagnosisCockpit';
+import { on } from '../utils/nav';
 
 /**
- * AI 洞察页 — 6 TAB 框架
+ * AI 洞察页 — TAB 框架（V23 B4 扩展为 8 TAB）。
  *
- * 准确率分析 → Agent 性能 → Token 成本 → 工具调用 → 业务转化漏斗 → 用户满意度
- *   算法看        开发看        成本看      调用链看      产品看          体验看
+ * 智能诊断 → 诊断驾驶舱 → 准确率分析 → Agent 性能 → Token 成本 → 外部调用 → 业务转化漏斗 → 用户满意度
+ *   诊断看      诊断看        算法看        开发看        成本看      调用链看      产品看          体验看
+ *
+ * 「智能诊断」为新增首 TAB（DiagnosisTab），总览大屏诊断摘要卡下钻 itab('diagnosis') 即跳至此。
+ * 「工具调用」重命名为「外部调用」（ExternalCallTab），按 RAG/工具函数/SKILL/MCP 分段。
  *
  * 每个 TAB 使用懒加载独立组件，TAB 切换不重渲染已加载 TAB。
  */
+const DiagnosisTab = lazy(() => import('./DiagnosisTab'));
 const AccuracyTab = lazy(() => import('./AccuracyTab'));
 const AgentPerfTab = lazy(() => import('./AgentPerfTab'));
 const TokenCostTab = lazy(() => import('./TokenCostTab'));
-const ToolCallTab = lazy(() => import('./ToolCallTab'));
+const ExternalCallTab = lazy(() => import('./ExternalCallTab'));
 const FunnelTab = lazy(() => import('./FunnelTab'));
 const SatisfactionTab = lazy(() => import('./SatisfactionTab'));
 
 const TAB_ITEMS = [
+  {
+    key: 'diagnosis',
+    label: '智能诊断',
+    icon: <SafetyCertificateOutlined />,
+    subtitle: '诊断看',
+    component: DiagnosisTab,
+  },
   {
     key: 'cockpit',
     label: '智能洞察诊断驾驶舱',
@@ -56,11 +69,11 @@ const TAB_ITEMS = [
     component: TokenCostTab,
   },
   {
-    key: 'tool',
-    label: '工具调用',
-    icon: <ToolOutlined />,
+    key: 'external',
+    label: '外部调用',
+    icon: <ApiOutlined />,
     subtitle: '调用链看',
-    component: ToolCallTab,
+    component: ExternalCallTab,
   },
   {
     key: 'funnel',
@@ -83,6 +96,18 @@ const loadedTabs = new Set();
 
 function AIInsightsPage() {
   const [activeKey, setActiveKey] = useState('cockpit');
+
+  // 订阅总览大屏下钻（itab('diagnosis') 等）→ 切换对应 TAB
+  useEffect(() => {
+    const off = on('ai-insights:tab', (e) => {
+      const tabKey = e.detail && e.detail.tabKey;
+      if (tabKey) {
+        setActiveKey(tabKey);
+        loadedTabs.add(tabKey);
+      }
+    });
+    return off;
+  }, []);
 
   // 记录已加载的 TAB
   if (!loadedTabs.has(activeKey)) {

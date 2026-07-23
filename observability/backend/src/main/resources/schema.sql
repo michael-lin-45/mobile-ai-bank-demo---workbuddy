@@ -253,3 +253,23 @@ CREATE TABLE IF NOT EXISTS ai_action_audit (
     created_at TIMESTAMP,
     executed_at TIMESTAMP
 );
+
+-- ============================================================
+-- ★ V23 新增：业务埋点表（M1/M2 真实业务埋点）
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS business_events (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    session_id  VARCHAR(64),
+    trace_id    VARCHAR(64),
+    user_id     VARCHAR(64),
+    agent       VARCHAR(64),
+    event_type  VARCHAR(32) NOT NULL,   -- mbank_card_click / mbank_human_click
+    card_type   VARCHAR(32),            -- 仅 mbank_card_click：卡片业务类型
+    source      VARCHAR(32),            -- 仅 mbank_human_click：chat_bar|card_menu|timeout（可 groupBy）
+    channel     VARCHAR(32),
+    created_at  TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_be_type_time ON business_events(event_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_be_sid       ON business_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_be_src       ON business_events(event_type, source);  -- 按 source 聚合索引

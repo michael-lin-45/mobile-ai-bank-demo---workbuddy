@@ -1,6 +1,7 @@
 package com.observability.controller;
 
 import com.observability.dto.ApiResponse;
+import com.observability.dto.UnsatisfiedBlock;
 import com.observability.service.InsightsEngineService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -69,7 +70,7 @@ public class InsightsEngineController {
 
     /** 不满意会话共性聚类（L2 模糊推断） */
     @GetMapping("/insights/unsatisfied")
-    public ApiResponse<List<Map<String, Object>>> getUnsatisfied() {
+    public ApiResponse<UnsatisfiedBlock> getUnsatisfied() {
         try {
             return ApiResponse.ok(insightsEngineService.clusterUnsatisfied());
         } catch (Exception e) {

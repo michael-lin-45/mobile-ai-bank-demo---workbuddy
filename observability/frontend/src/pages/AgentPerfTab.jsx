@@ -80,6 +80,11 @@ function AgentPerfTab() {
             LLM 维度
           </div>
         </div>
+        <div style={{ padding: '8px 20px 0', fontSize: 11, color: 'rgba(0,0,0,.45)' }}>
+          {isAgent
+            ? 'Agent 维度：按执行智能体分组，含「级别 (L0/L1/L2)」列，对比各智能体性能。'
+            : 'LLM 维度：按调用模型分组，含「模型」列，对比各模型推理性能。'}
+        </div>
       </Card>
 
       <Spin spinning={loading}>

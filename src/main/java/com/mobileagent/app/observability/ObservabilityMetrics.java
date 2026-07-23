@@ -595,6 +595,42 @@ public class ObservabilityMetrics {
         });
     }
 
+    /**
+     * 工具调用计数（带扩展 tag，如 category=mcp）。
+     * 用于 MCP / 第三方工具调用统一埋点，extraTags 合并进 Counter tag。
+     *
+     * @param toolName   工具名（MCP 场景为 "MCP:<tool>"）
+     * @param result     调用结果 (start/success/fail)
+     * @param extraTags  扩展 tag（如 category=mcp），可为空
+     */
+    public void recordToolCallCount(String toolName, String result, Map<String, String> extraTags) {
+        recordCounter("agent.tool.call.count", appendExtraTags(new String[]{"tool_name", toolName, "result", result}, extraTags));
+    }
+
+    /**
+     * 工具调用耗时（带扩展 tag，如 category=mcp）。
+     *
+     * @param toolName   工具名（MCP 场景为 "MCP:<tool>"）
+     * @param durationMs 耗时(毫秒)
+     * @param extraTags  扩展 tag（如 category=mcp），可为空
+     */
+    public void recordToolCallDuration(String toolName, long durationMs, Map<String, String> extraTags) {
+        recordTimer("agent.tool.call.duration", durationMs, appendExtraTags(new String[]{"tool_name", toolName}, extraTags));
+    }
+
+    /** 将扩展 tag Map 追加到基础 tag 数组（奇数 key/value 交替） */
+    private String[] appendExtraTags(String[] base, Map<String, String> extraTags) {
+        if (extraTags == null || extraTags.isEmpty()) return base;
+        String[] out = new String[base.length + extraTags.size() * 2];
+        System.arraycopy(base, 0, out, 0, base.length);
+        int i = base.length;
+        for (Map.Entry<String, String> e : extraTags.entrySet()) {
+            out[i++] = e.getKey();
+            out[i++] = e.getValue();
+        }
+        return out;
+    }
+
     // ==================== Helpers ====================
 
     /** 安全记录 —— try-catch 包裹，不影响主业务 */

@@ -81,14 +81,14 @@ function DiagnosisCockpit() {
         const r = rep.value || {};
         if (bn.status !== 'fulfilled') setBottlenecks(r.bottlenecks || []);
         if (act.status !== 'fulfilled') setActions(r.actions || []);
-        if (unsat.status !== 'fulfilled') setUnsatisfied(r.unsatisfied || []);
+        if (unsat.status !== 'fulfilled') setUnsatisfied(r.unsatisfied?.clusters || []);
         if (conv.status !== 'fulfilled') setConversion(r.conversionGaps?.[0] || null);
       } else {
         setReport(null);
       }
       if (bn.status === 'fulfilled') setBottlenecks(bn.value || []);
       if (act.status === 'fulfilled') setActions(act.value || []);
-      if (unsat.status === 'fulfilled') setUnsatisfied(unsat.value || []);
+      if (unsat.status === 'fulfilled') setUnsatisfied(unsat.value?.clusters || []);
       if (conv.status === 'fulfilled') setConversion(conv.value || null);
       if (perf.status === 'fulfilled') setAgentPerf(perf.value || null);
 
@@ -146,7 +146,7 @@ function DiagnosisCockpit() {
     }
   }, [rootCauseMap]);
 
-  const slowSessions = report?.slowSessions || [];
+  const slowSessions = report?.slowSessions?.rows || [];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

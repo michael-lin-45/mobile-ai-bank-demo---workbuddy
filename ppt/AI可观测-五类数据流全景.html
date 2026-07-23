@@ -1,0 +1,100 @@
+<svg viewBox="0 0 680 580" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>AI 可观测五类数据流全景</title>
+<desc>蓝色=Trace 绿色=Metrics 灰色=Logs 琥珀=Session 红色=Alert。共享路径汇合，差异路径分支。</desc>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<text x="40" y="28" font-size="15" font-weight="500" fill="#0C447C">五类数据流全景 — 采集 → 管道 → 处理 → 存储 → 展示</text>
+
+<rect x="40" y="50" width="100" height="370" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
+<rect x="155" y="50" width="120" height="370" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
+<rect x="290" y="50" width="120" height="370" rx="10" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
+<rect x="425" y="50" width="100" height="370" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
+<rect x="540" y="50" width="100" height="370" rx="10" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
+
+<text x="90" y="40" font-size="13" font-weight="500" fill="#0C447C" text-anchor="middle">采集发射</text>
+<text x="215" y="40" font-size="13" font-weight="500" fill="#0C447C" text-anchor="middle">采集管道</text>
+<text x="350" y="40" font-size="13" font-weight="500" fill="#444441" text-anchor="middle">智能处理</text>
+<text x="475" y="40" font-size="13" font-weight="500" fill="#0C447C" text-anchor="middle">存储层</text>
+<text x="590" y="40" font-size="13" font-weight="500" fill="#444441" text-anchor="middle">消费触达</text>
+
+<rect x="46" y="70" width="88" height="38" rx="8" fill="#FFFFFF" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="90" y="84" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">ObsChatModel</text>
+<text x="90" y="100" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">span+意图+置信</text>
+
+<rect x="46" y="130" width="88" height="38" rx="8" fill="#FFFFFF" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="90" y="144" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">OTel Agent</text>
+<text x="90" y="160" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">OTLP :4318</text>
+
+<rect x="46" y="190" width="88" height="38" rx="8" fill="#FFFFFF" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="90" y="204" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">SessionBridge</text>
+<text x="90" y="220" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">HTTP :9090</text>
+
+<rect x="161" y="88" width="108" height="48" rx="8" fill="#FFFFFF" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="215" y="105" font-size="13" font-weight="500" fill="#0C447C" text-anchor="middle">OTel Collector</text>
+<text x="215" y="123" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">Recv→Batch→Fltr→Exp</text>
+
+<rect x="161" y="190" width="108" height="38" rx="8" fill="#FFFFFF" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="215" y="204" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">SessionService</text>
+<text x="215" y="220" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">会话管理</text>
+
+<rect x="296" y="70" width="108" height="38" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+<text x="350" y="84" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">InsightsEngine</text>
+<text x="350" y="100" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">异常检测+根因分析</text>
+
+<rect x="296" y="130" width="108" height="38" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+<text x="350" y="144" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">AlertEngine</text>
+<text x="350" y="160" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">告警判定+收敛</text>
+
+<rect x="431" y="70" width="88" height="34" rx="8" fill="#FFFFFF" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="475" y="87" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">Tempo</text>
+
+<rect x="431" y="115" width="88" height="34" rx="8" fill="#FFFFFF" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="475" y="132" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">VictoriaMetrics</text>
+
+<rect x="431" y="160" width="88" height="34" rx="8" fill="#FFFFFF" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="475" y="177" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">Loki</text>
+
+<rect x="431" y="205" width="88" height="38" rx="8" fill="#FFFFFF" stroke="#85B7EB" stroke-width="0.5"/>
+<text x="475" y="219" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">Redis + PG</text>
+<text x="475" y="235" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">业务存储</text>
+
+<rect x="546" y="88" width="88" height="48" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+<text x="590" y="105" font-size="13" font-weight="500" fill="#0C447C" text-anchor="middle">Grafana</text>
+<text x="590" y="123" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">统一看板</text>
+
+<rect x="546" y="190" width="88" height="38" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+<text x="590" y="204" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">Session看板</text>
+<text x="590" y="220" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">会话追踪</text>
+
+<rect x="546" y="250" width="88" height="38" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+<text x="590" y="264" font-size="12" font-weight="500" fill="#0C447C" text-anchor="middle">告警面板</text>
+<text x="590" y="280" font-size="11" font-weight="400" fill="#5F5E5A" text-anchor="middle">+钉钉/飞书/邮件</text>
+
+<polyline points="90,108 90,130 90,149 215,100 275,100 425,87 525,87 540,100 577,100" fill="none" stroke="#185FA5" stroke-width="2" marker-end="url(#a)"/>
+
+<polyline points="134,149 215,112 275,112 425,132 525,132 540,112 577,112" fill="none" stroke="#3B6D11" stroke-width="2" marker-end="url(#a)"/>
+
+<polyline points="134,149 215,124 275,124 425,177 525,177 540,112 577,112" fill="none" stroke="#5F5E5A" stroke-width="2" marker-end="url(#a)"/>
+
+<polyline points="90,209 134,209 155,209 275,209 425,224 525,224 540,209 577,209" fill="none" stroke="#BA7517" stroke-width="2" marker-end="url(#a)"/>
+
+<polyline points="350,108 350,130 410,149 425,224 525,224 540,269 577,269" fill="none" stroke="#A32D2D" stroke-width="2" marker-end="url(#a)"/>
+
+<rect x="52" y="450" width="16" height="4" rx="2" fill="#185FA5"/>
+<text x="74" y="454" font-size="12" font-weight="500" fill="#185FA5">TRACE</text>
+<rect x="140" y="450" width="16" height="4" rx="2" fill="#3B6D11"/>
+<text x="162" y="454" font-size="12" font-weight="500" fill="#3B6D11">METRICS</text>
+<rect x="250" y="450" width="16" height="4" rx="2" fill="#5F5E5A"/>
+<text x="272" y="454" font-size="12" font-weight="500" fill="#5F5E5A">LOGS</text>
+<rect x="340" y="450" width="16" height="4" rx="2" fill="#BA7517"/>
+<text x="362" y="454" font-size="12" font-weight="500" fill="#BA7517">SESSION</text>
+<rect x="450" y="450" width="16" height="4" rx="2" fill="#A32D2D"/>
+<text x="472" y="454" font-size="12" font-weight="500" fill="#A32D2D">ALERT</text>
+
+<text x="40" y="480" font-size="11" font-weight="400" fill="#5F5E5A">阅读方式：跟踪一条彩色线，即看到该类数据从产生→处理→存储→展示的完整路径。同色线共享组件 = 同一管道处理，异色线分离 = 独立链路。</text>
+<text x="40" y="500" font-size="11" font-weight="400" fill="#5F5E5A">虚线框 = 03 智能处理层（非采集/存储/展示）。存储层包含两端：遥测存储(Tempo/VM/Loki) + 业务存储(Redis/PG)。</text>
+</svg>

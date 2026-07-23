@@ -146,6 +146,37 @@ function TraceDetailModal({ trace, visible, onClose }) {
             <IOCards input={input} output={output} />
           </div>
 
+          {/* (1b) 改写轨迹 L0 → L1 → L2（V16 恢复：代码高亮） */}
+          {buildRewriteChain(trace).length > 0 && (
+            <div
+              style={{
+                background: '#fff',
+                borderRadius: 8,
+                boxShadow: '0 1px 2px rgba(0,0,0,.03)',
+                padding: 20,
+                marginBottom: 16,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+                改写轨迹 (L0 → L1 → L2)
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {buildRewriteChain(trace).map((step, i) => (
+                  <div key={i} style={{ borderLeft: `3px solid ${step.color}`, paddingLeft: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: step.color, marginBottom: 4 }}>
+                      {step.layer}
+                    </div>
+                    <pre style={{
+                      margin: 0, padding: 10, background: '#0b1021', color: '#e6edf3',
+                      borderRadius: 6, fontSize: 12, fontFamily: '"JetBrains Mono", monospace',
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    }}>{step.text}</pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* (2) Agent 链路详情树 */}
           <div
             style={{
@@ -276,6 +307,26 @@ function buildWaterfallSpans(trace) {
   }
   // No real waterfall data — return empty; WaterfallChart should handle empty state
   return [];
+}
+
+/**
+ * Build rewrite trajectory (L0 → L1 → L2) for code-highlight display.
+ * Supports both array form (trace.rewriteChain) and flat fields (l0Input / l1Rewrite / l2Rewrite).
+ */
+function buildRewriteChain(trace) {
+  const colors = { L0: '#1677ff', L1: '#722ed1', L2: '#52c41a' };
+  const normalize = (s) => {
+    const layer = s.layer || s.title || 'STEP';
+    return { layer, color: colors[layer] || '#1677ff', text: s.text || s.content || '' };
+  };
+  if (Array.isArray(trace.rewriteChain) && trace.rewriteChain.length > 0) {
+    return trace.rewriteChain.map(normalize);
+  }
+  const steps = [];
+  if (trace.l0Input) steps.push({ layer: 'L0 原始请求', color: colors.L0, text: String(trace.l0Input) });
+  if (trace.l1Rewrite) steps.push({ layer: 'L1 改写', color: colors.L1, text: String(trace.l1Rewrite) });
+  if (trace.l2Rewrite) steps.push({ layer: 'L2 改写', color: colors.L2, text: String(trace.l2Rewrite) });
+  return steps;
 }
 
 export default TraceDetailModal;

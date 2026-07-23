@@ -467,8 +467,9 @@ function buildAgentTree(nodes) {
       addLLMCall(cur, 'L0-LLM', opName, span, '领域路由 LLM — 选择 L1 业务领域');
     } else if (opName.startsWith('L1-LLM1')) {
       addLLMCall(cur, 'L1-LLM1', opName, span, '上下文分类 — 识别 FOLLOW-UP / SWITCH-NEW / RESUME');
+      cur.hasLLM1 = true;
     } else if (opName.startsWith('L1-LLM2')) {
-      addLLMCall(cur, 'L1-LLM2', opName, span, '意图改写 + 意图识别 — 选择 L2（follow-up 时跳过）');
+      addLLMCall(cur, 'L1-LLM2', opName, span, '意图改写 + 意图识别 — 选择 L2');
       cur.hasLLM2 = true;
     } else if (opName.startsWith('L1:') || opName.startsWith('L1-')) {
       addLLMCall(cur, 'L1-LLM', opName, span, 'L1 路由 LLM');
@@ -477,12 +478,42 @@ function buildAgentTree(nodes) {
     }
   }
 
-  // follow-up 判定：L1 Agent 未经过 L1-LLM2
+  // follow-up 判定：后端在「无活跃 agent」时短路 return SWITCH，跳过 L1-LLM1（非 L1-LLM2）。
+  // 前端判定方向必须与后端一致：L1 Agent 若缺少 L1-LLM1，即为 follow-up / switch 短路场景。
   for (const a of agents) {
-    if (a.layer === 'L1' && !a.hasLLM2) a.isFollowUp = true;
+    if (a.layer === 'L1' && !a.hasLLM1) a.isFollowUp = true;
+  }
+
+  // 动态推导每个 Agent 的 LLM 构成描述（按真实子 span 列表，不再硬编码"含 2 个 LLM"）
+  for (const a of agents) {
+    a.desc = buildAgentDesc(a);
   }
 
   return agents;
+}
+
+/**
+ * 按 Agent 的真实子 LLM 调用列表动态推导描述文本。
+ * 修复 L1①：标题不再硬编码"含 2 个 LLM"，而是依据当前 span 子树真实包含的 LLM 调用数推导。
+ */
+function buildAgentDesc(agent) {
+  const n = agent.llmCalls != null ? agent.llmCalls.length : 0;
+  if (agent.layer === 'L0') {
+    return n > 0 ? `含 ${n} 个 LLM，用于找到合适的 L1（银行业务领域）` : '领域路由 LLM — 选择 L1（银行业务领域）';
+  }
+  if (agent.layer === 'L1') {
+    const parts = [];
+    if (agent.hasLLM1) parts.push('L1-LLM1 上下文分类');
+    if (agent.hasLLM2) parts.push('L1-LLM2 意图改写与识别（选 L2）');
+    if (parts.length === 0) {
+      return agent.isFollowUp ? '无 LLM 调用（后端短路 SWITCH，跳过 L1-LLM1）' : '无 LLM 调用';
+    }
+    return `含 ${n} 个 LLM：${parts.join(' + ')}`;
+  }
+  if (agent.layer === 'L2') {
+    return `业务执行 · 内部含 ${n} 个 LLM`;
+  }
+  return agent.desc || '';
 }
 
 function createAgent(layer, opName, span) {
@@ -511,6 +542,7 @@ function createAgent(layer, opName, span) {
     attributes: span.attributes || {},
     llmCalls: [],
     totalDurationMs: 0,
+    hasLLM1: false,
     hasLLM2: false,
     isFollowUp: false,
   };

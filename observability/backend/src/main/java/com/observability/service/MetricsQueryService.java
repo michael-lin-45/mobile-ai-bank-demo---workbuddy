@@ -229,6 +229,13 @@ public class MetricsQueryService {
         vo.setBusinessCompletionRate(completionRate);
         if (completionRate == null) fallbackMetrics.add("businessCompletion");
 
+        // ── Zone C 分层（M3 显式分层，V23 seed 值，非生产真实，见任务分解 R3）──
+        // 后端 agent.intent.accuracy 为综合口径，L0/L1 分层演示值由 V23 统一注入，
+        // 前端 Zone C / 诊断摘要 4 卡据此显式展示「综合 + L0 / L1」与「改写 L1」。
+        vo.setIntentAccuracyL0(98.2);
+        vo.setIntentAccuracyL1(94.2);
+        vo.setRewriteAccuracyL1(91.5);
+
         // ── Zone D: 业务效果 ──
         // D1 调整：业务转化率依赖外部业务系统（转化/到达语义）输入，Core 无该埋点，
         // 无法真实计算 → 与违规率(violationRate)一致，返回 null，前端展示"暂无"。

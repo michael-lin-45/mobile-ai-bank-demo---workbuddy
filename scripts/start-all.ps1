@@ -314,7 +314,7 @@ Set-Location $OBS_BACKEND_PATH
 
 # 编译后端 (确保最新代码生效)
 Write-Host "  编译可观测后端..." -ForegroundColor DarkGray
-$compileCmd = "cd '$OBS_BACKEND_PATH'; .\mvnw.cmd clean package -DskipTests -q"
+$compileCmd = "cd '$OBS_BACKEND_PATH'; .\mvnw.cmd clean package -Dmaven.test.skip=true -q"
 $compileBytes = [System.Text.Encoding]::Unicode.GetBytes($compileCmd)
 $compileB64 = [Convert]::ToBase64String($compileBytes)
 $compileProc = Start-Process powershell -ArgumentList "-NoProfile", "-EncodedCommand", $compileB64 -WindowStyle Hidden -Wait -PassThru

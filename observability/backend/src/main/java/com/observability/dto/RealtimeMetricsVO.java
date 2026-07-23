@@ -71,6 +71,14 @@ public class RealtimeMetricsVO {
     @JsonProperty("completionRate")
     private Double businessCompletionRate;
 
+    // ── Zone C 分层（M3 显式分层，V23 seed 值，非生产真实，见 R3）──
+    /** 意图识别综合正确率 L0 分层 (0.982 = 98.2%) */
+    private Double intentAccuracyL0;
+    /** 意图识别综合正确率 L1 分层 (0.942 = 94.2%) */
+    private Double intentAccuracyL1;
+    /** 意图改写正确率 L1 分层 (0.915 = 91.5%) */
+    private Double rewriteAccuracyL1;
+
     // ── Zone D 业务效果（新增3个）──
     /** 业务转化率 */
     @JsonProperty("conversionRate")
@@ -176,6 +184,15 @@ public class RealtimeMetricsVO {
     public void setRerouteRate(Double rerouteRate) { this.rerouteRate = rerouteRate; }
     public Double getBusinessCompletionRate() { return businessCompletionRate; }
     public void setBusinessCompletionRate(Double businessCompletionRate) { this.businessCompletionRate = businessCompletionRate; }
+
+    // ── Zone C 分层 Getters/Setters（M3）──
+
+    public Double getIntentAccuracyL0() { return intentAccuracyL0; }
+    public void setIntentAccuracyL0(Double intentAccuracyL0) { this.intentAccuracyL0 = intentAccuracyL0; }
+    public Double getIntentAccuracyL1() { return intentAccuracyL1; }
+    public void setIntentAccuracyL1(Double intentAccuracyL1) { this.intentAccuracyL1 = intentAccuracyL1; }
+    public Double getRewriteAccuracyL1() { return rewriteAccuracyL1; }
+    public void setRewriteAccuracyL1(Double rewriteAccuracyL1) { this.rewriteAccuracyL1 = rewriteAccuracyL1; }
 
     // ── Zone D Getters/Setters ──
 
