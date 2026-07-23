@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="760" viewBox="0 0 1120 760" font-family="Segoe UI, Arial, sans-serif" font-size="13">
+<defs><marker id="arw" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#555"/></marker><marker id="arwdot" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#c0392b"/></marker></defs>
+<rect x="0" y="0" width="1120" height="760" fill="#ffffff"/>
+<rect x="30" y="55" width="340" height="470" rx="10" fill="#eaf2fb" stroke="#9bbce0" stroke-width="1.5"/>
+<text x="42" y="77" font-weight="bold" fill="#234">Core 8080</text>
+<rect x="700" y="55" width="360" height="430" rx="10" fill="#fdeef0" stroke="#9bbce0" stroke-width="1.5"/>
+<text x="712" y="77" font-weight="bold" fill="#234">Backend 9090</text>
+<line x1="198" y1="118" x2="198" y2="128" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<line x1="198" y1="166" x2="198" y2="176" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<line x1="198" y1="166" x2="198" y2="272" stroke-dasharray="6 4" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arwdot)"/>
+<rect x="152" y="210" width="117" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="198" y="223" text-anchor="middle" font-size="11" fill="#c0392b">setWithHeldSpan</text>
+<line x1="198" y1="214" x2="198" y2="224" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="152" y="210" width="82" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="198" y="223" text-anchor="middle" font-size="11" fill="#555">ChatClient</text>
+<line x1="348" y1="243" x2="400" y2="172" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="328" y="198" width="96" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="374" y="212" text-anchor="middle" font-size="11" fill="#555">llm.* + span</text>
+<line x1="198" y1="262" x2="198" y2="272" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="152" y="258" width="103" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="198" y="271" text-anchor="middle" font-size="11" fill="#555">attach/commit</text>
+<line x1="198" y1="382" x2="198" y2="392" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<line x1="348" y1="363" x2="400" y2="172" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="328" y="258" width="61" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="374" y="272" text-anchor="middle" font-size="11" fill="#555">agent.*</text>
+<line x1="348" y1="411" x2="400" y2="172" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="328" y="282" width="82" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="374" y="296" text-anchor="middle" font-size="11" fill="#555">deepflux.*</text>
+<line x1="198" y1="118" x2="198" y2="464" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="152" y="282" width="103" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="198" y="295" text-anchor="middle" font-size="11" fill="#555">doOnTerminate</text>
+<line x1="348" y1="483" x2="718" y2="243" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="487" y="354" width="159" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="533" y="367" text-anchor="middle" font-size="11" fill="#555">POST /api/v1/sessions</text>
+<line x1="525" y1="194" x2="525" y2="360" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="479" y="268" width="40" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="525" y="281" text-anchor="middle" font-size="11" fill="#555">OTLP</text>
+<line x1="650" y1="382" x2="718" y2="99" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="638" y="232" width="75" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="684" y="244" text-anchor="middle" font-size="11" fill="#555">OTLP json</text>
+<line x1="878" y1="118" x2="878" y2="128" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<line x1="878" y1="166" x2="878" y2="176" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<line x1="878" y1="166" x2="878" y2="320" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="832" y="234" width="131" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="878" y="247" text-anchor="middle" font-size="11" fill="#555">spans/metrics_agg</text>
+<line x1="878" y1="166" x2="878" y2="272" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="832" y="210" width="68" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="878" y="223" text-anchor="middle" font-size="11" fill="#555">hot keys</text>
+<line x1="878" y1="262" x2="878" y2="320" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="832" y="282" width="110" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="878" y="295" text-anchor="middle" font-size="11" fill="#555">sessions/turns</text>
+<line x1="878" y1="500" x2="878" y2="118" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<rect x="832" y="300" width="40" height="18" rx="4" fill="#fff" stroke="#ddd"/>
+<text x="878" y="313" text-anchor="middle" font-size="11" fill="#555">/api</text>
+<rect x="48" y="80" width="300" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="198" y="103" text-anchor="middle" fill="#222">BankController.chat()</text>
+<rect x="48" y="128" width="300" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="198" y="151" text-anchor="middle" fill="#222">DomainRouter.route()  L0 span</text>
+<rect x="48" y="176" width="300" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="198" y="199" text-anchor="middle" fill="#222">L1/L2 DomainService / SubGraph</text>
+<rect x="48" y="224" width="300" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="198" y="247" text-anchor="middle" fill="#222">ObsChatModel (ChatModel)</text>
+<rect x="48" y="272" width="300" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="198" y="295" text-anchor="middle" fill="#222">AgentSpanContext (held-span)</text>
+<rect x="48" y="344" width="300" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="198" y="367" text-anchor="middle" fill="#222">ObservabilityMetrics (agent.*)</text>
+<rect x="48" y="392" width="300" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="198" y="415" text-anchor="middle" fill="#222">MetricsRegistry (deepflux.*)</text>
+<rect x="48" y="464" width="300" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="198" y="487" text-anchor="middle" fill="#222">SessionBridge.reportSession()</text>
+<rect x="400" y="150" width="250" height="44" rx="6" fill="#fff7e6" stroke="#d9a441" stroke-width="1.5"/>
+<text x="525" y="176" text-anchor="middle" fill="#222">OTel Java Agent -javaagent</text>
+<rect x="400" y="360" width="250" height="44" rx="6" fill="#fff7e6" stroke="#d9a441" stroke-width="1.5"/>
+<text x="525" y="386" text-anchor="middle" fill="#222">Collector 4318</text>
+<rect x="718" y="80" width="320" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="878" y="103" text-anchor="middle" fill="#222">OtlpV1Receiver /v1/*</text>
+<rect x="718" y="128" width="320" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="878" y="151" text-anchor="middle" fill="#222">OtlpParserService</text>
+<rect x="718" y="176" width="320" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="878" y="199" text-anchor="middle" fill="#222">SpanDurationNormalizer</text>
+<rect x="718" y="224" width="320" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="878" y="247" text-anchor="middle" fill="#222">SessionService</text>
+<rect x="718" y="272" width="320" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="878" y="295" text-anchor="middle" fill="#222">Redis hot layer</text>
+<rect x="718" y="320" width="320" height="38" rx="6" fill="#fff" stroke="#888" stroke-width="1.5"/>
+<text x="878" y="343" text-anchor="middle" fill="#222">H2 warm layer</text>
+<rect x="718" y="500" width="320" height="44" rx="6" fill="#fff7e6" stroke="#d9a441" stroke-width="1.5"/>
+<text x="878" y="526" text-anchor="middle" fill="#222">Frontend 3000</text>
+<line x1="40" y1="720" x2="70" y2="720" stroke="#555" stroke-width="1.5" marker-end="url(#arw)"/>
+<text x="78" y="724" fill="#333">调用 / 上报</text>
+<line x1="180" y1="720" x2="210" y2="720" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arwdot)"/>
+<text x="218" y="724" fill="#c0392b">held-span 托管回写（虚线）</text>
+</svg>
