@@ -10,13 +10,14 @@
 >   - 新增 §15 0718 整改汇总（已完成清单 + 待做 Backlog + GAP分析-v2 引用）。
 >   - **0719 补充**：新增 §14.8 FAQ & 术语表（tail_sampling 为何仅用于 trace、Collector 5 个 processor 详解）；同步见交付报告 §11.1。
 >   - **除上述增量外，全文档结构、架构图、代码示例、设计表、指标矩阵全部保持 0711 原样不动。**
+>   - **V23（0719 后设计评审增量）**：基于《可观测DEMO-v23-智能诊断-WorkBuddy.html》设计评审，统一沉淀 V20→V23 全部变更、需叠加到代码的功能优化点、新指标需求与排期增量，见 **§17（V23 变更与设计补强）**；排期增量见《可观测V4-交付排期-0719.md》§⑥。
 > 适用范围：移动 AI 银行 Demo（Core 8080 → OTel Collector 4318 → Backend 9090 / H2+Redis → React 前端 + 自研大屏 v20）
 > 合并依据：`docs/可观测设计方案差异分析-WorkBuddy-V3版本比较.md`（8 处分歧逐项比对）
 > 外部文章依据：`docs/外部参考文章与自有方案对比分析.md`（15 篇微信文章，P1–P22 分级，§8.5 Demo/生产分界表）
 > 整改明细：`docs/代码审阅整改总结-2026-07-18.md`（T22–T35 共 12 项修复详情）
 > 指标审计：`docs/指标GAP分析-v2.md`（684 行详细审计，含 §8.1–§8.18 逐轮修复记录）
 > 生产完整版：`docs/可观测优化总结-WorkBuddy-V6-生产上线版-0718.md`
-> 设计稿：`observability/frontend/可观测DEMO-v20-WorkBuddy.html`
+> 设计稿（前端）：`observability/frontend/可观测DEMO-v20-WorkBuddy.html`（V20 基线）｜`observability/frontend/可观测DEMO-v23-智能诊断-WorkBuddy.html`（**V23 最新设计稿**，见 §17）
 > 组件选型最优组合：**Alloy(采集) + Tempo(Trace) + VictoriaMetrics(指标) + Loki(日志) + Grafana(统一看板&告警)** —— 全 Grafana 系五件套，一套心智、一套告警、一套权限。
 
 ---
@@ -1299,11 +1300,109 @@ Langfuse 经 OTel OTLP 消费同一份遥测，**无需改业务代码**，业�
 
 ---
 
-> 文档版本：0711 · WorkBuddy V4 · web文章合入 → **0718 刷新**（以 V4-web 原文为基底，仅刷新整改状态 + 追加 §14.6/§14.7/§15 + §16 补录）
-> 融合路径：WorkBuddy V2 + Codex V2 → WorkBuddy V3 + Codex V3 → V4 → web文章合入 → **0718 刷新**
+## 17. V23（0719 后增量）变更与设计补强
+
+> 依据：《可观测DEMO-v23-智能诊断-WorkBuddy.html》设计评审 + 主理人「设计评审 + 文档刷新」任务（PM：许清楚，2026-07-19 后）。本节将 DEMO V20→V23 的全部修改点统一沉淀，并厘清「哪些是纯 DEMO 视觉、哪些需叠加到现有代码（真实定义·埋点·采集·入库）」。排期增量见《可观测V4-交付排期-0719.md》§⑥；新指标全量定义见 §17.4。
+
+### 17.1 V23 变更摘要（14 变更点归类）
+
+| 维度 | 变更点（V20→V23） | 变化类型 |
+|---|---|---|
+| 总览大屏重构 | 删除 数据健康卡片 + 顶部数据健康 pill；删除 请求&Token 趋势 chart；删除 Agent 分布图；删除 性能瓶颈详情表；删除 底部 性能瓶颈下钻·慢调用 TopN 表（整合进诊断摘要）；新增 诊断摘要 4 卡（性能瓶颈 2 / 准确率风险 3 / 转化流失 1 / 满意度 4.1，可点击下钻）；现总览 = 诊断摘要 → Zone A-E | 重构（删除 + 新增） |
+| Zone D 业务效果 | 重建为 3 卡：① 业务完成率 87.6%（第 1 位）② **业务引导办理次数 1,284 次（新增 · mbank_card_click）** ③ **转人工次数 96 次（新增 · mbank_human_click）**；数据接入状态表新增 2 行埋点字段定义 | 重构（含 2 新埋点） |
+| Zone C 语义质量 | 改名 + 全文统一：意图识别**综合**正确率（sub 显式 L0 98.2% · L1 94.2% 分层）/ 意图改写正确率（L1 平均）/ **重路由比率（Reroute）**（原「Reroute 率」改名，全文 4 处统一） | 改名 + 增强 |
+| AI 洞察整合 | 原独立「智能洞察」页合并进 AI 洞察作为第 1 个 TAB「智能诊断」（诊断摘要条 + TOP5 优先行动 + 三列诊断卡 + 瓶颈可视化 + 条件触发区）；AI 洞察现共 7 个 TAB | 合并 / 新增 TAB |
+| 外部调用 TAB | 原「智能体/工具」TAB 改名「外部调用」；Segmented：全部 / RAG / 工具函数 / SKILL / MCP；统一调用记录表含 MCP 行聚合；MCP 行内容复制到统一记录 | 重构 + 改名 |
+| 漏斗优化 | 分阶段放弃率阈值着色 + 高亮最大值；流失会话特征画像 3 表美化；漏斗图宽度收窄 + 放弃率气泡上移（避免与黑色数字重叠） | 重构（视觉/逻辑） |
+| 性能 TAB | Agent 维度 / LLM 维度 差异化：两个 Segmented 的 KPI 行与表格列不同（Agent 维度含错误率/取消率/慢调用占比/瓶颈；LLM 维度含 TTFT/TPOT/失败率/场景） | 增强 / 差异化 |
+| MCP 调用明细 | 设计为完整表单（crm.getCustomer / risk.evaluate / ots.sendCode / doc.generateReceipt），填充银行场景演示数据 | 新增（DEMO 占位） |
+| RAG 子面板 | 背景由浅绿改为正常卡片背景 | 视觉 |
+| 其他视觉/行为 | 删除「智能体调用统计（按子图）」chart（判定不必要）；优先行动建议 TOP5 紧凑化（右侧紧急程度/次数/去 XX TAB 由垂直堆叠改水平排版，行高降低）；会话回放详情页 trace 超链接补齐（6 处 `sw('trace')` → `openTraceDetail('具体traceID')`）；链路详情弹窗恢复为 V16（原始输入/最终输出双栏 + L0→L1→L2 改写对比 + Span 瀑布图 + 代码高亮） | 删除 / 视觉 / 行为修复 |
+
+### 17.2 V20↔V23 能力增量对照
+
+| 能力项 | V20 | V23 | 增量类型 |
+|---|---|---|---|
+| 总览诊断摘要 | AI 健康概览四卡（紫渐变，链接智能洞察页）+ 底部慢调用 TopN 表 | 诊断摘要 4 卡（直接下钻 AI 洞察 TAB）+ 慢调用 TopN 整合进摘要 | 整合 / 下钻直达 |
+| Zone 数量 | A/B/C/D（4 区） | A/B/C/D/**E（新增 E 知识检索 RAG 3 卡）** | 新增 Zone |
+| Zone D 卡片 | 业务完成率 + 违规率（待接入） | 业务完成率 + **业务引导办理次数** + **转人工次数**（2 新埋点卡） | 新增 2 指标 |
+| AI 洞察 TAB | 6 TAB（准确率/性能/智能体·工具/漏斗/Token/满意度）+ 独立智能洞察页 | **7 TAB**（智能诊断 + 原 6 TAB 重排，智能体·工具 → 外部调用） | 新增 TAB + 合并页 |
+| 外部调用 | 智能体/工具 单一视图 | 统一 InvocationRecord（全部/RAG/工具/SKILL/MCP）+ MCP per-tool 明细 | 架构整合 + 新增 MCP |
+| 意图正确率 | 意图识别准确率（L0/L1 同表） | 意图识别**综合**正确率（**显式 L0/L1 分层 sub**） | 展示增强 |
+| 重路由 | Reroute 率 | **重路由比率（Reroute）**（全文 4 处统一改名） | 命名统一 |
+| 链路详情弹窗 | （缺失 V16 双栏） | 恢复 V16：原始输入/最终输出 + L0→L1→L2 改写对比 + 瀑布 + 高亮 | 恢复 |
+| 会话↔链路下钻 | 会话回放 trace 链接走页面切换 | 6 处直接 `openTraceDetail(traceID)` 打开对应弹窗 | 行为修复 |
+
+### 17.3 需叠加到现有代码的功能优化点清单（DEMO→真实）
+
+> 下列 V23 当前仅为 DEMO 数值/占位，需真实定义·埋点·采集·入库·聚合后才能成为真实能力（区别于「纯 DEMO 视觉」的 UI 布局/样式调整）。
+
+| # | 功能优化点 | 当前 V23 状态 | 需叠加的数据链路 | 涉及改动范围 | 优先级 |
+|---|---|---|---|---|---|
+| F1 | **业务引导办理次数**（mbank_card_click） | DEMO 1,284 次 · 标「待埋点接入」 | 前端埋点发射 → 后端聚合端点（维度 session_id/trace_id/agent/card_type）· count 入库 | 前端埋点 + 后端聚合 Service/端点 + 数据接入状态表加 1 行 | 高 |
+| F2 | **转人工次数**（mbank_human_click） | DEMO 96 次 · 标「待埋点接入」 | 同上（维度 session_id/trace_id/agent） | 同 F1 | 高 |
+| F3 | **MCP 调用明细（per-tool）** | DEMO 演示例子（crm.getCustomer 等 4 工具）· 非生产数据 | Core 接入 MCP client → 发射 tool_calls(type=MCP, toolName) → 后端 ToolStatsService 按 toolName 聚合 | Core MCP client + 后端聚合 + 前端外部调用 TAB MCP 子页 | 高（后端主体） |
+| F4 | **意图识别综合正确率（L0/L1 分层）** | 数据已有（L0 98.2%/L1 94.2%），仅前端未显式分层展示 | 后端 computeIntentAccuracy 按 layer 聚合（Core 已发射 layer tag，P0 已闭环）→ 前端 L0/L1 sub 展示 | 后端（轻，复用已有）+ 前端准确率 TAB/Zone C | 中 |
+| F5 | **重路由比率（Reroute）启用** | 数据已有（14.2%），前端仍标「待 Core 发射」 | 解除占位角标 + 启用告警（reroute>20%，§4.6 已有规则骨架） | 前端解除占位 + 告警规则激活 | 中 |
+| F6 | **会话回放 trace 跳转关联** | 设计 6 处 openTraceDetail(id)，待前端实现 | 前端行为改造（sw('trace')→openTraceDetail('id')）；session_turns.trace_id 已落库 | 前端会话回放页 | 中 |
+| F7 | **外部调用统一 InvocationRecord 抽象** | 统一表设计（含 MCP 行聚合） | 后端整合 tool_calls / deepflux.rag.* / agent.skill.outcome + MCP（F3） | 后端抽象 Service + 前端 4 Segmented | 中 |
+| F8 | **RAG 检索质量（Zone E 3 指标）** | dev 链路真值（45ms/64%/0.82），待生产接入 | Core RAG 链路已埋 deepflux.rag.*（0719 提交）；Zone E 为新增前端展示 | 前端 Zone E + Core RAG 生产接入 | 中（依赖 RAG 链路） |
+
+> **纯 DEMO 视觉（UI 布局/样式/文案，不新增数据管线，不单列功能优化点）**：总览大屏重构布局、Zone C 改名全文统一、AI 洞察合并为智能诊断 TAB、TOP5 水平紧凑化、漏斗阈值着色/高亮/气泡、性能 TAB 维度差异化视觉、RAG 子面板背景、链路详情弹窗恢复（V16，数据已有）、删除子图 chart。
+
+### 17.4 新指标需求概述（全量定义见交付3）
+
+| 指标 | 计算口径（分子/分母） | 数据来源 | 采集方式 | 粒度 |
+|---|---|---|---|---|
+| 业务完成率 | success / (success+fail) | H2 agent.business.outcome（已接通） | 无需新埋点 | 会话级 / 6h 聚合 |
+| 业务引导办理次数 | count(mbank_card_click) | 前端埋点 | **前端埋点 + 后端聚合** | 事件级 / 6h·天 |
+| 转人工次数 | count(mbank_human_click) | 前端埋点 | **前端埋点 + 后端聚合** | 事件级 / 6h·天 |
+| 意图识别综合正确率（L0/L1） | 分层 count(predicted==actual)/count(请求) | H2 agent.intent.accuracy（layer tag） | 无需新埋点（P0 已闭环） | 请求级(layer) / 6h |
+| 意图改写正确率（L1） | count(rewrite_correct)/count(rewrite_total) | H2 agent.rewrite.accuracy | 无需新埋点 | 改写事件级 |
+| 重路由比率（Reroute） | count(reroute_triggered)/count(请求) | H2 agent.reroute.count（P0 已闭环） | 无需新埋点（启用展示+告警） | 请求级 / 6h |
+| MCP 调用明细（per-tool） | 按 toolName 聚合 调用/成功/失败/avg/P95/错误率 | Core MCP client → tool_calls | **Core 接入 + 发射** | 调用事件级 |
+| RAG 检索质量（3 指标） | P95 时延 / Top-K 命中率 / Top-K 相关性 | deepflux.rag.*（dev 真值） | Core RAG 链路已埋 | 检索事件级 |
+
+### 17.5 整改范围与排期衔接
+
+- **AI 洞察 7 TAB 整改范围**：前端 `AIInsightsPage`（新增智能诊断 TAB cockpit + 准确率 L0/L1 分层 + 性能双 Segmented + 外部调用 TAB/Segmented/统一表 + 漏斗视觉 + TOP5 紧凑）、`DashboardPage`（总览重构）、`SessionReplay`/`TraceDetail`（trace 跳转 + V16 弹窗）；后端 `InsightsEngineService`（诊断摘要/条件触发，扩展 T-A）、`InvocationRecord` 抽象（F7）、MCP 聚合（F3）。
+- **排期增量**：见《可观测V4-交付排期-0719.md》**§⑥ V23 设计评审后待开工增量**，含新指标全链条（F1–F3/F8）、AI 洞察业务逻辑落地（7 TAB + 智能诊断）、UI 更新（总览/漏斗/链路弹窗），并给出各任务人天、依赖与实现顺序。
+
+---
+
+## 18. W2/W3 遗留开发任务与 BUG（0722 补录）
+
+> 来源：2026-07-20~23 工作日志 + 代码核对。详细根因、修复方案与净新增人日见《可观测V4-详细设计-0719.md》§9；本节仅作摘要与状态对照，避免与 V23 设计评审的 M 系列重复计数。
+
+### 18.1 遗留 BUG（待修，未计入 V23 M 系列，净新增 ≈1.3 人日）
+- **B-A** Trace L1-LLM1 缺失 + 前端标题错位：`ContextRouter.java:67-75`「无活跃 agent」短路直接 `return SWITCH` 不发起 LLM → ObsChatModel 不产 L1-LLM1 span；前端 `SpanTree.jsx:495` 硬编码"含 2 个 LLM"标题与真实子列表错位。**0722 已选方案 A（前端推导，不放松后端短路），优先排期（前端 0.3 人日）。**
+- **B-B** ~~Trace L2 多余首个 L2-LLM span~~（**0722 重新定性：非BUG·已闭环**）：`cancelAwareAsk`(L414-417) 调用 `detectCancelFromInput` 早已注释（dedup 完成）；`:373` 位于 `cancelAwareExtractParams` 的取消拦截，**功能必需不可注释**；`detectCancelFromInput`(L247-318) 仍被 :373 调用、**非死代码**；L2 出现的 `L2:<graph>-cancelCheck` span 系关键字未命中时的 LLM 兜底分支，属**设计预期**。结论：无需修改（用户 0722 确认）。
+- **B-C** ~~瀑布图层级嵌套不成立~~（**0722 重新定性：上游根因已修复**）：根因是 WebFlux 未启用 Reactor 自动上下文传播，已随 W3 附录 A.4（commit `130a62c` `OtelContextConfig` 启用 `Hooks.enableAutomaticContextPropagation()`）修复，手写 span 的 parent 自此正确。**用户 0722 确认嵌套规则=关系型**：L0/L1/L2 逻辑平级（各为 band），仅 Agent 内部的 LLM/RAG/MCP/SKILL 调用作为调用方子 span 嵌套；未来 RAG/MCP/SKILL 调用须按此规则包成嵌套 span（随 M11 落地）。
+- **B-D** `start-all.ps1` 编译段 `-DskipTests` 回归阻断：`clean package -DskipTests` 只跳测试执行不跳测试编译，改了 `@Service` 构造器签名漏改测试 `new` 即 BUILD FAILURE 直接进清理。待办（编译段改 `-Dmaven.test.skip=true`）。
+
+### 18.2 遗留功能缺口（已映射 V23 M 系列，不重复计数）
+- SKILL 后端查询服务缺失（已落库无前端服务）→ **M5 外部调用 TAB**；
+- MCP 完全未实现（前端误标占位）→ **M10 MCP per-tool**；
+- RAG 生产 chat 链路未接 RagPipeline（仅 dev 端点触发）→ **M11 RAG**；
+- RAG 触发率埋点缺失（无 `deepflux.rag.trigger.count`）→ **M11 子项**。
+- 设计评审核心结论：**V23 演示稿"待接入"4 项实为已连线**（重路由比率 / 业务完成率 / 意图识别综合正确率 L0-L1 / 意图改写正确率 L1），真新增仅 `mbank_card_click` + `mbank_human_click` 两埋点 + MCP `category=mcp` tag。
+
+### 18.3 W3 增量（0720）收口交叉引用（用户 0722 确认：此后不再单独查阅 2 份 W3 文档）
+
+> W3 为**已完成收口**冲刺，规划/设计/验收/交付四件套：《可观测V4-W3-增量PRD-0720.md》《可观测V4-W3-增量设计-0720.md》《可观测V4-W3验收记录-0720.md》《可观测V4-W3-交付报告-2026-07-20.md》。
+
+- **完成态**：R1 #3 测试强化（TC-E-002/TC-J-002 由 SKIP→PASS）、R2 P13 三层边界（已收口 + `InsightsEngineReadonlyTest` 4/4）、R3 P20 提示词版本化（已收口 + `PromptVersionServiceTest` 1/1）、R4 QA 全量验收（**121/111/0/10，0 FAIL**）、R5 交付报告已整合；EX-1 Langfuse / EX-2 #4 A类字段 均**已排除**。
+- **关键技术决策（已落地）**：Q1 死 key 诊断端点 `GET /api/v1/admin/diagnostics/dead-keys`（方案 a，只读）；Q2 `pending_approval` ±1 复用「同 sessionId 二次 chat → resume→COMPLETED」契约（无独立审批端点），Gauge 经 Core 8080 `/actuator/metrics` 观测。
+- **人日下修**：W3 5.5 → **4.0 人日**，已同步《可观测V4-交付排期-0719.md》§3.3。
+- **W3 收尾 5 项 BugFix**（W3 交付报告附录 A，属「W3 之后」）：时区统一北京（9 处，待提交）/ trace耗时+TTFT（`cac889b`）/ LLM路径去写死（`fe55228`）/ **WebFlux 上下文传播（`130a62c`，即 B-C 上游根因）** / start-all ECJ 硬化（`51612d0`）。其中 `130a62c` 直接闭环原 B-C。
+
+---
+
+> 文档版本：0711 · WorkBuddy V4 · web文章合入 → **0718 刷新** → **V23 增量（0719 后，见 §17）+ W2/W3 遗留（见 §18）**（以 V4-web 原文为基底，仅刷新整改状态 + 追加 §14.6/§14.7/§15 + §16 补录 + §17 V23 变更 + §18 遗留补录）
+> 融合路径：WorkBuddy V2 + Codex V2 → WorkBuddy V3 + Codex V3 → V4 → web文章合入 → **0718 刷新** → **V23 增量**
 > 差异分析：`docs/可观测设计方案差异分析-WorkBuddy-V3版本比较.md`
 > 外部文章：`docs/外部参考文章与自有方案对比分析.md`（15 篇，§1–§8）
 > 整改明细：`docs/代码审阅整改总结-2026-07-18.md`
 > 指标审计：`docs/指标GAP分析-v2.md`（684 行，§8.1–§8.18 逐轮修复记录）
 > 生产完整版：`docs/可观测优化总结-WorkBuddy-V6-生产上线版-0718.md`
-> 前端设计：`observability/frontend/可观测DEMO-v20-WorkBuddy.html`
+> 前端设计：`observability/frontend/可观测DEMO-v20-WorkBuddy.html`（V20 基线）｜`observability/frontend/可观测DEMO-v23-智能诊断-WorkBuddy.html`（V23 最新设计稿）
