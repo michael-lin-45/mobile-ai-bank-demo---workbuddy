@@ -170,7 +170,6 @@ const AGENT_PERF_COLUMNS = [
 ];
 
 const LLM_PERF_COLUMNS = [
-  { title: 'Agent', dataIndex: 'agent', key: 'agent', render: (t) => <span style={{ fontWeight: 600, fontSize: 13 }}>{t}</span> },
   { title: '模型', dataIndex: 'model', key: 'model', render: (m) => <Mono style={{ color: '#722ed1' }}>{m}</Mono> },
   { title: '调用', dataIndex: 'calls', key: 'calls', align: 'center', render: (v) => <Mono>{v?.toLocaleString()}</Mono> },
   { title: '总耗时', dataIndex: 'totalLatency', key: 'totalLatency', render: (v, r) => <BarCell value={v} max={1250} /> },
