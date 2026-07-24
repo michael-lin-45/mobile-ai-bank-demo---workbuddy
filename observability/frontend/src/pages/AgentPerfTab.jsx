@@ -3,6 +3,7 @@ import { Card, Table, Empty, Spin } from 'antd';
 import ApiErrorAlert from '../components/ApiErrorAlert';
 import BoxplotChart from '../components/charts/BoxplotChart';
 import ScatterChart from '../components/charts/ScatterChart';
+import InsightKpiCard from '../components/InsightKpiCard';
 import { fetchAgentPerformance } from '../api/client';
 
 /**
@@ -88,12 +89,12 @@ function AgentPerfTab() {
       </Card>
 
       <Spin spinning={loading}>
-        {/* KPI 卡片 ×4 */}
+        {/* KPI 卡片 ×4（共享 InsightKpiCard） */}
         <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
-          <KpiCard label={isAgent ? '总调用' : 'LLM 调用'} value={kpis.totalCalls != null ? String(kpis.totalCalls) : '—'} bg="#f0f5ff" />
-          <KpiCard label="平均耗时" value={kpis.avgLatency != null ? String(kpis.avgLatency) : '—'} unit="ms" bg="#f6ffed" />
-          <KpiCard label="平均错误率" value={kpis.errorRate != null ? String(kpis.errorRate) : '—'} unit="%" bg="#fff2f0" color="#ff4d4f" />
-          <KpiCard label="总 Token" value={kpis.totalTokens != null ? String(kpis.totalTokens) : '—'} bg="#f9f0ff" />
+          <InsightKpiCard label={isAgent ? '总调用' : 'LLM 调用'} value={kpis.totalCalls != null ? kpis.totalCalls : '—'} bg="#f0f5ff" />
+          <InsightKpiCard label="平均耗时" value={kpis.avgLatency != null ? kpis.avgLatency : '—'} unit="ms" bg="#f6ffed" />
+          <InsightKpiCard label="平均错误率" value={kpis.errorRate != null ? kpis.errorRate : '—'} unit="%" bg="#fff2f0" color="#ff4d4f" />
+          <InsightKpiCard label="总 Token" value={kpis.totalTokens != null ? kpis.totalTokens : '—'} bg="#f9f0ff" />
         </div>
 
         {/* 性能明细表 */}
@@ -138,20 +139,6 @@ function AgentPerfTab() {
           </Card>
         </div>
       </Spin>
-    </div>
-  );
-}
-
-/* ── KPI 卡片 ── */
-
-function KpiCard({ label, value, unit, bg, color }) {
-  return (
-    <div style={{ flex: 1, textAlign: 'center', padding: 10, background: bg, borderRadius: 6 }}>
-      <div style={{ fontSize: 11, color: 'rgba(0,0,0,.45)' }}>{label}</div>
-      <div style={{ fontFamily: '"JetBrains Mono", monospace', fontWeight: 700, fontSize: 18, color: color || 'rgba(0,0,0,.88)' }}>
-        {value}
-        {unit && <span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)', fontWeight: 400 }}>{unit}</span>}
-      </div>
     </div>
   );
 }

@@ -3,12 +3,12 @@
 """
 seed_and_verify.py — 统一播种 + 全栈验证脚本
 =============================================
-用途：先向 Core 播种 36 条中文对话数据，再对 Backend + Core 执行全栈 17 点验证。
+用途：先向 Core 播种 36 条中文对话数据，再播种 V23 业务埋点并对 Backend + Core 执行全栈约 20 点验证。
 用法：python scripts/seed_and_verify.py
 
 两阶段流程：
   Phase 1（播种）：检查 Core 在线 → 逐条发送 36 条对话 → 打印摘要 → 等待 3 秒
-  Phase 2（验证）：检查 Backend 在线 → 跑 12 个 Section 共 17 个验证点 → 打印最终结果
+  Phase 2（验证）：检查 Backend 在线 → 跑 15 个 Section 共约 20 个验证点 → 打印最终结果
 
 前置条件：
   - Core  运行在 http://127.0.0.1:8080
@@ -80,6 +80,19 @@ TURNS = [
     ("np5", "今天心情不错，想看看有什么好的理财产品", 4),
     ("np5", "我风险承受能力一般，推荐什么类型的基金", 4),
     ("np5", "谢谢，那就先关注一下混合型基金", 3),
+]
+
+# V23 业务埋点播种数据（M1/M2）
+BUSINESS_EVENTS = [
+    {"eventType": "mbank_card_click", "cardType": "transfer", "agent": "L0", "channel": "app"},
+    {"eventType": "mbank_card_click", "cardType": "fund", "agent": "L1", "channel": "app"},
+    {"eventType": "mbank_card_click", "cardType": "credit_card", "agent": "L1", "channel": "app"},
+    {"eventType": "mbank_card_click", "cardType": "transfer", "agent": "L0", "channel": "app"},
+    {"eventType": "mbank_card_click", "cardType": "fund", "agent": "L2", "channel": "app"},
+    {"eventType": "mbank_human_click", "source": "user_request", "agent": "L0", "channel": "app"},
+    {"eventType": "mbank_human_click", "source": "low_confidence", "agent": "L1", "channel": "app"},
+    {"eventType": "mbank_human_click", "source": "timeout", "agent": "L2", "channel": "app"},
+    {"eventType": "mbank_human_click", "source": "user_request", "agent": "L1", "channel": "app"},
 ]
 
 # ============================================================
@@ -160,6 +173,23 @@ def send(session_id, message):
         intent = d.get("intent", "?")
         content = (d.get("content") or "")[:38]
         return "[%s] %s - %s" % (status, intent, content)
+    except urllib.error.HTTPError as e:
+        return "[HTTP %s] %s" % (e.code, e.read().decode("utf-8", "replace")[:60])
+    except Exception as e:
+        return "[ERR] %s" % str(e)[:60]
+
+
+def seed_business_event(payload):
+    """POST 一条业务埋点到 Backend，返回结果摘要字符串"""
+    url = f"{BACKEND_BASE}/api/v1/business-events"
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=body,
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            d = json.loads(resp.read().decode("utf-8", "replace"))
+            return "[%s] %s" % (d.get("code", "?"), payload.get("eventType"))
     except urllib.error.HTTPError as e:
         return "[HTTP %s] %s" % (e.code, e.read().decode("utf-8", "replace")[:60])
     except Exception as e:
@@ -251,10 +281,28 @@ def _v_deepflux_metrics(data):
     return False, "未找到 deepflux.* 前缀指标"
 
 
+def _v_count_gt0(data):
+    """验证业务事件计数 > 0"""
+    code = data.get("code", -1)
+    d = data.get("data", None)
+    if code == 0 and isinstance(d, (int, float)) and d > 0:
+        return True, f"code=0, count={d}"
+    return False, f"code={code}, count={d}"
+
+
+def _v_agg_nonempty(data):
+    """验证聚合结果非空（list 长度 > 0）"""
+    code = data.get("code", -1)
+    d = data.get("data", None)
+    if code == 0 and isinstance(d, list) and len(d) > 0:
+        return True, f"code=0, rows={len(d)}"
+    return False, f"code={code}, data={'empty' if d == [] else d}"
+
+
 def phase2_verify():
-    """Phase 2: 全栈 17 点验证"""
+    """Phase 2: 全栈约 20 点验证"""
     print("\n" + "=" * 60, flush=True)
-    print("Phase 2: 全栈验证（12 Section / 17 验证点）", flush=True)
+    print("Phase 2: 全栈验证（15 Section / 约 20 验证点）", flush=True)
     print("=" * 60, flush=True)
 
     # 前置检查：Backend 是否在线
@@ -264,6 +312,18 @@ def phase2_verify():
         print(f"Backend 未启动，退出（{status}）", flush=True)
         sys.exit(1)
     print(f"Backend 在线：{status}\n", flush=True)
+
+    # 2.5 前置：播种 V23 业务埋点（依赖 Backend 已在线）
+    print("\n[前置播种] V23 业务埋点（9 条）...", flush=True)
+    be_ok = 0
+    for i, ev in enumerate(BUSINESS_EVENTS, 1):
+        full = dict(ev)
+        full["sessionId"] = "%s-be" % SEED_PREFIX
+        res = seed_business_event(full)
+        print("  [%02d/%02d] %-16s -> %s" % (i, len(BUSINESS_EVENTS), ev.get("eventType"), res), flush=True)
+        if res.startswith("[0]") or res.startswith("[HTTP"):
+            be_ok += 1
+    print("  业务埋点播种: %d/%d" % (be_ok, len(BUSINESS_EVENTS)), flush=True)
 
     has_skip = False
 
@@ -351,6 +411,23 @@ def phase2_verify():
     print("\n[Core 观测 - deepflux 指标注册]", flush=True)
     _print_line(check_json(f"{CORE_BASE}/actuator/metrics", "deepflux 指标", _v_deepflux_metrics,
                            "P6 集中式注册表未生效"))
+
+    # 13. V23 业务埋点 (M1/M2)
+    print("\n[V23 业务埋点 (M1/M2)]", flush=True)
+    _print_line(check_json(f"{BACKEND_BASE}/api/v1/business-events/count?event=mbank_card_click",
+                           "be-count(card_click)", _v_count_gt0))
+    _print_line(check_json(f"{BACKEND_BASE}/api/v1/business-events/count?event=mbank_human_click",
+                           "be-count(human_click)", _v_count_gt0))
+    _print_line(check_json(f"{BACKEND_BASE}/api/v1/business-events/agg?event=mbank_card_click&groupBy=card_type",
+                           "be-agg(card_click by card_type)", _v_agg_nonempty))
+
+    # 14. V23 Agent 性能 (Zone C 语义质量)
+    print("\n[V23 Agent 性能 (Zone C)]", flush=True)
+    _print_line(check_json(f"{BACKEND_BASE}/api/v1/ai/agent-performance", "agent-performance", _v_code0_data))
+
+    # 15. V23 转化漏斗
+    print("\n[V23 转化漏斗]", flush=True)
+    _print_line(check_json(f"{BACKEND_BASE}/api/v1/ai/conversion-funnel", "conversion-funnel", _v_code0_data))
 
     # 最终摘要
     print("\n" + "=" * 60, flush=True)

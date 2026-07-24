@@ -5,7 +5,7 @@
 
 端口规划（本地实际端口）:
   Redis     = 6379
-  Collector = 4318 (OTLP HTTP) + 8888 (Prometheus exporter)
+  Collector = 4318 (OTLP HTTP) + 8887 (Prometheus exporter)
   Backend   = 9090 (Spring Boot, H2)
   Core      = 8080 (Spring Boot, OTel Agent 注入)
   Frontend  = 3000 (Vite+React)
@@ -146,7 +146,8 @@ function global:Stop-AllServices {
 # 启动失败时，停止全部已启动服务后退出
 function Stop-AllAndExit {
   global:Stop-AllServices
-  pause
+  Write-Error "启动失败，已停止本次启动过程中已启动的服务。详情见上方日志。"
+  Start-Sleep -Seconds 5
   exit 1
 }
 
@@ -168,17 +169,18 @@ function global:Assert-NoEcjErrorClasses {
 }
 
 # ======================================
-# Ctrl+C 安全清理：中断时杀掉所有已启动的进程/服务
+# Ctrl+C 处置：仅做提示，不杀服务（服务在后台独立运行）
 # ======================================
 
 $global:CtrlC     = $false
 $global:CleanedUp = $false
 
-# 注册 Ctrl+C 处理：仅置标志位（不吞掉默认中断，finally 会执行清理）
-# 同时作为安全网，在事件作用域里直接调用清理（幂等，重复调用无害）
+# 注册 Ctrl+C 处理：仅置标志位 + 提示，绝不杀服务。
+# 所有服务均以 Start-Process -WindowStyle Hidden 脱离启动器独立运行，
+# 启动器退出（含 Ctrl+C、被任务管理器/工具杀掉）都不会停止它们。
 $null = Register-ObjectEvent -InputObject ([Console]) -EventName CancelKeyPress -Action {
   $global:CtrlC = $true
-  try { global:Stop-AllServices } catch { }
+  Write-Host "`n[启动器] 收到 Ctrl+C。所有服务继续在后台独立运行（已脱离本启动器），停止请另开终端运行 scripts/stop-all.ps1。" -ForegroundColor Cyan
 }
 
 # 包裹整段启动流程：Ctrl+C / 异常退出时，finally 中执行清理
@@ -223,8 +225,8 @@ $CORE_JAR         = "mobile-ai-demo-0.0.1-SNAPSHOT.jar"
 
 Write-Host "`n=== 0/6 环境检查 ===" -ForegroundColor Green
 Write-Host "  ROOT: $ROOT" -ForegroundColor DarkGray
-if (-not (Test-Path $REDIS_BIN)) { Write-Error "Redis 缺失: $REDIS_BIN"; pause; exit 1 }
-if (-not (Test-Path $REDIS_CLI)) { Write-Error "redis-cli 缺失: $REDIS_CLI"; pause; exit 1 }
+if (-not (Test-Path $REDIS_BIN)) { Write-Error "Redis 缺失: $REDIS_BIN"; Start-Sleep -Seconds 5; exit 1 }
+if (-not (Test-Path $REDIS_CLI)) { Write-Error "redis-cli 缺失: $REDIS_CLI"; Start-Sleep -Seconds 5; exit 1 }
 if (-not (Test-Path $AGENT_PATH)) { Write-Warning "  OTel Agent 缺失, 全链路将无法上报" }
 Write-Host "端口: Redis $REDIS_PORT / Collector $COLLECTOR_PORT(+$COLLECTOR_PROM) / Backend $OBS_PORT / Core $CORE_PORT / Frontend $FRONTEND_PORT"
 
@@ -314,12 +316,16 @@ Set-Location $OBS_BACKEND_PATH
 
 # 编译后端 (确保最新代码生效)
 Write-Host "  编译可观测后端..." -ForegroundColor DarkGray
-$compileCmd = "cd '$OBS_BACKEND_PATH'; .\mvnw.cmd clean package -Dmaven.test.skip=true -q"
+$compileCmd = "cd '$OBS_BACKEND_PATH'; .\mvnw.cmd clean package `"-Dmaven.test.skip=true`" -q *> '$OBS_BACKEND_PATH\compile.log'"
 $compileBytes = [System.Text.Encoding]::Unicode.GetBytes($compileCmd)
 $compileB64 = [Convert]::ToBase64String($compileBytes)
 $compileProc = Start-Process powershell -ArgumentList "-NoProfile", "-EncodedCommand", $compileB64 -WindowStyle Hidden -Wait -PassThru
 if ($compileProc.ExitCode -ne 0) {
   Write-Error "  后端编译失败 (ExitCode: $($compileProc.ExitCode))，请检查 Maven 输出"
+  if (Test-Path "$OBS_BACKEND_PATH\compile.log") {
+    Write-Host "  ----- compile.log 尾部 -----" -ForegroundColor Yellow
+    Get-Content "$OBS_BACKEND_PATH\compile.log" -Tail 50 | ForEach-Object { Write-Host "  $_" }
+  }
   Stop-AllAndExit
 }
 Write-Host "  后端编译完成" -ForegroundColor Green
@@ -373,12 +379,16 @@ $dnsJvmArgs = if ($DNS_SERVER) { "-Dreactor.netty.dns.nameservers=$DNS_SERVER -D
 
 # 编译核心系统 (确保最新代码生效)
 Write-Host "  编译核心系统..." -ForegroundColor DarkGray
-$coreCompileCmd = "cd '$CORE_PROJECT_PATH'; .\mvnw.cmd clean package -DskipTests -q"
+$coreCompileCmd = "cd '$CORE_PROJECT_PATH'; .\mvnw.cmd clean package `"-DskipTests`" -q *> '$CORE_PROJECT_PATH\compile.log'"
 $coreCompileBytes = [System.Text.Encoding]::Unicode.GetBytes($coreCompileCmd)
 $coreCompileB64 = [Convert]::ToBase64String($coreCompileBytes)
 $coreCompileProc = Start-Process powershell -ArgumentList "-NoProfile", "-EncodedCommand", $coreCompileB64 -WindowStyle Hidden -Wait -PassThru
 if ($coreCompileProc.ExitCode -ne 0) {
   Write-Error "  核心系统编译失败 (ExitCode: $($coreCompileProc.ExitCode))，请检查 Maven 输出"
+  if (Test-Path "$CORE_PROJECT_PATH\compile.log") {
+    Write-Host "  ----- core compile.log 尾部 -----" -ForegroundColor Yellow
+    Get-Content "$CORE_PROJECT_PATH\compile.log" -Tail 50 | ForEach-Object { Write-Host "  $_" }
+  }
   Stop-AllAndExit
 }
 Write-Host "  核心系统编译完成" -ForegroundColor Green
@@ -414,6 +424,10 @@ if (Wait-Url "http://127.0.0.1:$CORE_PORT/actuator/health" -MaxTries 60 -SleepSe
   Write-Host "  核心系统启动成功, 端口: $CORE_PORT (OTel Agent 已注入)" -ForegroundColor Green
 } else {
   Write-Warning "  核心系统健康检查超时, 请检查控制台日志"
+  if (Test-Path "$CORE_PROJECT_PATH\core.log") {
+    Write-Host "  ----- core.log 尾部 -----" -ForegroundColor Yellow
+    Get-Content "$CORE_PROJECT_PATH\core.log" -Tail 50 | ForEach-Object { Write-Host "  $_" }
+  }
   Stop-AllAndExit
 }
 Set-Location $ROOT
@@ -461,9 +475,13 @@ Write-Host "    Backend  : $OBS_BACKEND_PATH\backend.log" -ForegroundColor DarkG
 Write-Host "    Collector: $COLLECTOR_PATH\collector.log" -ForegroundColor DarkGray
 Write-Host "    Core     : $CORE_PROJECT_PATH\core.log" -ForegroundColor DarkGray
 Write-Host "    Frontend : $OBS_FRONTEND_PATH\frontend.log" -ForegroundColor DarkGray
-Write-Host "`n按任意键退出启动器, 服务继续在后台运行..."
-Write-Host "  (如需停止全部服务, 按 Ctrl+C 即可一键清理)" -ForegroundColor DarkGray
-try { $null = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") } catch { }
+Write-Host "`n启动器任务完成，正在退出。所有 5 个服务已在后台脱离启动器独立运行。" -ForegroundColor Green
+Write-Host "  关闭本窗口、终止启动器进程或按 Ctrl+C 都不会停止它们。" -ForegroundColor DarkGray
+Write-Host "  如需停止全部服务，请另开终端运行: scripts/stop-all.ps1" -ForegroundColor Cyan
 } finally {
-  if ($global:CtrlC) { global:Stop-AllServices }
+  # 关键修复：启动器退出（含 Ctrl+C / 被外部 kill）不再杀服务。
+  # 服务均以 Start-Process -WindowStyle Hidden 启动，独立于启动器进程树。
+  if ($global:CtrlC) {
+    Write-Host "[启动器] 已退出；后台服务（Redis/Collector/Backend/Core/Frontend）不受影响，停止请运行 scripts/stop-all.ps1。" -ForegroundColor Cyan
+  }
 }

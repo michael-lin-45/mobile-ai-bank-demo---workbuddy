@@ -414,32 +414,42 @@ public class TraceQueryService {
     }
 
     /**
-     * 计算 TTFT（首 Token 时延）= 从请求开始，到「最深层执行 Agent（L2 > L1 > L0）最终产出
-     * 完整回复的 answer span 首 TOKEN 起点」的时间差。
+     * 计算 TTFT（首 Token 时延）——加权公式。
      *
-     * <p>用户权威定义：TTFT 应累加中间各 Agent 层的处理耗时 + 最深层多次 LLM/RAG/MCP 调用中最终
-     * 回到 L0 的那一次「首 TOKEN」时间。整体等价于「请求起点 → 最深层最终 answer span 首 TOKEN」的
-     * 墙钟跨度（与逐层 TPOT+TOPT 累加数值相等），与最深层内部几次调用本身无关。
+     * <p><b>用户权威定义</b>：TTFT = Σ(中间层 Agent TPOT) + Σ(最深层非最终 LLM TOPT) + 最深层最终 LLM TTFT</p>
      *
-     * <p>实现要点：
+     * <p>流程：L0 → L1 → L2 三个 Agent 层，异常时可在任一层中断。取最深层 Agent（L2 &gt; L1 &gt; L0）
+     * 首次完整回复 span 的 TTFT，加中间路径上所有 Agent 的 TPOT。</p>
+     *
+     * <p><b>具体公式</b>（以 L2 为最深层、L2 内有 2 次 LLM 为例）：</p>
+     * <pre>TTFT = L0_TPOT + L1_TPOT + L2_LLM1_TOPT + L2_LLM2_TTFT</pre>
+     * <ul>
+     *   <li>L0_TPOT = L0 Agent span（如 DomainRouter）的墙钟耗时（duration）</li>
+     *   <li>L1_TPOT = L1 Agent span 的墙钟耗时（duration，非 LLM 调用 span）</li>
+     *   <li>L2-LLM1 TOPT = L2 第一次 LLM 调用的墙钟耗时（duration）</li>
+     *   <li>L2-LLM2 TTFT = L2 第二次 LLM 调用（最终产出完整回复那次）的 TTFT</li>
+     * </ul>
+     *
+     * <p><b>推广算法</b>：</p>
      * <ol>
-     *   <li>层级判定优先用 span 属性 {@code agent.layer}（Core 在 ObsChatModel / ObsReRanker /
-     *       ObsDocumentRetriever 中可靠写入 L0/L1/L2），其次回退到 operationName 前缀
-     *       （L2 / L1 / L0 / llm:）。{@code L2-LLM1}、{@code L1-LLM2} 等 LLM 调用 span 与对应层同 rank。</li>
-     *   <li>在最深层中选取「真正产出 TOKEN 的 answer span」（带 {@code llm.first_token_time} 或
-     *       {@code ai.token.output}，或 operationName 为 LLM 调用 span），取其中首 TOKEN 事件最晚者
-     *       —— 即最终回复那一次调用的首 TOKEN。这排除了末尾非答案的收尾 span，避免抓到 trace 尾部的
-     *       起点而夸大 TTFT（旧实现取「最晚开始的最深层 span」导致 2873ms 类错误）。</li>
-     *   <li>首 TOKEN 绝对时间：优先用 {@code llm.first_token_time} 属性；缺失时用该 span 自身
-     *       startTime 作为保守下界。</li>
-     *   <li>护栏：TTFT 必须 &gt; 0 且 ≤ trace 总时长；越界说明选错了 span，回退到 answer span
-     *       起点 − 请求起点（仍在 trace 内），仍无效则返回 null（前端显示 "-"）。</li>
+     *   <li>按 agent.layer 属性或 operationName 前缀确定每个 span 的层级 rank（L0=1, L1=2, L2=3）</li>
+     *   <li>找出最深层 rank（maxRank）</li>
+     *   <li>对每一非最深层（L0 .. maxRank-1）：取该层 Agent span 的总 duration，累加为中间路径 TPOT</li>
+     *   <li>最深层内：收集所有 LLM span 按 startTime 排序，取最晚开始者作为"最终 answer span"；
+     *       非最终 LLM span 的墙钟耗时（duration）累加为 TOPT；
+     *       最终 LLM span 取其自身的 TTFT（优先 llm.first_token_time 属性，缺失时用 span.startTime 作为保守下界）</li>
+     *   <li>TTFT = sum(中间层 TPOT) + sum(非最终 LLM TOPT) + 最终 LLM TTFT</li>
+     *   <li>护栏：结果必须 &gt; 0 且 ≤ trace 总时长；超过总时长时取 最终 LLM span.startTime − rootStart 为兜底（仍超则返回 null）</li>
      * </ol>
+     *
+     * <p><b>关键注意</b>：firstTokenAbsMs() 当前 Core 不写 llm.first_token_time 属性，实际总 fallback 到
+     * span.startTime —— 这意味着最终 LLM 的 TTFT 只有 span.startTime − rootStart（缺失了 span 自身内部的
+     * 首 token 延迟）。本次实现至少确保公式结构正确，数据缺位问题后续再治本。</p>
      */
     public Long computeTTFT(List<SpanEntity> spans) {
         if (spans == null || spans.isEmpty()) return null;
 
-        // 1) 请求时间基：HTTP 根 span（SERVER /api/bank/chat）；保持与旧逻辑一致
+        // 1) 请求时间基：HTTP 根 span
         SpanEntity rootSpan = null;
         for (var s : spans) {
             if (s.getParentSpanId() == null || s.getParentSpanId().isEmpty()) {
@@ -465,46 +475,59 @@ public class TraceQueryService {
         }
         if (maxRank <= 0) return null;
 
-        // 4) 最深层中选取 answer span（产出最终回复首 TOKEN 的那个）
-        SpanEntity answerSpan = null;
-        long bestFirstTokenAbs = -1;
-        boolean foundAnswer = false;
+        // 4) 中间层 TPOT：对 L0 .. maxRank-1 层，取 Agent span 的 duration 累加
+        long intermediateTpot = 0;
+        for (int layer = 1; layer < maxRank; layer++) {
+            SpanEntity agentSpan = findAgentSpanForLayer(spans, layer);
+            if (agentSpan != null && agentSpan.getDurationMs() != null && agentSpan.getDurationMs() > 0) {
+                intermediateTpot += agentSpan.getDurationMs();
+            }
+        }
+
+        // 5) 最深层：收集 LLM span 按 startTime 排序，最晚开始者为最终 answer span
+        List<SpanEntity> deepestLLMSpans = new ArrayList<>();
         for (var s : spans) {
-            if (layerRankOf(s) != maxRank) continue;
-            if (!isAnswerProducing(s)) continue;
-            foundAnswer = true;
-            long ft = firstTokenAbsMs(s, rootStart);
-            if (answerSpan == null || ft > bestFirstTokenAbs) {
-                answerSpan = s;
-                bestFirstTokenAbs = ft;
+            if (layerRankOf(s) == maxRank && isLLMSpan(s)) {
+                deepestLLMSpans.add(s);
             }
         }
-        // 兜底：最深层没有任何「产出 TOKEN」的 span（如仅有一个无 token 的 L2 包装 span），
-        // 则在最深层里取 startTime 最晚者作为近似。
-        if (!foundAnswer) {
-            for (var s : spans) {
-                if (layerRankOf(s) != maxRank) continue;
-                if (s.getStartTime() == null) continue;
-                long st = s.getStartTime().toEpochMilli();
-                if (answerSpan == null || st > bestFirstTokenAbs) {
-                    answerSpan = s;
-                    bestFirstTokenAbs = st;
-                }
+        deepestLLMSpans.sort(Comparator.comparing(s ->
+                s.getStartTime() == null ? Instant.EPOCH : s.getStartTime()));
+
+        if (deepestLLMSpans.isEmpty()) {
+            // 最深层无 LLM span → 用 Agent span 的 startTime 作为兜底
+            SpanEntity agentSpan = findAgentSpanForLayer(spans, maxRank);
+            if (agentSpan != null && agentSpan.getStartTime() != null) {
+                long fallback = agentSpan.getStartTime().toEpochMilli() - rootStart;
+                if (fallback > 0 && fallback <= totalDurationMs) return fallback;
+            }
+            return null;
+        }
+
+        // 非最终 LLM span（第一个到倒数第二个）的墙钟耗时累加 → TOPT
+        long nonFinalTopt = 0;
+        for (int i = 0; i < deepestLLMSpans.size() - 1; i++) {
+            SpanEntity s = deepestLLMSpans.get(i);
+            if (s.getDurationMs() != null && s.getDurationMs() > 0) {
+                nonFinalTopt += s.getDurationMs();
             }
         }
-        if (answerSpan == null) return null;
 
-        long ttft = bestFirstTokenAbs - rootStart;
+        // 最终 LLM span 的 TTFT
+        SpanEntity finalLLM = deepestLLMSpans.get(deepestLLMSpans.size() - 1);
+        long finalTTFT = firstTokenAbsMs(finalLLM, rootStart) - rootStart;
 
-        // 5) 护栏
+        // 6) 求和
+        long ttft = intermediateTpot + nonFinalTopt + finalTTFT;
+
+        // 7) 护栏
         if (ttft <= 0) return null;
         if (ttft > totalDurationMs) {
-            // 选错了 span（如抓到 trace 尾部泄漏 span）。回退到 answer span 自身起点 − 请求起点
-            // （必在 [0, totalDurationMs] 内），仍不合理则返回 null。
+            // 选错了 span 或某层 duration 畸大。回退到最终 LLM span 起点 − 请求起点
             log.debug("[TraceQuery] computeTTFT guardrail: ttft={}ms exceeds totalDuration={}ms, "
                     + "falling back to answer span start", ttft, totalDurationMs);
-            long safe = (answerSpan.getStartTime() != null)
-                    ? (answerSpan.getStartTime().toEpochMilli() - rootStart) : totalDurationMs;
+            long safe = (finalLLM.getStartTime() != null)
+                    ? (finalLLM.getStartTime().toEpochMilli() - rootStart) : totalDurationMs;
             return (safe > 0 && safe <= totalDurationMs) ? safe : null;
         }
         return ttft;
@@ -554,6 +577,49 @@ public class TraceQueryService {
         String op = s.getOperationName();
         if (op == null) return false;
         return op.startsWith("llm:") || op.contains("-LLM");
+    }
+
+    /**
+     * 判断 span 是否为 LLM 调用 span（非 Agent 包装 span）。
+     * 判定：operationName 包含 "-LLM" 或以 "llm:" 开头。
+     */
+    private boolean isLLMSpan(SpanEntity s) {
+        String op = s.getOperationName();
+        if (op == null) return false;
+        return op.contains("-LLM") || op.startsWith("llm:");
+    }
+
+    /**
+     * 查找指定层级（layerRank）的 Agent 包装 span（非 LLM 调用 span）。
+     * 优先取不含 "-LLM" 且不以 "llm:" 开头的 span；若该层没有纯 Agent 包装 span，
+     * 则回退到该层 duration 最大的任意 span。
+     *
+     * @param spans     所有 span 列表
+     * @param layerRank 目标层级 rank（L0=1, L1=2, L2=3）
+     * @return 该层的 Agent span，找不到返回 null
+     */
+    private SpanEntity findAgentSpanForLayer(List<SpanEntity> spans, int layerRank) {
+        SpanEntity best = null;
+        // 优先：非 LLM 的 Agent 包装 span
+        for (var s : spans) {
+            if (layerRankOf(s) != layerRank) continue;
+            if (isLLMSpan(s)) continue;
+            if (best == null || (s.getDurationMs() != null &&
+                    (best.getDurationMs() == null || s.getDurationMs() > best.getDurationMs()))) {
+                best = s;
+            }
+        }
+        // 回退：该层任意 span 中 duration 最大者
+        if (best == null) {
+            for (var s : spans) {
+                if (layerRankOf(s) != layerRank) continue;
+                if (best == null || (s.getDurationMs() != null &&
+                        (best.getDurationMs() == null || s.getDurationMs() > best.getDurationMs()))) {
+                    best = s;
+                }
+            }
+        }
+        return best;
     }
 
     /**

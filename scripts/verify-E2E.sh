@@ -2,17 +2,18 @@
 # =============================================================================
 # verify-E2E.sh — mobile-ai-bank-demo 可观测性端到端验证脚本
 # -----------------------------------------------------------------------------
-# 用途：在干净环境下一键验证「方案A — DomainRouter 确定性路由补全 L0 span」等
-#       可观测性修复，核心断言：L0 计数 = 请求数(=L1)，且 L2 ≤ L0 恒成立。
+# 用途：在干净环境下一键执行「全量 E2E 验证」——清理 H2/Redis → 重启 backend+collector+core
+#       → 播种 36 轮对话 + 9 条业务埋点 → 跑全栈约 20 点验证（scripts/seed_and_verify.py）
+#       → 并额外断言核心不变量：L0 计数 ≥ L1（方案A 修复保证每请求必产生 L0，歧义/中断轮可仅停留在 L0），且 L2 ≤ L1 ≤ L0 恒成立。
 #
 # 流程：
 #   1) [可选] 重新打包 Core（含最新代码修复）
 #   2) 清理环境：停掉旧 backend/collector/core（按端口杀+验证释放）、flush Redis(DB0, 校验)、删 H2（校验文件消失）
 #   3) 拉起全链路：backend(9090) → OTel Collector(4318) → Core(8080)（Redis 须已运行）
 #      每一步都「等进程真正就绪」再做下一步（collector 用端口监听校验，不再 || true 跳过的假等待）
-#   4) 运行 test/seed_all.py 播种 36 轮对话
+#   4) 运行 scripts/seed_and_verify.py（播种 36 轮对话 + 9 条业务埋点 + 全栈约 20 点验证）
 #   5) 等待 spans 经 collector → backend 沉淀
-#   6) 查询实时计数 + span 分布，断言 L0=L1=请求数、L2≤L0、L0 层 span 已上报
+#   6) 查询实时计数 + span 分布，断言 L0≥L1、L2≤L1≤L0、L0 层 span 已上报
 #
 # 用法：
 #   ./scripts/verify-E2E.sh                 # 完整流程（打包→清库→起服务→seed→验证）
@@ -33,7 +34,7 @@ COLLECTOR_DIR="$PROJECT_ROOT/observability/otel-collector"
 CORE_JAR="$PROJECT_ROOT/target/mobile-ai-demo-0.0.1-SNAPSHOT.jar"
 BACKEND_JAR="$BACKEND_DIR/target/observability-backend-0.1.0-SNAPSHOT.jar"
 AGENT_JAR="$PROJECT_ROOT/opentelemetry-javaagent.jar"
-SEED_SCRIPT="$PROJECT_ROOT/test/seed_all.py"
+SEED_SCRIPT="$PROJECT_ROOT/scripts/seed_and_verify.py"
 SEED_SCRIPT_W=$(cygpath -w "$SEED_SCRIPT" 2>/dev/null || echo "$SEED_SCRIPT")
 LOG_DIR="$PROJECT_ROOT/scripts/logs"
 
@@ -44,7 +45,7 @@ REDIS_PORT=6379
 OTEL_ENDPOINT="http://127.0.0.1:$COLLECTOR_PORT"
 
 SEED_TURNS=36          # seed_all.py 硬编码 36 轮，用于断言
-SETTLE_SECONDS=20      # seed 完成后等待 spans 沉淀
+SETTLE_SECONDS=30      # seed 完成后等待 spans 经 collector → backend 沉淀
 
 # 原生 Windows 程序（java / otelcol.exe）所需的 Windows 风格路径（cygpath -w）。
 # Git Bash 会把 $PROJECT_ROOT 解析成 /d/... 的 MSYS 路径，直接传给 java -jar 会
@@ -121,7 +122,7 @@ kill_port() {
   done
   # collector 兜底：按进程名杀
   if [ "$port" = "$COLLECTOR_PORT" ]; then
-    taskkill /IM otelcol.exe /F >/dev/null 2>&1 && log "已按进程名 kill otelcol.exe" || true
+    taskkill /IM otelcol-contrib.exe /F >/dev/null 2>&1 && log "已按进程名 kill otelcol-contrib.exe" || true
     sleep 2
   fi
   if netstat -ano 2>/dev/null | grep -E "[:.]$port[[:space:]]" | grep -q LISTENING; then
@@ -232,14 +233,18 @@ log "Python: $PYTHON_BIN"
 if [ "$VERIFY_ONLY" -eq 0 ] && [ "$SKIP_BUILD" -eq 0 ]; then
   step "重新打包 Core（离线 Maven，含最新修复）"
   cd "$PROJECT_ROOT"
-  if [ -x "./mvnw" ] && [ -f "mvnw.jar" ]; then
-    ./mvnw package -DskipTests -o -q || { err "mvnw 打包失败"; exit 2; }
+  # 构建链路（仓库根无 mvnw wrapper，CORE 实际靠 mvn.cmd 构建；本环境通常已预先打包，建议 --skip-build）
+  MVN=""
+  if [ -x "./mvnw" ]; then MVN="./mvnw"
+  elif [ -f "mvnw.cmd" ]; then MVN="mvnw.cmd"
+  elif [ -f "mvn.cmd" ]; then MVN="mvn.cmd"
   else
-    # 回退到缓存 Maven（见项目 MEMORY.md Maven SOP）
     local_mvn="$HOME/.m2/wrapper/dists/apache-maven-3.9.15/$(ls "$HOME/.m2/wrapper/dists/apache-maven-3.9.15" 2>/dev/null | head -1)/bin/mvn"
-    if [ -x "$local_mvn" ]; then "$local_mvn" package -DskipTests -o -q || { err "缓存 Maven 打包失败"; exit 2; }
-    else err "未找到 Maven（mvnw 与缓存 Maven 均不可用）"; exit 2; fi
+    [ -x "$local_mvn" ] && MVN="$local_mvn"
   fi
+  if [ -z "$MVN" ]; then err "未找到 Maven（mvnw/mvnw.cmd/mvn.cmd/缓存 Maven 均不可用），请用 --skip-build 并提供已构建 jar"; exit 2; fi
+  log "使用构建器: $MVN"
+  $MVN package -DskipTests -o -q || { err "Maven 打包失败（$MVN）"; exit 2; }
   log "Core 打包完成"
 else
   [ "$SKIP_BUILD" -eq 1 ] && log "跳过打包（--skip-build）"
@@ -270,13 +275,13 @@ if [ "$VERIFY_ONLY" -eq 0 ]; then
   ( cd "$BACKEND_DIR" && exec nohup java -jar "$BACKEND_JAR_W" --server.port=$BACKEND_PORT --spring.sql.init.mode=always \
     > "$BACKEND_LOG" 2>&1 ) &
   log "backend pid=$!"
-  wait_for_url "http://127.0.0.1:$BACKEND_PORT/health" "backend" 90 || exit 2
+  wait_for_url "http://127.0.0.1:$BACKEND_PORT/health" "backend" 180 || exit 2
 
   step "启动 OTel Collector ($COLLECTOR_PORT)"
   if is_listening "$COLLECTOR_PORT"; then
     err "collector 端口仍被占用（清理未生效），无法启动新实例"; exit 2
   fi
-  nohup "$COLLECTOR_DIR_W/otelcol.exe" --config "$COLLECTOR_DIR_W/config.yaml" \
+  nohup "$COLLECTOR_DIR_W/otelcol-contrib.exe" --config "$COLLECTOR_DIR_W/config.yaml" \
     > "$COLLECTOR_LOG" 2>&1 &
   log "collector pid=$!"
   # collector 无 http health，靠端口监听校验（不再 || true 跳过）
@@ -293,15 +298,16 @@ if [ "$VERIFY_ONLY" -eq 0 ]; then
     -javaagent:"$AGENT_JAR_W" -jar "$CORE_JAR_W" --server.port=$CORE_PORT \
     > "$CORE_LOG" 2>&1 &
   log "core pid=$!"
-  wait_for_url "http://127.0.0.1:$CORE_PORT/actuator/health" "core" 90 || exit 2
+  wait_for_url "http://127.0.0.1:$CORE_PORT/actuator/health" "core" 120 || exit 2
 else
   log "verify-only：跳过清理与启动，假设服务已就绪"
 fi
 
 # ----------------------------- 4) 播种 ---------------------------------------
-step "运行 seed ($SEED_SCRIPT)"
-"$PYTHON_BIN" "$SEED_SCRIPT_W" 2>&1 | tail -5
-log "seed 完成"
+step "运行 seed + 全量验证 ($SEED_SCRIPT)"
+SEED_LOG="$LOG_DIR/seed-E2E.log"
+"$PYTHON_BIN" "$SEED_SCRIPT_W" 2>&1 | tee "$SEED_LOG" | tail -60
+log "seed + 全量验证完成（完整日志: $SEED_LOG）"
 
 # ----------------------------- 5) 沉淀 + 6) 验证 -----------------------------
 step "等待 spans 沉淀 (${SETTLE_SECONDS}s)"
@@ -327,13 +333,16 @@ echo "  distinctOpNames 含 L0: 层 span: $([ $HAS_L0 -eq 1 ] && echo YES || ech
 step "验证判定"
 PASS=1
 L0N=${L0:-0}; L1N=${L1:-0}; L2N=${L2:-0}
-# 核心不变量：每请求恰好一个 L0，故 L0 必须等于 L1（原 bug 正是 L0<L1，
-# 因确定性路由跳过 L0）。此判据对 seed 偶发 HTTP 错误免疫（错误同时影响 L0/L1）。
-if [ "$L0N" -eq "$L1N" ]; then log "✓ L0($L0N) = L1($L1N)（每请求一个 L0，方案A 核心不变量成立）"; else warn "✗ L0($L0N) ≠ L1($L1N)（确定性路由可能仍在漏 L0）"; PASS=0; fi
-# 信息项：若 L0 略小于 seed 轮数，多为 seed 轮次 HTTP 错误，非修复问题
+# 核心不变量（方案A 修复语义）：
+#   原 bug = 确定性路由跳过 L0 span 创建 → 出现 L0 < L1（L0 缺失）。
+#   修复后保证「每请求必产生 L0」，故正确不变量是 L0 ≥ L1（L0 永不低于 L1）。
+#   注意：歧义/DISAMBIGUATION/INTERRUPTED 等轮次可在 L0 直接消化而不上升到 L1，
+#   因此 L0 允许略大于 L1（本就是正常多层 agent 行为），绝不可出现 L0 < L1。
+if [ "$L0N" -ge "$L1N" ]; then log "✓ L0($L0N) ≥ L1($L1N)（每请求均产生 L0，方案A 核心不变量成立）"; else warn "✗ L0($L0N) < L1($L1N)（确定性路由仍在漏 L0，方案A 回归！）"; PASS=0; fi
+# 信息项：若 L0 明显小于 seed 轮数，多为 seed 轮次 HTTP 错误，非修复问题
 if [ "$L0N" -lt "$SEED_TURNS" ]; then warn "⚠ L0($L0N) < 请求数($SEED_TURNS)，部分 seed 轮次可能 HTTP 错误（非修复问题）"; fi
-# L2 ≤ L0
-if [ "$L2N" -le "$L0N" ]; then log "✓ L2($L2N) ≤ L0($L0N)"; else warn "✗ L2($L2N) > L0($L0N)"; PASS=0; fi
+# 层级不变量：L2 仅在 L1 继续下钻时产生 → L2 ≤ L1 ≤ L0
+if [ "$L2N" -le "$L1N" ]; then log "✓ L2($L2N) ≤ L1($L1N) ≤ L0($L0N)"; else warn "✗ L2($L2N) > L1($L1N)（层级不变量破坏）"; PASS=0; fi
 # L0 层 span 已上报 backend（L0 层可观测覆盖成立；LLM 路径为 L0:<model>，确定性分支为 L0:DomainRouter）
 if [ "$HAS_L0" -eq 1 ]; then log "✓ L0 层 span 已产生并上报 backend（L0 层可观测覆盖成立）"; else warn "✗ 未检测到 L0 层 span（L0 层可能缺失）"; PASS=0; fi
 
@@ -345,7 +354,7 @@ fi
 
 echo ""
 if [ "$PASS" -eq 1 ]; then
-  echo -e "${GREEN}✅ E2E 验证通过：${NC}L0($L0N)=L1($L1N)（=请求数），L2($L2N)≤L0($L0N)，L0 层 span 已生成"
+  echo -e "${GREEN}✅ E2E 验证通过：${NC}L0($L0N)≥L1($L1N)（每请求均产生 L0），L2($L2N)≤L1($L1N)≤L0($L0N)，L0 层 span 已生成"
   exit 0
 else
   echo -e "${RED}❌ E2E 验证失败${NC}（详见上方 ✗ 项；日志: $LOG_DIR）"

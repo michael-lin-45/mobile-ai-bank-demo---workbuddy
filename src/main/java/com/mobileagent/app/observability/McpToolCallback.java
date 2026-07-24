@@ -1,7 +1,7 @@
 package com.mobileagent.app.observability;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
-import io.opentelemetry.api.trace.Scope;
+import io.opentelemetry.context.Scope;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;

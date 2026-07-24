@@ -26,7 +26,12 @@ function FunnelChart({ data = [], height = 280 }) {
     tooltip: {
       trigger: 'item',
       textStyle: { color: 'rgba(0,0,0,.65)', fontSize: 11 },
-      formatter: '{b}: <b>{c}</b>',
+      // 兼容 stages 携带 reason 字段（mock 提供），悬浮展示放弃主因
+      formatter: (params) => {
+        const d = params.data || {};
+        const base = `${d.name}: <b>${d.value}</b>`;
+        return d.reason ? `${base}<br/><span style="color:rgba(0,0,0,.45)">${d.reason}</span>` : base;
+      },
     },
     series: [
       {

@@ -1,33 +1,40 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Empty, Spin } from 'antd';
 import ApiErrorAlert from '../components/ApiErrorAlert';
+import InsightKpiCard, { DemoBadge } from '../components/InsightKpiCard';
 import ReactEChartsCore from 'echarts-for-react';
 import HeatmapChart from '../components/charts/HeatmapChart';
 import { fetchAIAccuracyReport } from '../api/client';
+import { isEmpty } from '../services/insightAdapters';
+import { getAccuracyReportMock } from '../services/mockInsights';
 
 /**
- * AccuracyTab — 准确率分析 TAB
+ * AccuracyTab — 准确率分析 TAB（改造版）。
  *
  * 内容:
+ * - 顶部 KPI 汇总（共享 InsightKpiCard，来自 overallStats）
  * - 意图识别准确率趋势（ECharts 折线图，5条线）
- * - 改写准确率分析表
- * - 改写失败根因 TOP3（3 张彩色卡片）
- * - 意图混淆矩阵（ECharts 热力图，visualMap 隐藏）
+ * - 改写准确率分析表（rewrite，接 mock 兜底）
+ * - 改写失败根因 TOP3（rootCauses，接 mock 兜底）
+ * - 意图混淆矩阵（ECharts 热力图）
+ *
+ * 真实优先、空则 Mock：fetch 失败/空 → getAccuracyReportMock()（docs/system_design.md §1.2）。
  */
 function AccuracyTab() {
   const [loading, setLoading] = useState(true);
   const [accuracyData, setAccuracyData] = useState(null);
-  const [confusionData, setConfusionData] = useState(null);
+  const [demo, setDemo] = useState(false);
   const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
       setError(null);
-      // 单端点消费统一准确率报告（趋势+改写表+根因+混淆矩阵），修复契约错配
-      const data = await fetchAIAccuracyReport();
-      setAccuracyData(data);
-      setConfusionData(data?.confusion || null);
+      // 单端点消费统一准确率报告；失败/空 → 回退 mock
+      const data = await fetchAIAccuracyReport().catch(() => null);
+      const isRealEmpty = isEmpty(data);
+      setAccuracyData(isRealEmpty ? getAccuracyReportMock() : data);
+      setDemo(isRealEmpty);
     } catch (err) {
       console.error('Failed to load accuracy data:', err);
       setError(err.message || '准确率数据加载失败');
@@ -40,18 +47,36 @@ function AccuracyTab() {
     loadData();
   }, [loadData]);
 
-  const overallStats = accuracyData?.overallStats;
-  const rewriteSummary = accuracyData?.rewriteSummary;
-  const rootCauseSummary = accuracyData?.rootCauseSummary;
+  const overallStats = accuracyData?.overallStats || [];
+  const confusionData = accuracyData?.confusion || null;
 
   return (
     <Spin spinning={loading}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <ApiErrorAlert error={error} onRetry={loadData} />
+
+        {/* 顶部 KPI 汇总（共享 InsightKpiCard） */}
+        {overallStats.length > 0 && (
+          <Card size="small" extra={demo ? <DemoBadge /> : null}>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {overallStats.map((k, i) => (
+                <InsightKpiCard
+                  key={k.label || i}
+                  label={k.label}
+                  value={k.value}
+                  unit={k.unit}
+                  color={['#1677ff', '#52c41a', '#fa8c16', '#13c2c2'][i % 4]}
+                  bg={['#f0f5ff', '#f6ffed', '#fff7e6', '#e6fffb'][i % 4]}
+                />
+              ))}
+            </div>
+          </Card>
+        )}
+
         {/* ── 意图识别准确率趋势 ── */}
         <Card
           title="意图识别准确率趋势"
-          extra={<span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>{overallStats || '—'}</span>}
+          extra={overallStats[0] ? <span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>{overallStats[0].label} {overallStats[0].value}{overallStats[0].unit}</span> : null}
         >
           <AccuracyTrendChart data={accuracyData?.trend} />
         </Card>
@@ -59,7 +84,7 @@ function AccuracyTab() {
         {/* ── 改写准确率分析表 ── */}
         <Card
           title="改写准确率分析"
-          extra={<span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>{rewriteSummary || '—'}</span>}
+          extra={demo ? <DemoBadge /> : null}
         >
           <Table
             dataSource={accuracyData?.rewrite || []}
@@ -73,7 +98,7 @@ function AccuracyTab() {
         {/* ── 改写失败根因 TOP3 ── */}
         <Card
           title="改写失败根因 TOP3"
-          extra={<span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>{rootCauseSummary || '—'}</span>}
+          extra={demo ? <DemoBadge /> : null}
         >
           <RootCauseCards data={accuracyData?.rootCauses} />
         </Card>
@@ -178,7 +203,7 @@ const REWRITE_COLUMNS = [
   { title: '典型错误', dataIndex: 'errorExample', key: 'errorExample', render: (t) => <span style={{ color: 'rgba(0,0,0,.45)' }}>{t}</span> },
 ];
 
-/* ── 根因卡片 ── */
+/* ── 根因卡片（兼容 pct 数值 0-1 或百分比字符串）── */
 
 function RootCauseCards({ data }) {
   if (!data || data.length === 0) {
@@ -187,29 +212,32 @@ function RootCauseCards({ data }) {
 
   return (
     <div style={{ display: 'flex', gap: 16 }}>
-      {data.map((c) => (
-        <div
-          key={c.rank || c.key}
-          style={{
-            flex: 1,
-            background: c.bg || '#fff2f0',
-            borderRadius: 6,
-            padding: '16px 20px',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>{c.rank}. {c.title}</span>
-            <span style={{ fontFamily: '"JetBrains Mono", monospace', fontWeight: 700, fontSize: 20, color: c.color || '#ff4d4f' }}>
-              {c.count}
-            </span>
+      {data.map((c) => {
+        const pctStr = typeof c.pct === 'number' ? `${(c.pct * 100).toFixed(1)}%` : (c.pct || '0%');
+        return (
+          <div
+            key={c.rank || c.key}
+            style={{
+              flex: 1,
+              background: c.bg || '#fff2f0',
+              borderRadius: 6,
+              padding: '16px 20px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{c.rank}. {c.title}</span>
+              <span style={{ fontFamily: '"JetBrains Mono", monospace', fontWeight: 700, fontSize: 20, color: c.color || '#ff4d4f' }}>
+                {c.count}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: 'rgba(0,0,0,.65)', marginBottom: 8 }}>{c.desc}</div>
+            <div style={{ height: 8, background: 'rgba(0,0,0,.06)', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: pctStr, background: c.color || '#ff4d4f', borderRadius: 4 }} />
+            </div>
+            <div style={{ textAlign: 'right', fontSize: 12, color: c.color || '#ff4d4f', marginTop: 4 }}>{pctStr}</div>
           </div>
-          <div style={{ fontSize: 12, color: 'rgba(0,0,0,.65)', marginBottom: 8 }}>{c.desc}</div>
-          <div style={{ height: 8, background: 'rgba(0,0,0,.06)', borderRadius: 4, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: c.pct, background: c.color || '#ff4d4f', borderRadius: 4 }} />
-          </div>
-          <div style={{ textAlign: 'right', fontSize: 12, color: c.color || '#ff4d4f', marginTop: 4 }}>{c.pct}</div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

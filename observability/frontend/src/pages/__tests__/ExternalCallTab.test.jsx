@@ -62,7 +62,7 @@ test('切到 RAG / 工具函数 / SKILL 分段不报错', async () => {
   fireEvent.click(screen.getByText('工具函数'));
   expect(await screen.findByText('TOOLCALL_STUB')).toBeInTheDocument();
 
-  // SKILL 分段为「暂未开放」空态，不报错
+  // SKILL 分段改为渲染 mock 表格（不再「暂未开放」空态），不报错
   fireEvent.click(screen.getByText('SKILL'));
-  expect(await screen.findByText(/SKILL 调用统计暂未开放/)).toBeInTheDocument();
+  expect(await screen.findByText('skill.transfer')).toBeInTheDocument();
 });

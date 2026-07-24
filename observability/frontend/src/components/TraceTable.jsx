@@ -63,7 +63,7 @@ const RESIZE_HANDLE_STYLE = {
 
 function TraceTable({ traces = [], onViewDetail, loading }) {
   // ── 列宽可拖拽调整（宽度本地持久化）──
-  const DEFAULT_WIDTHS = { 0: 180, 1: 170, 2: 110, 3: 110, 4: 90, 5: 160, 6: 90, 7: 90, 8: 90, 9: 90, 10: 90 };
+  const DEFAULT_WIDTHS = { 0: 200, 1: 170, 2: 110, 3: 110, 4: 90, 5: 160, 6: 90, 7: 90, 8: 90, 9: 90, 10: 90 };
   const [widths, setWidths] = useState(() => {
     const merged = { ...DEFAULT_WIDTHS };
     try {
@@ -144,16 +144,16 @@ function TraceTable({ traces = [], onViewDetail, loading }) {
               onMouseEnter={(e) => { e.currentTarget.style.background = '#fafafa'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
             >
-              <td style={TD_STYLE}>
+              <td style={{ ...TD_STYLE, wordBreak: 'break-all' }}>
                 <span style={{ ...MONO_STYLE, color: '#1677ff', fontSize: 11 }} title={t.traceId}>
-                  {shortId(t.traceId)}
+                  {t.traceId || '-'}
                 </span>
               </td>
               <td style={{ ...TD_STYLE, ...MONO_STYLE, fontSize: 11 }}>
                 {formatBeijingTime(t.timestamp)}
               </td>
-              <td style={TD_STYLE}>
-                <span style={{ ...MONO_STYLE, fontSize: 11 }}>{shortId(t.sessionId)}</span>
+              <td style={{ ...TD_STYLE, wordBreak: 'break-all' }}>
+                <span style={{ ...MONO_STYLE, fontSize: 11 }}>{t.sessionId || '-'}</span>
               </td>
               <td style={TD_STYLE}>
                 <span style={{ ...MONO_STYLE, fontSize: 11 }}>{t.userId || '-'}</span>
@@ -179,21 +179,7 @@ function TraceTable({ traces = [], onViewDetail, loading }) {
               <td style={TD_STYLE}>
                 <span
                   onClick={(e) => { e.stopPropagation(); onViewDetail(t); }}
-                  style={{
-                    display: 'inline-block',
-                    padding: '3px 10px',
-                    borderRadius: 4,
-                    fontSize: 11,
-                    fontWeight: 500,
-                    border: '1px solid #1677ff',
-                    color: '#1677ff',
-                    background: '#fff',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                    transition: '.15s',
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = '#1677ff'; e.currentTarget.style.color = '#fff'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = '#1677ff'; }}
+                  style={{ color: '#1677ff', cursor: 'pointer', fontSize: 13 }}
                 >
                   查看详情
                 </span>

@@ -1,101 +1,22 @@
-import React, { useState, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { Card, Tabs, Spin } from 'antd';
-import {
-  SafetyCertificateOutlined,
-  ApartmentOutlined,
-  CheckCircleOutlined,
-  ThunderboltOutlined,
-  DollarOutlined,
-  ApiOutlined,
-  FunnelPlotOutlined,
-  SmileOutlined,
-} from '@ant-design/icons';
-import DiagnosisCockpit from '../components/DiagnosisCockpit';
 import { on } from '../utils/nav';
+import { TAB_ITEMS } from './aiInsights.tabs';
 
 /**
- * AI 洞察页 — TAB 框架（V23 B4 扩展为 8 TAB）。
+ * AI 洞察页 — TAB 框架（整合改造版）。
  *
- * 智能诊断 → 诊断驾驶舱 → 准确率分析 → Agent 性能 → Token 成本 → 外部调用 → 业务转化漏斗 → 用户满意度
- *   诊断看      诊断看        算法看        开发看        成本看      调用链看      产品看          体验看
+ * 智能诊断（统一视图）→ 准确率分析 → Agent 性能 → Token 成本 → 外部调用 → 业务转化漏斗 → 用户满意度
  *
- * 「智能诊断」为新增首 TAB（DiagnosisTab），总览大屏诊断摘要卡下钻 itab('diagnosis') 即跳至此。
- * 「工具调用」重命名为「外部调用」（ExternalCallTab），按 RAG/工具函数/SKILL/MCP 分段。
+ * 整合后移除独立「智能洞察诊断驾驶舱」TAB（docs/system_design.md §1.4 / Q3）：
+ *   - `diagnosis` 键指向统一组件 DiagnosisUnified（含原驾驶舱 5 区块 + 诊断快照 + 转化漏斗）
+ *   - 不再引用 DiagnosisCockpit / cockpit 键
  *
  * 每个 TAB 使用懒加载独立组件，TAB 切换不重渲染已加载 TAB。
+ * 订阅总览大屏下钻（itab('diagnosis') 等）→ 切换对应 TAB。
  */
-const DiagnosisTab = lazy(() => import('./DiagnosisTab'));
-const AccuracyTab = lazy(() => import('./AccuracyTab'));
-const AgentPerfTab = lazy(() => import('./AgentPerfTab'));
-const TokenCostTab = lazy(() => import('./TokenCostTab'));
-const ExternalCallTab = lazy(() => import('./ExternalCallTab'));
-const FunnelTab = lazy(() => import('./FunnelTab'));
-const SatisfactionTab = lazy(() => import('./SatisfactionTab'));
-
-const TAB_ITEMS = [
-  {
-    key: 'diagnosis',
-    label: '智能诊断',
-    icon: <SafetyCertificateOutlined />,
-    subtitle: '诊断看',
-    component: DiagnosisTab,
-  },
-  {
-    key: 'cockpit',
-    label: '智能洞察诊断驾驶舱',
-    icon: <ApartmentOutlined />,
-    subtitle: '诊断看',
-    component: CockpitTab,
-  },
-  {
-    key: 'accuracy',
-    label: '准确率分析',
-    icon: <CheckCircleOutlined />,
-    subtitle: '算法看',
-    component: AccuracyTab,
-  },
-  {
-    key: 'perf',
-    label: 'Agent 性能',
-    icon: <ThunderboltOutlined />,
-    subtitle: '开发看',
-    component: AgentPerfTab,
-  },
-  {
-    key: 'token',
-    label: 'Token 成本',
-    icon: <DollarOutlined />,
-    subtitle: '成本看',
-    component: TokenCostTab,
-  },
-  {
-    key: 'external',
-    label: '外部调用',
-    icon: <ApiOutlined />,
-    subtitle: '调用链看',
-    component: ExternalCallTab,
-  },
-  {
-    key: 'funnel',
-    label: '业务转化漏斗',
-    icon: <FunnelPlotOutlined />,
-    subtitle: '产品看',
-    component: FunnelTab,
-  },
-  {
-    key: 'satisfaction',
-    label: '用户满意度',
-    icon: <SmileOutlined />,
-    subtitle: '体验看',
-    component: SatisfactionTab,
-  },
-];
-
-/** 已加载过的 TAB keys 缓存 */
-const loadedTabs = new Set();
-
-function AIInsightsPage() {
-  const [activeKey, setActiveKey] = useState('cockpit');
+const AIInsightsPage = () => {
+  const [activeKey, setActiveKey] = useState('diagnosis');
 
   // 订阅总览大屏下钻（itab('diagnosis') 等）→ 切换对应 TAB
   useEffect(() => {
@@ -184,14 +105,10 @@ function AIInsightsPage() {
       </Card>
     </div>
   );
-}
+};
 
-/**
- * 诊断驾驶舱 TAB 内容：仅封装 DiagnosisCockpit 组件，使驾驶舱成为独立可切换视图。
- */
-function CockpitTab() {
-  return <DiagnosisCockpit />;
-}
+/** 已加载过的 TAB keys 缓存 */
+const loadedTabs = new Set();
 
 function TabLoading() {
   return (

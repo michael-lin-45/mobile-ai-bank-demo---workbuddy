@@ -271,13 +271,13 @@ function DiagnosisCockpit() {
 
 /* ───────── ① 优先行动建议 ───────── */
 
-const SEVERITY_CONFIG = {
+export const SEVERITY_CONFIG = {
   HIGH: { color: '#ff4d4f', bg: '#fff2f0', text: '高' },
   MED: { color: '#fa8c16', bg: '#fff7e6', text: '中' },
   LOW: { color: '#52c41a', bg: '#f6ffed', text: '低' },
 };
 
-function ActionList({ actions }) {
+export function ActionList({ actions }) {
   if (!actions || actions.length === 0) {
     return <Empty description="暂无优化建议" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
   }
@@ -335,13 +335,13 @@ function ActionList({ actions }) {
 
 /* ───────── ② 三类瓶颈卡 ───────── */
 
-const CATEGORY_CONFIG = {
+export const CATEGORY_CONFIG = {
   PERFORMANCE: { color: '#ff4d4f', bg: '#fff2f0', label: '性能' },
   ACCURACY: { color: '#faad14', bg: '#fffbe6', label: '准确率' },
   CONVERSION: { color: '#722ed1', bg: '#f9f0ff', label: '转化' },
 };
 
-function BottleneckCards({ bottlenecks }) {
+export function BottleneckCards({ bottlenecks }) {
   if (!bottlenecks || bottlenecks.length === 0) {
     return <Empty description="暂无瓶颈数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
   }
@@ -377,7 +377,7 @@ function BottleneckCards({ bottlenecks }) {
 
 /* ───────── ③ 慢会话根因表 ───────── */
 
-function SlowSessionTable({ sessions, rootCauseMap, onExpand, onJumpTrace }) {
+export function SlowSessionTable({ sessions, rootCauseMap, onExpand, onJumpTrace }) {
   if (!sessions || sessions.length === 0) {
     return <Empty description="暂无慢会话数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
   }
@@ -436,7 +436,7 @@ function SlowSessionTable({ sessions, rootCauseMap, onExpand, onJumpTrace }) {
   );
 }
 
-function RootCauseDetail({ sessionId, entry }) {
+export function RootCauseDetail({ sessionId, entry }) {
   if (!entry) {
     return <div style={{ padding: 8, fontSize: 12, color: 'rgba(0,0,0,.45)' }}>展开以查看根因分析…</div>;
   }
@@ -472,7 +472,7 @@ function RootCauseDetail({ sessionId, entry }) {
 
 /* ───────── ④ 不满意会话共性表 ───────── */
 
-function UnsatisfiedTable({ unsatisfied }) {
+export function UnsatisfiedTable({ unsatisfied }) {
   if (!unsatisfied || unsatisfied.length === 0) {
     return <Empty description="暂无不满意聚类（近期无负面满意度会话）" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
   }
@@ -521,7 +521,7 @@ function UnsatisfiedTable({ unsatisfied }) {
 
 /* ───────── ⑤ Agent P95 vs 错误率散点 ───────── */
 
-function PerfScatter({ perf }) {
+export function PerfScatter({ perf }) {
   const rows = perf?.tables?.agent || [];
   if (rows.length === 0) {
     return <Empty description="暂无 Agent 性能数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />;

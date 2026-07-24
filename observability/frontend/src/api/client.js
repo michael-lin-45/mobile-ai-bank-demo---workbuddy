@@ -187,7 +187,15 @@ export function fetchBusinessEventAgg(event, groupBy, from, to) {
 
 // ── External Invocation API（V23 M5/M10 统一外部调用台账）──
 
-/** 外部调用记录 — GET /invocations?category={all|rag|tool|skill|mcp} */
+/**
+ * 外部调用记录 — GET /invocations?category={all|rag|tool|skill|mcp}
+ *
+ * 注意：axios baseURL 已为 '/api/v1'，故此处路径 '/invocations' 解析为
+ * '/api/v1/invocations'，与设计文档 §8.5 后端真实契约一致（原 '/ai/invocations'
+ * 会解析为 '/api/v1/ai/invocations' 导致 404）。funnel/accuracy 的 '/ai/...'
+ * 路径在 baseURL 下已等价于 '/api/v1/ai/*'，保持不变。
+ * 真实 404 由各 TAB 的 mock 兜底（isEmpty → getXMock）覆盖。
+ */
 export function fetchInvocations(category = 'all', provider, range) {
   return client.get('/invocations', {
     params: { category, provider, range },

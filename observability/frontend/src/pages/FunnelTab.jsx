@@ -2,29 +2,38 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Empty, Spin } from 'antd';
 import ApiErrorAlert from '../components/ApiErrorAlert';
 import FunnelChart from '../components/charts/FunnelChart';
+import InsightKpiCard, { DemoBadge } from '../components/InsightKpiCard';
 import ReactEChartsCore from 'echarts-for-react';
 import { fetchConversionFunnel } from '../api/client';
+import { toFunnelChartData, isEmpty } from '../services/insightAdapters';
+import { getConversionFunnelMock } from '../services/mockInsights';
 
 /**
- * FunnelTab — 业务转化漏斗 TAB（V23 B6 / 任务分解 M9 增强）。
+ * FunnelTab — 业务转化漏斗 TAB（改造版）。
  *
- * - 顶部流失气泡概览（气泡上移）
- * - 业务转化漏斗（ECharts funnel）
+ * - 顶部流失气泡概览 + 共享彩色 KPI 卡（InsightKpiCard）
+ * - 业务转化漏斗（ECharts funnel，stages 经 toFunnelChartData 归一 {name,value}，修复 undefined）
  * - 分阶段放弃率（环形饼图）
  * - 漏斗明细表：放弃率阈值着色 + 最大放弃阶段高亮
- * - 流失画像 3 表（按意图 / 渠道 / 时段）
+ * - 流失画像 3 表（按意图 / 渠道 / 时段，接 mock 兜底修复空画像）
+ *
+ * 真实优先、空则 Mock：fetch 失败/空 → getConversionFunnelMock()（docs/system_design.md §1.2）。
  */
 function FunnelTab() {
   const [loading, setLoading] = useState(true);
   const [funnelData, setFunnelData] = useState(null);
+  const [demo, setDemo] = useState(false);
   const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchConversionFunnel();
-      setFunnelData(data);
+      // 真实优先：失败/空 → 回退 mock
+      const data = await fetchConversionFunnel().catch(() => null);
+      const isRealEmpty = isEmpty(data);
+      setFunnelData(isRealEmpty ? getConversionFunnelMock() : data);
+      setDemo(isRealEmpty);
     } catch (err) {
       console.error('Failed to load funnel data:', err);
       setError(err.message || '转化漏斗数据加载失败');
@@ -50,9 +59,9 @@ function FunnelTab() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <ApiErrorAlert error={error} onRetry={loadData} />
 
-        {/* 顶部流失气泡概览（气泡上移） */}
+        {/* 顶部流失气泡概览 + 共享 KPI 卡 */}
         <Card size="small">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{
                 width: 44, height: 44, borderRadius: '50%',
@@ -70,24 +79,41 @@ function FunnelTab() {
                 </div>
               </div>
             </div>
-            <Stat label="总进入" value={totalEntered.toLocaleString()} />
-            <Stat label="总放弃" value={totalAbandoned.toLocaleString()} color="#ff4d4f" />
-            <Stat label="最大放弃阶段" value={maxAbandoned > 0 ? maxAbandonStage(details, maxAbandoned) : '—'} color="#faad14" />
+            <div style={{ display: 'flex', gap: 12, flex: 1, minWidth: 0 }}>
+              <InsightKpiCard label="总进入" value={totalEntered} color="#1677ff" bg="#f0f5ff" demo={demo} />
+              <InsightKpiCard label="总放弃" value={totalAbandoned} color="#ff4d4f" bg="#fff2f0" demo={demo} />
+              <InsightKpiCard
+                label="最大放弃阶段"
+                value={maxAbandoned > 0 ? maxAbandonStage(details, maxAbandoned) : '—'}
+                color="#fa8c16"
+                bg="#fff7e6"
+                demo={demo}
+              />
+            </div>
           </div>
         </Card>
 
         {/* 业务转化漏斗 + 分阶段放弃率 */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <Card title="业务转化漏斗">
-            <FunnelChart data={funnelData?.stages || []} height={280} />
+          <Card
+            title="业务转化漏斗"
+            extra={demo ? <DemoBadge /> : null}
+          >
+            <FunnelChart data={toFunnelChartData(funnelData?.stages || [])} height={280} />
           </Card>
-          <Card title="分阶段放弃率">
+          <Card
+            title="分阶段放弃率"
+            extra={demo ? <DemoBadge /> : null}
+          >
             <AbandonPieChart data={funnelData?.abandonPie} />
           </Card>
         </div>
 
         {/* 漏斗明细表 */}
-        <Card title="漏斗明细">
+        <Card
+          title="漏斗明细"
+          extra={demo ? <DemoBadge /> : null}
+        >
           <Table
             dataSource={details}
             columns={FUNNEL_DETAIL_COLUMNS(maxAbandoned)}
@@ -99,7 +125,10 @@ function FunnelTab() {
         </Card>
 
         {/* 流失画像 3 表 */}
-        <Card title="流失画像">
+        <Card
+          title="流失画像"
+          extra={demo ? <DemoBadge /> : null}
+        >
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
             <ChurnTable title="按意图" rows={churn.intent} />
             <ChurnTable title="按渠道" rows={churn.channel} />
@@ -221,17 +250,6 @@ function FUNNEL_DETAIL_COLUMNS(maxAbandoned) {
 }
 
 /* ── 辅助 ── */
-
-function Stat({ label, value, color }) {
-  return (
-    <div>
-      <div style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>{label}</div>
-      <div style={{ fontFamily: '"JetBrains Mono", monospace', fontWeight: 700, fontSize: 18, color: color || 'rgba(0,0,0,.88)' }}>
-        {value}
-      </div>
-    </div>
-  );
-}
 
 /** 放弃率阈值着色：>25% 红，>10% 橙，否则绿 */
 function abandonColor(v) {
