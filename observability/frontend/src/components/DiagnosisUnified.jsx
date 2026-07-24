@@ -43,6 +43,7 @@ function DiagnosisUnified() {
   const [actions, setActions] = useState([]);
   const [bottlenecks, setBottlenecks] = useState([]);
   const [unsatisfied, setUnsatisfied] = useState([]);
+  const [unsatOverallRate, setUnsatOverallRate] = useState(null);
   const [conversion, setConversion] = useState(null);
   const [agentPerf, setAgentPerf] = useState(null);
 
@@ -108,6 +109,11 @@ function DiagnosisUnified() {
         ? (unsat.value?.clusters || [])
         : mock.unsatisfied.map((u) => ({ dimension: u.theme, count: u.count, commonPattern: `流失率 ${u.rate}%`, examples: [u.sample] }));
       setUnsatisfied(unsatClusters);
+      // 整体不满意率（报告级），用于「不满意共性表」条件触发（<10% 隐去表格）
+      const unsatOverall = unsat.status === 'fulfilled' && !isEmpty(unsat.value)
+        ? (unsat.value?.rate ?? null)
+        : null;
+      setUnsatOverallRate(unsatOverall);
       setUnsatDemo(!(unsat.status === 'fulfilled' && !isEmpty(unsat.value)));
 
       // ⑥ 转化漏斗 Progress
@@ -313,7 +319,7 @@ function DiagnosisUnified() {
           extra={unsatDemo ? <DemoBadge /> : null}
           style={{ borderRadius: 8 }}
         >
-          <UnsatisfiedTable unsatisfied={unsatisfied} />
+          <UnsatisfiedTable unsatisfied={unsatisfied} overallRate={unsatOverallRate} />
         </Card>
 
         {/* 更多诊断信号（可折叠）— 新增，对齐 DEMO V23 L654-677 */}

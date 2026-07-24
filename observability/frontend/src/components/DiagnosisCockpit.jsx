@@ -103,7 +103,6 @@ function DiagnosisCockpit() {
       if (aliveRef.current) setLoading(false);
     }
   }, []);
-
   // 手动刷新：清缓存重算 + 重新拉取
   const handleRefresh = useCallback(async () => {
     try {
@@ -114,7 +113,6 @@ function DiagnosisCockpit() {
     }
     loadAll();
   }, [loadAll]);
-
   // 监听全局刷新事件（顶栏刷新按钮）
   useEffect(() => {
     aliveRef.current = true;
@@ -126,7 +124,6 @@ function DiagnosisCockpit() {
       window.removeEventListener('global-refresh', onRefresh);
     };
   }, [loadAll]);
-
   // 懒加载某慢会话根因
   const loadRootCause = useCallback(async (sessionId) => {
     if (!sessionId || rootCauseMap[sessionId]) return;
@@ -145,9 +142,7 @@ function DiagnosisCockpit() {
       }
     }
   }, [rootCauseMap]);
-
   const slowSessions = report?.slowSessions?.rows || [];
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* 驾驶舱头 */}
@@ -231,8 +226,6 @@ function DiagnosisCockpit() {
         >
           <SlowSessionTable
             sessions={slowSessions}
-            rootCauseMap={rootCauseMap}
-            onExpand={loadRootCause}
             onJumpTrace={(sid) => navigate(`/trace?sessionId=${encodeURIComponent(sid)}`)}
           />
         </Card>
@@ -375,147 +368,351 @@ export function BottleneckCards({ bottlenecks }) {
   );
 }
 
-/* ───────── ③ 慢会话根因表 ───────── */
+/* ───────── ③ 慢会话根因表（按根因类别聚合 + 条件触发）───────── */
 
-export function SlowSessionTable({ sessions, rootCauseMap, onExpand, onJumpTrace }) {
-  if (!sessions || sessions.length === 0) {
-    return <Empty description="暂无慢会话数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+// 根因类别 → 建议文案映射（对齐 DEMO V23 L634-637）
+const ROOT_CAUSE_SUGGESTION = {
+  'LLM 调用慢': '换用 Flash-Lite',
+  '工具调用慢': '检查核心接口',
+  '追问轮次多': '减少必填字段',
+  其他: '个案分析',
+};
+
+// 根因类别 → Tag 配色（对齐 DEMO V23 badage-purple/blue/warning/info）
+const ROOT_CAUSE_TAG_COLOR = {
+  'LLM 调用慢': 'purple',
+  '工具调用慢': 'blue',
+  '追问轮次多': 'warning',
+  其他: 'default',
+};
+
+/**
+ * 推断单条慢会话的「根因类别」：
+ *  1) 优先用显式 rootCauseCategory；
+ *  2) 否则用 rootCause 文案；
+ *  3) 再退化为 intentFlow 的首段（如「转账 → 失败」→「转账」）；
+ *  4) 都无 → 「未分类」。
+ */
+function resolveRootCauseCategory(s) {
+  if (!s || typeof s !== 'object') return '未分类';
+  const rc = s.rootCauseCategory;
+  if (rc != null && `${rc}`.trim()) return `${rc}`;
+  if (s.rootCause && `${s.rootCause}`.trim()) return `${s.rootCause}`;
+  const flow = s.intentFlow;
+  if (flow && `${flow}`.trim()) {
+    const head = `${flow}`.split(/[→\-]/)[0]?.trim();
+    if (head) return head;
   }
-
-  const columns = [
-    {
-      title: '会话 ID',
-      dataIndex: 'sessionId',
-      key: 'sessionId',
-      render: (v) => (
-        <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#1677ff', cursor: 'pointer' }} onClick={() => onJumpTrace(v)}>
-          {v}
-        </span>
-      ),
-    },
-    {
-      title: '时长',
-      dataIndex: 'durationSeconds',
-      key: 'durationSeconds',
-      align: 'right',
-      render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v != null ? `${v}s` : '—'}</span>,
-    },
-    { title: '轮次', dataIndex: 'turnCount', key: 'turnCount', align: 'right', render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v ?? '—'}</span> },
-    {
-      title: '意图流',
-      dataIndex: 'intentFlow',
-      key: 'intentFlow',
-      render: (v) => <span style={{ fontSize: 12, color: 'rgba(0,0,0,.55)' }}>{v || '—'}</span>,
-    },
-    {
-      title: '操作',
-      key: 'action',
-      align: 'center',
-      render: (_, r) => (
-        <span style={{ color: '#1677ff', cursor: 'pointer', fontSize: 13 }} onClick={() => onJumpTrace(r.sessionId)}>
-          查看链路
-        </span>
-      ),
-    },
-  ];
-
-  return (
-    <Table
-      dataSource={sessions}
-      columns={columns}
-      rowKey="sessionId"
-      pagination={false}
-      size="small"
-      expandable={{
-        onExpand: (expanded, record) => {
-          if (expanded) onExpand(record.sessionId);
-        },
-        expandedRowRender: (record) => <RootCauseDetail sessionId={record.sessionId} entry={rootCauseMap[record.sessionId]} />,
-      }}
-    />
-  );
+  return '未分类';
 }
 
-export function RootCauseDetail({ sessionId, entry }) {
-  if (!entry) {
-    return <div style={{ padding: 8, fontSize: 12, color: 'rgba(0,0,0,.45)' }}>展开以查看根因分析…</div>;
-  }
-  if (entry.loading) {
+/** 众数：返回出现次数最多的元素（无则返回 '—'） */
+function modeOf(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return '—';
+  const counter = {};
+  let best = null;
+  let bestCount = 0;
+  arr.forEach((v) => {
+    if (v == null || v === '') return;
+    const k = `${v}`;
+    counter[k] = (counter[k] || 0) + 1;
+    if (counter[k] > bestCount) {
+      bestCount = counter[k];
+      best = v;
+    }
+  });
+  return best == null ? '—' : best;
+}
+
+/** 安全均值（保留 1 位小数） */
+function safeAvg(nums) {
+  const valid = (nums || []).filter((n) => typeof n === 'number' && !isNaN(n));
+  if (valid.length === 0) return null;
+  return +(valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(1);
+}
+
+/**
+ * SlowSessionTable — 由「逐会话列表」改为「按根因类别聚合表」（对齐 DEMO V23 L631-640）。
+ *
+ * 列：根因类别 / 会话数 / 占比 / 平均耗时 / 主要 Agent / 建议。
+ * 条件触发：有慢会话且 P90 > 阈值(默认 3s) 才展示表格；
+ *           否则显示绿色状态「✅ 近6h 无慢会话（P90 < 3s）」。
+ * 聚合：对 sessions 按 rootCauseCategory 分组 → 计数、占比(组/总数)、
+ *       平均耗时(组 durationSeconds 均值)、主要 Agent(众数)、建议(类别→文案映射)。
+ * 增强：根因类别行可点击展开，查看该类别下具体会话（复用 onJumpTrace 链路跳转）。
+ *
+ * @param {Array} sessions       慢会话列表（需含 durationSeconds；可选 rootCauseCategory/mainAgent）
+ * @param {Function} onJumpTrace 点击会话 ID 跳转到链路详情
+ * @param {number} [p90Seconds]   调用方可显式传入 P90；缺省时由 durations 推算
+ * @param {number} [thresholdSeconds=3] 触发阈值（秒）
+ */
+export function SlowSessionTable({ sessions, onJumpTrace, p90Seconds, thresholdSeconds = 3 }) {
+  const rows = Array.isArray(sessions) ? sessions : [];
+  const durations = rows
+    .map((s) => Number(s?.durationSeconds))
+    .filter((n) => !isNaN(n))
+    .sort((a, b) => a - b);
+  const computedP90 = durations.length
+    ? durations[Math.min(durations.length - 1, Math.max(0, Math.ceil(durations.length * 0.9) - 1))]
+    : 0;
+  const p90 = typeof p90Seconds === 'number' && !isNaN(p90Seconds) ? p90Seconds : computedP90;
+  const triggered = rows.length > 0 && p90 > thresholdSeconds;
+
+  // 条件未触发 → 绿色状态，隐去表格
+  if (!triggered) {
     return (
-      <div style={{ padding: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Spin size="small" /> <span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>正在分析根因…</span>
+      <div style={GREEN_STATE_STYLE}>
+        ✅ 近6h 无慢会话（P90 &lt; {thresholdSeconds}s）
       </div>
     );
   }
-  if (entry.error) {
-    return <div style={{ padding: 8, fontSize: 12, color: '#ff4d4f' }}>根因分析失败：{entry.error}</div>;
-  }
-  const candidates = entry.data?.rootCauseCandidates || [];
-  if (candidates.length === 0) {
-    return <div style={{ padding: 8, fontSize: 12, color: 'rgba(0,0,0,.45)' }}>无可用根因数据</div>;
-  }
-  return (
-    <div style={{ padding: '8px 12px', background: '#fafafa', borderRadius: 6 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>根因候选（按独占时间 Top3）</div>
-      {candidates.map((c, i) => (
-        <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '4px 0', borderTop: i > 0 ? '1px solid #f0f0f0' : 'none' }}>
-          <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#722ed1', fontWeight: 600, minWidth: 80 }}>
-            {c.exclusiveTimeMs != null ? `${c.exclusiveTimeMs}ms` : '—'}
-          </span>
-          <span style={{ fontSize: 12, fontWeight: 500 }}>{c.spanName}</span>
-          <span style={{ fontSize: 12, color: 'rgba(0,0,0,.55)', flex: 1 }}>{c.hypothesis}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
-/* ───────── ④ 不满意会话共性表 ───────── */
+  // 按根因类别聚合
+  const groups = new Map();
+  rows.forEach((s) => {
+    const cat = resolveRootCauseCategory(s);
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(s);
+  });
+  const total = rows.length;
+  const dataSource = Array.from(groups.entries()).map(([category, members]) => {
+    const avg = safeAvg(members.map((m) => Number(m.durationSeconds)));
+    const agents = members.map((m) => m.mainAgent).filter((v) => v != null && v !== '');
+    return {
+      key: category,
+      category,
+      count: members.length,
+      ratio: total ? +((members.length / total) * 100).toFixed(1) : 0,
+      avgDur: avg,
+      mainAgent: modeOf(agents),
+      suggestion: ROOT_CAUSE_SUGGESTION[category] || '优化相关链路',
+      members,
+    };
+  });
 
-export function UnsatisfiedTable({ unsatisfied }) {
-  if (!unsatisfied || unsatisfied.length === 0) {
-    return <Empty description="暂无不满意聚类（近期无负面满意度会话）" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
-  }
   const columns = [
     {
-      title: '维度',
-      dataIndex: 'dimension',
-      key: 'dimension',
-      render: (v) => <span style={{ fontWeight: 600, fontSize: 13 }}>{v || '—'}</span>,
+      title: '根因类别',
+      dataIndex: 'category',
+      key: 'category',
+      render: (v) => <Tag color={ROOT_CAUSE_TAG_COLOR[v] || 'default'}>{v}</Tag>,
     },
     {
       title: '会话数',
       dataIndex: 'count',
       key: 'count',
       align: 'right',
-      render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#ff4d4f', fontWeight: 600 }}>{v}</span>,
+      render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600 }}>{v}</span>,
     },
     {
-      title: '共性模式',
-      dataIndex: 'commonPattern',
-      key: 'commonPattern',
+      title: '占比',
+      dataIndex: 'ratio',
+      key: 'ratio',
+      align: 'right',
+      render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}%</span>,
+    },
+    {
+      title: '平均耗时',
+      dataIndex: 'avgDur',
+      key: 'avgDur',
+      align: 'right',
+      render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v != null ? `${v}s` : '—'}</span>,
+    },
+    {
+      title: '主要 Agent',
+      dataIndex: 'mainAgent',
+      key: 'mainAgent',
+      render: (v) =>
+        v === '—' ? (
+          <span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>—</span>
+        ) : (
+          <span style={{ fontSize: 12 }}>{v}</span>
+        ),
+    },
+    {
+      title: '建议',
+      dataIndex: 'suggestion',
+      key: 'suggestion',
+      render: (v) => <span style={{ fontSize: 12, color: 'rgba(0,0,0,.65)' }}>{v}</span>,
+    },
+  ];
+
+  return (
+    <Table
+      dataSource={dataSource}
+      columns={columns}
+      rowKey="key"
+      pagination={false}
+      size="small"
+      expandable={{
+        expandedRowRender: (record) => (
+          <div style={{ padding: '8px 12px', background: '#fafafa', borderRadius: 6 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+              该类别下会话（点击会话 ID 查看链路）
+            </div>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+              <tbody>
+                {record.members.map((m) => (
+                  <tr key={m.sessionId}>
+                    <td style={{ padding: '4px 8px' }}>
+                      <span
+                        style={{ fontFamily: 'monospace', fontSize: 12, color: '#1677ff', cursor: 'pointer' }}
+                        onClick={() => onJumpTrace && onJumpTrace(m.sessionId)}
+                      >
+                        {m.sessionId}
+                      </span>
+                    </td>
+                    <td style={{ padding: '4px 8px', fontFamily: 'monospace' }}>
+                      {m.durationSeconds != null ? `${m.durationSeconds}s` : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ),
+      }}
+    />
+  );
+}
+
+/* ───────── ④ 不满意会话共性表（加「全局均值 / 偏差」列 + 条件触发）───────── */
+
+/**
+ * UnsatisfiedTable — 列由 [维度/会话数/共性模式/示例会话] 改为
+ *   [共性维度 / 分类 / 不满意数 / 不满意率 / 全局均值 / 偏差]（对齐 DEMO V23 L643-651）。
+ *
+ * 条件触发：整体不满意率(overallRate) < 10% 时展示绿色状态并隐去表格；
+ *           否则展示聚合表。整体不满意率由调用方从报告级指标传入。
+ * 偏差 = 该维度不满意率 − 全局均值（各维度不满意率均值），红(↑)/绿(↓) 带箭头。
+ * 保留增强：行可展开查看共性模式 + 示例会话。
+ *
+ * @param {Array} unsatisfied  聚类列表 [{dimension,category,count,total,rate,commonPattern,examples}]
+ * @param {number} [overallRate] 整体不满意率（%），<10 时隐藏表格
+ */
+export function UnsatisfiedTable({ unsatisfied, overallRate }) {
+  const rows = Array.isArray(unsatisfied) ? unsatisfied : [];
+
+  if (rows.length === 0) {
+    return <Empty description="暂无不满意聚类（近期无负面满意度会话）" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+  }
+  // 条件未触发（整体不满意率低）→ 绿色状态
+  if (overallRate != null && !isNaN(Number(overallRate)) && Number(overallRate) < 10) {
+    return <div style={GREEN_STATE_STYLE}>✅ 不满意率低于阈值，无需关注</div>;
+  }
+
+  // 各维度不满意率（优先 rate，否则 count/total）
+  const rateOf = (r) => {
+    if (r.rate != null && !isNaN(Number(r.rate))) return Number(r.rate);
+    if (r.total && r.count != null) return +((r.count / r.total) * 100).toFixed(1);
+    return null;
+  };
+  const rates = rows.map(rateOf).filter((v) => v != null);
+  const globalMean = rates.length ? +(rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(1) : null;
+
+  const dataSource = rows.map((r, i) => {
+    const rate = rateOf(r);
+    const dev = rate != null && globalMean != null ? +(rate - globalMean).toFixed(1) : null;
+    return { ...r, key: r.dimension || i, _rate: rate, _dev: dev };
+  });
+
+  const columns = [
+    {
+      title: '共性维度',
+      dataIndex: 'dimension',
+      key: 'dimension',
+      render: (v) => <span style={{ fontWeight: 600, fontSize: 13 }}>{v || '—'}</span>,
+    },
+    {
+      title: '分类',
+      dataIndex: 'category',
+      key: 'category',
       render: (v) => <span style={{ fontSize: 12, color: 'rgba(0,0,0,.65)' }}>{v || '—'}</span>,
     },
     {
-      title: '示例会话',
-      dataIndex: 'examples',
-      key: 'examples',
+      title: '不满意数',
+      dataIndex: 'count',
+      key: 'count',
+      align: 'right',
+      render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#ff4d4f', fontWeight: 600 }}>{v}</span>,
+    },
+    {
+      title: '不满意率',
+      dataIndex: '_rate',
+      key: 'rate',
+      align: 'right',
       render: (v) =>
-        Array.isArray(v) && v.length > 0 ? (
-          <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'rgba(0,0,0,.45)' }}>{v.slice(0, 3).join('、')}</span>
+        v != null ? (
+          <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#ff4d4f', fontWeight: 600 }}>{v}%</span>
         ) : (
-          '—'
+          <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'rgba(0,0,0,.45)' }}>—</span>
         ),
     },
+    {
+      title: '全局均值',
+      dataIndex: '_mean',
+      key: 'mean',
+      align: 'right',
+      render: () =>
+        globalMean != null ? (
+          <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'rgba(0,0,0,.45)' }}>{globalMean}%</span>
+        ) : (
+          <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'rgba(0,0,0,.45)' }}>—</span>
+        ),
+    },
+    {
+      title: '偏差',
+      dataIndex: '_dev',
+      key: 'dev',
+      align: 'right',
+      render: (v) => renderDeviation(v),
+    },
   ];
+
   return (
     <Table
-      dataSource={unsatisfied}
+      dataSource={dataSource}
       columns={columns}
-      rowKey={(r) => r.dimension || Math.random()}
+      rowKey="key"
       pagination={false}
       size="small"
+      expandable={{
+        expandedRowRender: (record) => (
+          <div style={{ padding: '8px 12px', background: '#fafafa', borderRadius: 6, fontSize: 12 }}>
+            {record.commonPattern && (
+              <div style={{ marginBottom: 6 }}>
+                <b>共性模式：</b>
+                {record.commonPattern}
+              </div>
+            )}
+            {Array.isArray(record.examples) && record.examples.length > 0 && (
+              <div>
+                <b>示例会话：</b>
+                {record.examples.join('、')}
+              </div>
+            )}
+            {!record.commonPattern && (!record.examples || record.examples.length === 0) && (
+              <span style={{ color: 'rgba(0,0,0,.45)' }}>—</span>
+            )}
+          </div>
+        ),
+      }}
     />
+  );
+}
+
+/** 渲染偏差：正(高于均值)→红 ↑ +X%；负(低于均值)→绿 ↓ −X% */
+function renderDeviation(dev) {
+  if (dev == null) return <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'rgba(0,0,0,.45)' }}>—</span>;
+  const up = dev > 0;
+  const sign = up ? '+' : '';
+  const color = up ? '#ff4d4f' : '#52c41a';
+  const arrow = up ? '↑' : '↓';
+  return (
+    <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color }}>
+      {arrow} {sign}
+      {dev}%
+    </span>
   );
 }
 
@@ -597,5 +794,16 @@ export function PerfScatter({ perf }) {
 
   return <ReactEChartsCore option={option} style={{ height: 280 }} notMerge lazyUpdate />;
 }
+
+/* ───────── 共享样式 ───────── */
+
+const GREEN_STATE_STYLE = {
+  padding: '12px 16px',
+  background: '#f6ffed',
+  border: '1px solid #b7eb8f',
+  borderRadius: 8,
+  color: '#52c41a',
+  fontSize: 13,
+};
 
 export default DiagnosisCockpit;

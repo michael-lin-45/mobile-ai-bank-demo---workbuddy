@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Empty, Spin } from 'antd';
 import ApiErrorAlert from '../components/ApiErrorAlert';
-import InsightKpiCard, { DemoBadge } from '../components/InsightKpiCard';
+import { DemoBadge } from '../components/InsightKpiCard';
 import ReactEChartsCore from 'echarts-for-react';
 import HeatmapChart from '../components/charts/HeatmapChart';
 import { fetchAIAccuracyReport } from '../api/client';
@@ -25,6 +25,31 @@ function normalizeOverallStats(raw) {
     return [{ label: raw.trim(), value: '', unit: '' }];
   }
   return [];
+}
+
+/**
+ * buildSummaryItems — 将 overallStats 规整为「单行摘要条」展示项。
+ * 口径与 V23 DEMO 对齐：整体意图准确率 / 改写准确率 L1 / 混淆率 / 样本量。
+ *  - 标签「改写准确率」→ 显式「改写准确率 L1」；
+ *  - 「样本量」数值做 k 缩写（12840 → 12.8k），去掉「条」单位。
+ * @param {Array<{label,value,unit}>} stats
+ * @returns {Array<{label:string,value:string,unit:string}>}
+ */
+function buildSummaryItems(stats) {
+  return (stats || []).map((s) => {
+    let label = s.label != null ? `${s.label}` : '';
+    let value = s.value != null ? `${s.value}` : '-';
+    let unit = s.unit != null ? `${s.unit}` : '';
+    if (label.includes('改写')) {
+      label = '改写准确率 L1';
+    }
+    if (label.includes('样本')) {
+      const n = Number(value) || 0;
+      value = n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+      unit = '';
+    }
+    return { label, value, unit };
+  });
 }
 
 /**
@@ -74,22 +99,34 @@ function AccuracyTab() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <ApiErrorAlert error={error} onRetry={loadData} />
 
-        {/* 顶部 KPI 汇总（共享 InsightKpiCard） */}
+        {/* 顶部单行摘要条（4 指标一行展示，对齐 DEMO V23 E） */}
         {overallStats.length > 0 && (
-          <Card size="small" extra={demo ? <DemoBadge /> : null}>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {overallStats.map((k, i) => (
-                <InsightKpiCard
-                  key={k.label || i}
-                  label={k.label}
-                  value={k.value}
-                  unit={k.unit}
-                  color={['#1677ff', '#52c41a', '#fa8c16', '#13c2c2'][i % 4]}
-                  bg={['#f0f5ff', '#f6ffed', '#fff7e6', '#e6fffb'][i % 4]}
-                />
-              ))}
-            </div>
-          </Card>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              flexWrap: 'wrap',
+              padding: '10px 14px',
+              background: '#fafafa',
+              borderRadius: 8,
+              border: '1px solid #f0f0f0',
+              fontSize: 12,
+              color: 'rgba(0,0,0,.65)',
+            }}
+          >
+            <span style={{ fontWeight: 600, color: 'rgba(0,0,0,.45)', marginRight: 4 }}>准确率概览</span>
+            {demo && <DemoBadge />}
+            {buildSummaryItems(overallStats).map((it, i) => (
+              <React.Fragment key={i}>
+                {i > 0 && <span style={{ color: '#d9d9d9' }}>|</span>}
+                <span style={{ whiteSpace: 'nowrap' }}>
+                  {it.label}{' '}
+                  <b style={{ color: 'rgba(0,0,0,.88)', fontWeight: 700 }}>{it.value}{it.unit}</b>
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
         )}
 
         {/* ── 意图识别准确率趋势 ── */}
@@ -125,7 +162,7 @@ function AccuracyTab() {
         {/* ── 意图混淆矩阵 ── */}
         <Card
           title="意图混淆矩阵"
-          extra={<span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>行=预测 · 列=实际</span>}
+          extra={<span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>行=实际 · 列=预测</span>}
         >
           {confusionData ? (
             <HeatmapChart

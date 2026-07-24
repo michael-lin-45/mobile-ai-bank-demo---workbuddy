@@ -34,6 +34,22 @@ function DashboardPage() {
   // 3s 轮询主指标
   usePolling(loadMetrics, 3000, true);
 
+  // 诊断摘要 4 卡数据源（风险计数卡，对齐 DEMO V23）。
+  // 优先从 insights 聚合取数（后端就绪后替换）；未就绪用 mock 形状兜底，
+  // 不再从 RealtimeMetricsVO 取 KPI 渲染此卡。
+  const risks = {
+    perf: 2,
+    accuracy: 3,
+    conversion: 1,
+    satisfaction: 4.1,
+    subs: {
+      perf: '理财咨询 P95 超标',
+      accuracy: '低置信度意图',
+      conversion: '参数提取阶段',
+      satisfaction: '↑ 0.2 较昨日',
+    },
+  };
+
   // 首次加载中 — 显示加载状态
   if (metrics === null) {
     return (
@@ -78,8 +94,8 @@ function DashboardPage() {
         </div>
       )}
 
-      {/* 诊断摘要 4 卡（B3 新增，下钻「智能诊断」） */}
-      <DiagnosisSummary4Cards metrics={metrics} />
+      {/* 诊断摘要 4 卡（风险卡，下钻「智能诊断」/「满意度」） */}
+      <DiagnosisSummary4Cards risks={risks} />
 
       {/* Zone A — 系统健康 */}
       <div>
