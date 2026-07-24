@@ -68,10 +68,11 @@ beforeEach(() => {
 });
 
 /**
- * 验收点（整合后 DiagnosisUnified）：慢会话明细、不满意聚类、转化漏斗 Progress、诊断快照
- * 均能正确渲染（不报错）。
+ * 验收点（整合后 DiagnosisUnified，对齐 DEMO V23）：慢会话明细、不满意聚类、摘要条、
+ * 三列彩色瓶颈卡（性能/准确率/转化）均能正确渲染（不报错）。
+ * 注：转化漏斗卡与独立「智能诊断快照」卡已按 DEMO V23 有意移除，故不再断言 92% / 快照。
  */
-test('DiagnosisTab（统一视图）渲染慢会话/不满意/转化/快照不报错', async () => {
+test('DiagnosisTab（统一视图）渲染慢会话/不满意/三列瓶颈卡不报错', async () => {
   const { container } = render(
     <MemoryRouter>
       <DiagnosisTab />
@@ -82,12 +83,14 @@ test('DiagnosisTab（统一视图）渲染慢会话/不满意/转化/快照不�
   expect((await screen.findAllByText('S-001')).length).toBeGreaterThan(0);
   expect(screen.getByText('S-002')).toBeInTheDocument();
 
-  // 不满意聚类维度 + 转化漏斗 Progress（92%）
+  // 不满意聚类维度 + 摘要条标题
   expect(container.textContent).toContain('转账');
-  expect(container.textContent).toContain('92%');
+  expect(container.textContent).toContain('智能诊断摘要');
 
-  // 诊断快照标题
-  expect(container.textContent).toContain('智能诊断快照');
+  // 三列彩色瓶颈卡标题（性能/准确率/转化）
+  expect(container.textContent).toContain('性能瓶颈');
+  expect(container.textContent).toContain('准确率问题');
+  expect(container.textContent).toContain('转化瓶颈');
 });
 
 test('DiagnosisTab 各端点均 null 时优雅降级（mock 兜底）不报错', async () => {
@@ -102,7 +105,7 @@ test('DiagnosisTab 各端点均 null 时优雅降级（mock 兜底）不报错',
       <DiagnosisTab />
     </MemoryRouter>,
   );
-  // 不抛错即视为通过；降级态下「智能诊断快照」标题与多个「暂无…」并存
-  const degraded = await screen.findAllByText(/智能诊断快照|暂无/);
+  // 不抛错即视为通过；降级态下「暂无…」兜底文案与「智能诊断摘要」摘要条并存
+  const degraded = await screen.findAllByText(/暂无|智能诊断摘要/);
   expect(degraded.length).toBeGreaterThan(0);
 });

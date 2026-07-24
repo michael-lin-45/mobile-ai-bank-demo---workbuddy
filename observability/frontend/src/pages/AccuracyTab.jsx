@@ -9,6 +9,25 @@ import { isEmpty } from '../services/insightAdapters';
 import { getAccuracyReportMock } from '../services/mockInsights';
 
 /**
+ * normalizeOverallStats — 归一化「总体统计」字段，兼容两种后端返回：
+ *   1) 数组（mock / 标准报告）：原样返回
+ *   2) 字符串（后端 buildOverallStats 返回整句摘要，如 "总体意图准确率 94.2%"）：
+ *      包成单元素数组，label 取完整文案，value/unit 留空，交给 InsightKpiCard 渲染。
+ * 其余（undefined / null / 空串 / 非预期类型）一律回退为空数组，保证 .map 可用。
+ *
+ * @param {*} raw - accuracyData.overallStats 的原始值
+ * @returns {Array<{label: string, value: string, unit: string}>}
+ */
+function normalizeOverallStats(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    // 后端吐的是整句字符串，包成单卡片展示（InsightKpiCard 对空 value/unit 安全）
+    return [{ label: raw.trim(), value: '', unit: '' }];
+  }
+  return [];
+}
+
+/**
  * AccuracyTab — 准确率分析 TAB（改造版）。
  *
  * 内容:
@@ -47,7 +66,7 @@ function AccuracyTab() {
     loadData();
   }, [loadData]);
 
-  const overallStats = accuracyData?.overallStats || [];
+  const overallStats = normalizeOverallStats(accuracyData?.overallStats);
   const confusionData = accuracyData?.confusion || null;
 
   return (
@@ -156,7 +175,7 @@ function AccuracyTrendChart({ data }) {
       textStyle: { color: 'rgba(0,0,0,.65)' },
     },
     legend: {
-      data: allSeries.map(s => s.name),
+      data: allSeries.map((s, idx) => s.name || `系列${idx + 1}`),
       top: 0,
       textStyle: { fontSize: 10, color: 'rgba(0,0,0,.65)' },
     },

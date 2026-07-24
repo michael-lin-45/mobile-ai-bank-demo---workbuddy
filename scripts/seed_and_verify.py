@@ -196,6 +196,64 @@ def seed_business_event(payload):
         return "[ERR] %s" % str(e)[:60]
 
 
+def seed_rewrite_accuracy():
+    """播种 agent.rewrite.accuracy 指标（OTLP JSON → POST /api/v1/metrics），
+    让 accuracy-report 的「改写准确率表 + 改写失败根因 TOP3」呈现真实数据（非 mock）。
+
+    后端 buildRewriteSection 从该指标的 rule_check tag 计数派生：
+      - pass 数 / 总数 × 100 = 改写准确率
+      - 非 pass 的 rule_check 值 = 失败根因，取 TOP3
+    OtlpParserService.parseMetrics 把每个 sum dataPoint 落盘为一条 MetricsAgg，
+    tags 由 dataPoint.attributes 序列化为 JSON（如 {"rule_check":"意图歧义未消"}）。
+    默认查询窗口 now-24h~now，种子写入当前时刻必被查到。
+    """
+    metric_name = "agent.rewrite.accuracy"
+    # (rule_check tag, 单点 value, 条数)：16 pass + 4 失败（2+1+1）→ 准确率 80%
+    plan = [
+        ("pass", 0.95, 16),
+        ("意图歧义未消", 0.30, 2),
+        ("关键槽位缺失", 0.25, 1),
+        ("规则冲突", 0.20, 1),
+    ]
+    data_points = []
+    for reason, val, cnt in plan:
+        for _ in range(cnt):
+            data_points.append({
+                "attributes": [{"key": "rule_check", "value": {"stringValue": reason}}],
+                "asDouble": val,
+            })
+    payload = {
+        "resourceMetrics": [{
+            "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "seed-script"}}]},
+            "scopeMetrics": [{
+                "scope": {"name": "seed.rewrite", "version": "1.0.0"},
+                "metrics": [{
+                    "name": metric_name,
+                    "sum": {
+                        "dataPoints": data_points,
+                        "aggregationTemporality": "CUMULATIVE",
+                        "isMonotonic": True,
+                    },
+                }],
+            }],
+        }],
+    }
+    url = f"{BACKEND_BASE}/api/v1/metrics"
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=body,
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            d = json.loads(resp.read().decode("utf-8", "replace"))
+            parsed = d.get("data", {}).get("parsed", "?")
+            return "[%s] parsed=%s dp=%d" % (d.get("code", "?"), parsed, len(data_points))
+    except urllib.error.HTTPError as e:
+        return "[HTTP %s] %s" % (e.code, e.read().decode("utf-8", "replace")[:80])
+    except Exception as e:
+        return "[ERR] %s" % str(e)[:80]
+
+
 def phase1_seed():
     """Phase 1: 播种 36 条对话"""
     print("=" * 60, flush=True)
@@ -296,7 +354,22 @@ def _v_agg_nonempty(data):
     d = data.get("data", None)
     if code == 0 and isinstance(d, list) and len(d) > 0:
         return True, f"code=0, rows={len(d)}"
-    return False, f"code={code}, data={'empty' if d == [] else d}"
+        return False, f"code={code}, data={'empty' if d == [] else d}"
+
+
+def _v_rewrite_section(data):
+    """验证 accuracy-report 的改写段（rewrite 表 + rootCauses TOP3）非空"""
+    code = data.get("code", -1)
+    d = data.get("data", {}) or {}
+    if code != 0:
+        return False, f"code={code}"
+    rewrite = d.get("rewrite")
+    root_causes = d.get("rootCauses")
+    n_rewrite = len(rewrite) if isinstance(rewrite, list) else 0
+    n_rc = len(root_causes) if isinstance(root_causes, list) else 0
+    if n_rewrite > 0 and n_rc > 0:
+        return True, f"rewrite行数={n_rewrite}, 根因TOP={n_rc}, summary={d.get('rewriteSummary','')[:40]}"
+    return False, f"rewrite行数={n_rewrite}, 根因TOP={n_rc}（未播种改写指标→前端走mock）"
 
 
 def phase2_verify():
@@ -324,6 +397,11 @@ def phase2_verify():
         if res.startswith("[0]") or res.startswith("[HTTP"):
             be_ok += 1
     print("  业务埋点播种: %d/%d" % (be_ok, len(BUSINESS_EVENTS)), flush=True)
+
+    # 2.6 前置：播种改写准确率指标（使准确率分析的改写段呈现实数据，非 mock）
+    print("\n[前置播种] V23 改写准确率指标（agent.rewrite.accuracy）...", flush=True)
+    rw_res = seed_rewrite_accuracy()
+    print("  agent.rewrite.accuracy -> %s" % rw_res, flush=True)
 
     has_skip = False
 
@@ -378,6 +456,7 @@ def phase2_verify():
     print("\n[Backend Insights API]", flush=True)
     _print_line(check_json(f"{BACKEND_BASE}/api/v1/ai/insights-report", "insights-report", _v_code0_data))
     _print_line(check_json(f"{BACKEND_BASE}/api/v1/ai/accuracy-report", "accuracy-report", _v_code0_data))
+    _print_line(check_json(f"{BACKEND_BASE}/api/v1/ai/accuracy-report", "accuracy-report(改写段)", _v_rewrite_section))
     _print_line(check_json(f"{BACKEND_BASE}/api/v1/ai/confusion-matrix", "confusion-matrix", _v_code0_data))
 
     # 6. Backend Metrics (W2)

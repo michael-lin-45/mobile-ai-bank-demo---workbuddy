@@ -5,6 +5,7 @@ import usePolling from '../hooks/usePolling';
 import DiagnosisSummary4Cards from '../components/dashboard/DiagnosisSummary4Cards';
 import ZoneCSemantic from '../components/dashboard/ZoneCSemantic';
 import ZoneDBusiness from '../components/dashboard/ZoneDBusiness';
+import ZoneERag from '../components/dashboard/ZoneERag';
 
 /**
  * 总览大屏（V23 M6 / 任务分解 B3 重构）。
@@ -168,6 +169,9 @@ function DashboardPage() {
 
       {/* Zone D — 业务效果（B3 新卡：业务完成率 / 引导办理 / 转人工） */}
       <ZoneDBusiness metrics={metrics} />
+
+      {/* Zone E — 知识检索（RAG） */}
+      <ZoneERag metrics={metrics} />
     </div>
   );
 }

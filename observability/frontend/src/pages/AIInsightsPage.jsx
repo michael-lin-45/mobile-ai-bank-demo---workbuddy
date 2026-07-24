@@ -1,5 +1,5 @@
 import React, { useState, useEffect, Suspense } from 'react';
-import { Card, Tabs, Spin } from 'antd';
+import { Card, Tabs, Spin, Alert, Button } from 'antd';
 import { on } from '../utils/nav';
 import { TAB_ITEMS } from './aiInsights.tabs';
 
@@ -17,6 +17,9 @@ import { TAB_ITEMS } from './aiInsights.tabs';
  */
 const AIInsightsPage = () => {
   const [activeKey, setActiveKey] = useState('diagnosis');
+  // 重试计数器：点击错误边界「重试」时自增，使对应 TAB 错误边界以新 key 重新挂载并重新加载 lazy chunk
+  const [retryTick, setRetryTick] = useState(0);
+  const handleTabRetry = () => setRetryTick((t) => t + 1);
 
   // 订阅总览大屏下钻（itab('diagnosis') 等）→ 切换对应 TAB
   useEffect(() => {
@@ -50,12 +53,16 @@ const AIInsightsPage = () => {
           </span>
         </span>
       ),
-      children: isLoaded ? (
-        <Suspense fallback={<TabLoading />}>
-          <TabComponent />
-        </Suspense>
-      ) : (
-        <TabLoading />
+      children: (
+        <TabErrorBoundary key={`${tab.key}-${retryTick}`} onReset={handleTabRetry}>
+          {isLoaded ? (
+            <Suspense fallback={<TabLoading />}>
+              <TabComponent />
+            </Suspense>
+          ) : (
+            <TabLoading />
+          )}
+        </TabErrorBoundary>
       ),
     };
   });
@@ -116,6 +123,71 @@ function TabLoading() {
       <Spin size="default" />
     </div>
   );
+}
+
+/**
+ * TabErrorBoundary — TAB 级错误边界（任务3：止血「整页白屏」）。
+ *
+ * 背景：AIInsightsPage 各 TAB 用 React.lazy + <Suspense> 加载，但此前
+ * 没有 ErrorBoundary。任一 TAB 在渲染期抛错、或其 lazy 动态 import 失败，
+ * React18 会向上找最近边界；找不到则卸载整棵组件树 → 整页白屏（"系统空白"）。
+ *
+ * 该边界包住每个 TAB 的 Suspense，使单 TAB 崩溃被隔离：
+ *   - 崩溃时仅该 TAB 内显示 antd <Alert type="error"> 错误卡 + 重试按钮
+ *   - 不再拖垮整页的其他 TAB
+ *   - componentDidCatch 记录错误（含组件栈），便于浏览器 console 排错
+ *
+ * key 用 `${tab.key}-${retryTick}` 隔离各 TAB 实例；点击重试通过 onReset 清
+ * 错误态并自增 retryTick → 边界以新 key 重挂载，lazy chunk 重新 import。
+ */
+class TabErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    // 记录错误，便于排错（含组件栈信息）
+    console.error('[TabErrorBoundary] TAB 渲染异常：', error, errorInfo);
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false, error: null });
+    if (typeof this.props.onReset === 'function') {
+      this.props.onReset();
+    }
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Alert
+          type="error"
+          showIcon
+          style={{ borderRadius: 8, marginTop: 8 }}
+          message="该 TAB 加载失败"
+          description={
+            <span>
+              {this.state.error?.message || '未知错误'}
+              <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(0,0,0,.45)' }}>
+                错误已记录到浏览器控制台（console），可贴出具体报错以便最终定位根因。
+              </div>
+            </span>
+          }
+          action={
+            <Button size="small" danger onClick={this.handleRetry}>
+              重试
+            </Button>
+          }
+        />
+      );
+    }
+    return this.props.children;
+  }
 }
 
 export default AIInsightsPage;
