@@ -99,30 +99,32 @@ function AccuracyTab() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <ApiErrorAlert error={error} onRetry={loadData} />
 
-        {/* 顶部单行摘要条（4 指标一行展示，对齐 DEMO V23 E） */}
+        {/* 顶部单行摘要条（竖向 divider + 数值/单位层级 + 小图标，对齐 DEMO v24 L682，应用 frontend-design） */}
         {overallStats.length > 0 && (
           <div
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 12,
+              gap: 4,
               flexWrap: 'wrap',
-              padding: '10px 14px',
-              background: '#fafafa',
+              padding: '12px 16px',
+              background: '#fff',
               borderRadius: 8,
               border: '1px solid #f0f0f0',
-              fontSize: 12,
-              color: 'rgba(0,0,0,.65)',
+              boxShadow: '0 1px 2px rgba(0,0,0,.02)',
             }}
           >
-            <span style={{ fontWeight: 600, color: 'rgba(0,0,0,.45)', marginRight: 4 }}>准确率概览</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'rgba(0,0,0,.45)', marginRight: 8 }}>
+              <span style={{ fontSize: 14 }}>🎯</span> 准确率概览
+            </span>
             {demo && <DemoBadge />}
             {buildSummaryItems(overallStats).map((it, i) => (
               <React.Fragment key={i}>
-                {i > 0 && <span style={{ color: '#d9d9d9' }}>|</span>}
-                <span style={{ whiteSpace: 'nowrap' }}>
-                  {it.label}{' '}
-                  <b style={{ color: 'rgba(0,0,0,.88)', fontWeight: 700 }}>{it.value}{it.unit}</b>
+                {i > 0 && <span style={{ width: 1, height: 18, background: '#f0f0f0', margin: '0 14px' }} />}
+                <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6, whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 12, color: 'rgba(0,0,0,.55)' }}>{it.label}</span>
+                  <span style={{ fontSize: 16, fontWeight: 700, color: 'rgba(0,0,0,.88)', fontFamily: '"JetBrains Mono", monospace' }}>{it.value}</span>
+                  {it.unit && <span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>{it.unit}</span>}
                 </span>
               </React.Fragment>
             ))}

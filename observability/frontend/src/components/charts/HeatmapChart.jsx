@@ -115,10 +115,10 @@ function HeatmapChart({
       },
     },
     grid: {
-      left: 60,
+      left: 64,
       right: 15,
-      top: 10,
-      bottom: 25,
+      top: 36,
+      bottom: 20,
     },
     xAxis: {
       type: 'category',
@@ -126,7 +126,7 @@ function HeatmapChart({
       position: 'top',
       name: '预测',
       nameLocation: 'middle',
-      nameGap: 26,
+      nameGap: 22,
       nameTextStyle: { fontSize: 11, color: 'rgba(0,0,0,.45)' },
       axisLabel: { fontSize: 10, color: 'rgba(0,0,0,.45)' },
       axisLine: { show: false },

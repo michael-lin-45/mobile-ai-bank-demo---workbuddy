@@ -113,6 +113,7 @@ function DashboardPage() {
             deltaNote="较昨日"
             sub={`实时在线 ${metrics.realTimeOnline != null ? metrics.realTimeOnline + ' 人' : '-'}`}
             sparkColor="#1677ff"
+            sparkData={[1180, 1205, 1220, 1240, 1260, 1275, 1284]}
           />
           <MetricCard
             label="访问次数 / QPS"
@@ -124,6 +125,7 @@ function DashboardPage() {
             deltaNote="较昨日"
             sub={`近6小时累计 ${metrics.requestCount != null ? metrics.requestCount.toLocaleString() : '-'} 次`}
             sparkColor="#1677ff"
+            sparkData={[38, 40, 42, 43, 44, 45, 45]}
           />
           <MetricCard
             label="Agent 调用 L0/L1/L2"
@@ -134,6 +136,7 @@ function DashboardPage() {
             deltaUp={metrics.agentCallDeltaUp}
             sub={`L0: ${metrics.l0Calls != null ? metrics.l0Calls : '-'} · L1: ${metrics.l1Calls != null ? metrics.l1Calls : '-'} · L2: ${metrics.l2Calls != null ? metrics.l2Calls : '-'}`}
             sparkColor="#1677ff"
+            sparkData={[320, 340, 360, 380, 410, 430, 448]}
           />
         </div>
       </div>
@@ -154,6 +157,7 @@ function DashboardPage() {
             deltaNote="较昨日"
             sub={`输入 ${formatBigNumber(metrics.tokenInput || 0)} · 输出 ${formatBigNumber(metrics.tokenOutput || 0)}`}
             sparkColor="#722ed1"
+            sparkData={[1.8, 2.0, 2.1, 2.2, 2.3, 2.34, 2.4]}
           />
           <MetricCard
             label="首 Token 时延 P95"
@@ -165,6 +169,7 @@ function DashboardPage() {
             deltaNote="较昨日"
             sub={`P50: ${metrics.ttftP50 != null ? metrics.ttftP50 + 'ms' : '-'} · P99: ${metrics.ttftP99 != null ? metrics.ttftP99 + 'ms' : '-'}`}
             sparkColor="#722ed1"
+            sparkData={[410, 440, 425, 470, 455, 480, 465]}
           />
           <MetricCard
             label="系统时延 P95"
@@ -176,6 +181,7 @@ function DashboardPage() {
             deltaNote="P95较昨日"
             sub={`P50: ${metrics.p50Latency != null ? Math.round(metrics.p50Latency) : '-'}ms · P99: ${metrics.p99Latency != null ? Math.round(metrics.p99Latency) : '-'}ms`}
             sparkColor="#722ed1"
+            sparkData={[280, 310, 295, 330, 320, 350, 340]}
           />
         </div>
       </div>

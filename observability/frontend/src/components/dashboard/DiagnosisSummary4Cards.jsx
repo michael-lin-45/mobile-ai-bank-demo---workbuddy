@@ -21,7 +21,7 @@ import { itab } from '../../utils/nav';
  */
 
 // mock 兜底形状（与 DEMO V23 L261-286 hex 完全一致）
-const DEFAULT_RISKS = {
+export const DEFAULT_RISKS = {
   perf: 2,
   accuracy: 3,
   conversion: 1,

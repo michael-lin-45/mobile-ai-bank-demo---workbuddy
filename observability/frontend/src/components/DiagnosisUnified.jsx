@@ -13,12 +13,19 @@ import {
 import { isEmpty } from '../services/insightAdapters';
 import { getDiagnosisMocks } from '../services/mockInsights';
 import { DemoBadge } from './InsightKpiCard';
+import DiagnosisSummary4Cards, { DEFAULT_RISKS } from './dashboard/DiagnosisSummary4Cards';
 import { emit } from '../utils/nav';
 // 复用驾驶舱的 4 个已验证子区块（M6：DiagnosisCockpit 降级为被复用子区块）
 // 注：三类瓶颈卡不再复用 BottleneckCards（单卡网格），改为本文件三列彩色卡对齐 DEMO V23
 import {
   ActionList, SlowSessionTable, UnsatisfiedTable, PerfScatter,
 } from './DiagnosisCockpit';
+
+/**
+ * 优先行动严重度归一（按 rank）：保证「智能诊断摘要」条 HIGH/MEDIUM/LOW 非空，
+ * 避免 mock 数据全部归为 MEDIUM 导致摘要计数全 0（Task C）。
+ */
+const SEVERITY_BY_RANK = { 1: 'HIGH', 2: 'HIGH', 3: 'MEDIUM', 4: 'MEDIUM', 5: 'LOW' };
 
 /**
  * DiagnosisUnified — 整合后的「智能诊断」统一视图（对齐 DEMO V23 智能诊断 TAB）。
@@ -91,7 +98,14 @@ function DiagnosisUnified() {
         setActions(act.value || []);
         setActionsDemo(false);
       } else {
-        setActions(mock.topActions.map((a) => ({ id: `mock-${a.rank}`, title: a.title, description: a.impact, severity: 'MED', boundary: 'L1' })));
+        setActions(mock.topActions.map((a) => ({
+          id: `mock-${a.rank}`,
+          title: a.title,
+          description: a.impact,
+          // 按 rank 归一严重度，避免全部 MEDIUM 导致摘要 HIGH/MED/LOW 全 0（Task C）
+          severity: SEVERITY_BY_RANK[a.rank] || 'MEDIUM',
+          boundary: 'L1',
+        })));
         setActionsDemo(true);
       }
 
@@ -216,6 +230,9 @@ function DiagnosisUnified() {
   const medCount = isActionsEmpty ? 2 : severityCounts.med;
   const lowCount = isActionsEmpty ? 1 : severityCounts.low;
 
+  // 诊断摘要「四卡」数据（性能瓶颈 / 准确率风险 / 转化流失 / 满意度），对齐 DEMO 概览，含下钻
+  const risks = (report && report.risks) || DEFAULT_RISKS;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* 智能诊断摘要条 — DEMO V23 .diagnosis-summary 紫色渐变样式 */}
@@ -253,6 +270,9 @@ function DiagnosisUnified() {
           刷新洞察
         </Button>
       </div>
+
+      {/* 诊断摘要四卡（性能瓶颈 2 / 准确率风险 3 / 转化流失 1 / 满意度 4.1，含下钻）— Task C */}
+      <DiagnosisSummary4Cards risks={risks} />
 
       {error && (
         <Alert type="warning" showIcon message={error} style={{ borderRadius: 8 }} />

@@ -19,6 +19,7 @@ import {
   DotChartOutlined,
 } from '@ant-design/icons';
 import ReactEChartsCore from 'echarts-for-react';
+import * as echarts from 'echarts';
 import {
   fetchInsightsReport,
   fetchBottlenecks,
@@ -490,49 +491,67 @@ export function SlowSessionTable({ sessions, onJumpTrace, p90Seconds, thresholdS
     };
   });
 
+  // 列头统一样式（对齐 DEMO .tbl th：浅底 + 加粗 + 12px）
+  const headerCell = (text) => (
+    <span style={{ fontSize: 12, fontWeight: 600, color: 'rgba(0,0,0,.65)' }}>{text}</span>
+  );
+  const headerCellStyle = { background: '#fafafa', padding: '8px 8px' };
+
   const columns = [
     {
-      title: '根因类别',
+      title: headerCell('根因类别'),
       dataIndex: 'category',
       key: 'category',
+      onHeaderCell: () => ({ style: headerCellStyle }),
       render: (v) => <Tag color={ROOT_CAUSE_TAG_COLOR[v] || 'default'}>{v}</Tag>,
     },
     {
-      title: '会话数',
+      title: headerCell('会话数'),
       dataIndex: 'count',
       key: 'count',
       align: 'right',
-      render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600 }}>{v}</span>,
+      onHeaderCell: () => ({ style: headerCellStyle }),
+      render: (v) => (
+        <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color: 'rgba(0,0,0,.88)' }}>{v}</span>
+      ),
     },
     {
-      title: '占比',
+      title: headerCell('占比'),
       dataIndex: 'ratio',
       key: 'ratio',
       align: 'right',
-      render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}%</span>,
+      onHeaderCell: () => ({ style: headerCellStyle }),
+      render: (v) => (
+        <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color: v >= 50 ? '#ff4d4f' : v >= 20 ? '#fa8c14' : 'rgba(0,0,0,.65)' }}>{v}%</span>
+      ),
     },
     {
-      title: '平均耗时',
+      title: headerCell('平均耗时'),
       dataIndex: 'avgDur',
       key: 'avgDur',
       align: 'right',
-      render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v != null ? `${v}s` : '—'}</span>,
+      onHeaderCell: () => ({ style: headerCellStyle }),
+      render: (v) => (
+        <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color: v != null && v > 3 ? '#ff4d4f' : v != null && v > 1.5 ? '#fa8c14' : 'rgba(0,0,0,.65)' }}>{v != null ? `${v}s` : '—'}</span>
+      ),
     },
     {
-      title: '主要 Agent',
+      title: headerCell('主要 Agent'),
       dataIndex: 'mainAgent',
       key: 'mainAgent',
+      onHeaderCell: () => ({ style: headerCellStyle }),
       render: (v) =>
         v === '—' ? (
           <span style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>—</span>
         ) : (
-          <span style={{ fontSize: 12 }}>{v}</span>
+          <span style={{ fontSize: 12, fontWeight: 500 }}>{v}</span>
         ),
     },
     {
-      title: '建议',
+      title: headerCell('建议'),
       dataIndex: 'suggestion',
       key: 'suggestion',
+      onHeaderCell: () => ({ style: headerCellStyle }),
       render: (v) => <span style={{ fontSize: 12, color: 'rgba(0,0,0,.65)' }}>{v}</span>,
     },
   ];
@@ -724,75 +743,109 @@ export function PerfScatter({ perf }) {
     return <Empty description="暂无 Agent 性能数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
   }
 
-  const points = rows
-    .map((r) => {
-      const x = Number(r.ttftP95);
-      const y = Number(r.errorRate);
-      if (isNaN(x) || isNaN(y)) return null;
-      return { name: r.agent, value: [x, y], calls: r.calls };
-    })
-    .filter(Boolean);
+  const xData = rows.map((r) => r.agent);
+  const p95Data = rows.map((r) => Number(r.ttftP95 != null ? r.ttftP95 : r.p95Ms));
+  const errData = rows.map((r) => Number(r.errorRate));
 
-  if (points.length === 0) {
-    return <Empty description="暂无散点数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
-  }
+  // 阈值着色：>1500ms 红 / >1000ms 橙 / 否则绿（对齐 DEMO chart-diag-perf）
+  const barColorOf = (v) => (v > 1500 ? '#ff4d4f' : v > 1000 ? '#faad14' : '#52c41a');
+  const barColors = p95Data.map(barColorOf);
 
   const option = {
     tooltip: {
-      trigger: 'item',
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
       textStyle: { color: 'rgba(0,0,0,.65)', fontSize: 12 },
-      formatter: (p) =>
-        `<b>${p.data.name}</b><br/>P95 时延: ${p.data.value[0]}ms<br/>错误率: ${p.data.value[1]}%<br/>调用: ${p.data.calls}`,
+      formatter: (params) => {
+        const idx = params[0].dataIndex;
+        const p95 = p95Data[idx];
+        const err = errData[idx];
+        return `<b>${xData[idx]}</b><br/>P95 时延: ${isNaN(p95) ? '-' : p95 + 'ms'}<br/>错误率: ${isNaN(err) ? '-' : err + '%'}`;
+      },
     },
-    grid: { left: 55, right: 20, top: 20, bottom: 45 },
+    legend: {
+      data: ['P95 时延', '错误率'],
+      bottom: 0,
+      textStyle: { fontSize: 11, color: 'rgba(0,0,0,.65)' },
+    },
+    grid: { left: 56, right: 52, top: 24, bottom: 48 },
     xAxis: {
-      type: 'value',
-      name: 'TTFT P95 (ms)',
-      nameLocation: 'middle',
-      nameGap: 28,
-      nameTextStyle: { fontSize: 11, color: 'rgba(0,0,0,.45)' },
-      axisLabel: { fontSize: 10, color: 'rgba(0,0,0,.45)', formatter: '{value}' },
-      splitLine: { lineStyle: { color: '#f0f0f0' } },
+      type: 'category',
+      data: xData,
+      axisLabel: {
+        fontSize: 10,
+        color: 'rgba(0,0,0,.65)',
+        interval: 0,
+        rotate: xData.length > 4 ? 18 : 0,
+      },
+      axisLine: { lineStyle: { color: '#e8e8e8' } },
+      axisTick: { show: false },
     },
-    yAxis: {
-      type: 'value',
-      name: '错误率 (%)',
-      nameLocation: 'middle',
-      nameGap: 35,
-      nameTextStyle: { fontSize: 11, color: 'rgba(0,0,0,.45)' },
-      axisLabel: { fontSize: 10, color: 'rgba(0,0,0,.45)', formatter: '{value}%' },
-      splitLine: { lineStyle: { color: '#f0f0f0' } },
-    },
+    yAxis: [
+      {
+        type: 'value',
+        name: 'P95 (ms)',
+        nameTextStyle: { fontSize: 11, color: 'rgba(0,0,0,.45)' },
+        axisLabel: { fontSize: 10, color: 'rgba(0,0,0,.45)' },
+        splitLine: { lineStyle: { color: '#f5f5f5' } },
+      },
+      {
+        type: 'value',
+        name: '错误率 (%)',
+        nameTextStyle: { fontSize: 11, color: 'rgba(0,0,0,.45)' },
+        axisLabel: { fontSize: 10, color: 'rgba(0,0,0,.45)', formatter: '{value}%' },
+        splitLine: { show: false },
+      },
+    ],
     series: [
       {
-        type: 'scatter',
-        data: points,
-        symbolSize: (val, params) => Math.max(10, Math.min(40, Math.sqrt(params.data.calls || 1) / 2)),
-        itemStyle: {
-          color: (p) => (p.data.value[0] > 1500 || p.data.value[1] > 2 ? '#ff4d4f' : '#1677ff'),
-          opacity: 0.8,
-          borderColor: '#fff',
-          borderWidth: 1,
+        name: 'P95 时延',
+        type: 'bar',
+        barWidth: '46%',
+        data: p95Data.map((v, i) => ({
+          value: v,
+          itemStyle: {
+            // 圆角 + 纵向渐变（frontend-design）
+            borderRadius: [6, 6, 0, 0],
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: barColors[i] },
+              { offset: 1, color: barColors[i] + '59' },
+            ]),
+          },
+        })),
+        emphasis: {
+          itemStyle: { shadowBlur: 12, shadowColor: 'rgba(0,0,0,.18)' },
         },
-        label: {
-          show: true,
-          position: 'top',
-          fontSize: 10,
-          color: 'rgba(0,0,0,.65)',
-          formatter: (p) => p.data.name,
-        },
+        // 红色虚线阈值 1500ms（醒目 + label）
         markLine: {
           silent: true,
           symbol: 'none',
-          lineStyle: { color: '#ff4d4f', type: 'dashed', width: 1.5 },
-          label: { formatter: 'P95 红线 1500ms', color: '#ff4d4f', fontSize: 10 },
-          data: [{ xAxis: 1500 }],
+          lineStyle: { color: '#ff4d4f', type: 'dashed', width: 1.6 },
+          label: {
+            formatter: '阈值 1500ms',
+            color: '#ff4d4f',
+            fontSize: 11,
+            fontWeight: 600,
+            position: 'insideEndTop',
+          },
+          data: [{ yAxis: 1500 }],
         },
+      },
+      {
+        name: '错误率',
+        type: 'line',
+        yAxisIndex: 1,
+        data: errData,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 7,
+        lineStyle: { color: '#722ed1', width: 2 },
+        itemStyle: { color: '#722ed1' },
       },
     ],
   };
 
-  return <ReactEChartsCore option={option} style={{ height: 280 }} notMerge lazyUpdate />;
+  return <ReactEChartsCore option={option} style={{ height: 300 }} notMerge lazyUpdate />;
 }
 
 /* ───────── 共享样式 ───────── */
