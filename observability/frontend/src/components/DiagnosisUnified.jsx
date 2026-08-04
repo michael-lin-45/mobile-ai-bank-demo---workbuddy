@@ -105,6 +105,8 @@ function DiagnosisUnified() {
           // 按 rank 归一严重度，避免全部 MEDIUM 导致摘要 HIGH/MED/LOW 全 0（Task C）
           severity: SEVERITY_BY_RANK[a.rank] || 'MEDIUM',
           boundary: 'L1',
+          // 深链 TAB（T02）：mock 数据已带 tab，真实数据由 ActionList 启发式兜底
+          tab: a.tab,
         })));
         setActionsDemo(true);
       }

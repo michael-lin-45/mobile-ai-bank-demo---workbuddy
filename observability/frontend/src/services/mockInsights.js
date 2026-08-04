@@ -178,13 +178,13 @@ export const getDiagnosisMocks = () => ({
     generatedAt: '2026-07-23T10:00:00Z',
     boundary: 'L1',
   },
-  // 优先行动 TOP5
+  // 优先行动 TOP5（tab 字段供「去对应 TAB」深链，键域对齐 InsightTabKey）
   topActions: [
-    { rank: 1, title: '优化转账表单长度', impact: '预计降低表单放弃率 12%' },
-    { rank: 2, title: '补齐实体别名词典', impact: '提升改写准确率 3.5pt' },
-    { rank: 3, title: '加固时间表达式解析', impact: '减少跨月计算错误' },
-    { rank: 4, title: '风险意图二次校验', impact: '降低误放行率' },
-    { rank: 5, title: '晚间时段扩容', impact: '缓解深夜流失高峰' },
+    { rank: 1, title: '优化转账表单长度', impact: '预计降低表单放弃率 12%', tab: 'funnel' },
+    { rank: 2, title: '补齐实体别名词典', impact: '提升改写准确率 3.5pt', tab: 'accuracy' },
+    { rank: 3, title: '加固时间表达式解析', impact: '减少跨月计算错误', tab: 'accuracy' },
+    { rank: 4, title: '风险意图二次校验', impact: '降低误放行率', tab: 'accuracy' },
+    { rank: 5, title: '晚间时段扩容', impact: '缓解深夜流失高峰', tab: 'perf' },
   ],
   // 三类瓶颈卡（perf / accuracy / conversion）
   bottlenecks: [
@@ -223,4 +223,66 @@ export const getDiagnosisMocks = () => ({
     { stage: '业务提交', rate: 70 },
     { stage: '业务成功完成', rate: 65 },
   ],
+});
+
+/* ───────── RAG 检索质量（RAG 5 子指标 + 检索质量子面板 mock，dev 链路真值兜底）───────── */
+
+/**
+ * getRagMock — RAG 运行指标 5 子指标 + 检索质量子面板数据（T04 / Q7）。
+ *
+ * 后端 fetchInvocations('rag') 当前无 5 子指标结构，先用 dev 链路真值兜底；
+ * 待 Core RAG 接入后由 api/client.js 适配层映射到 RagRunMetrics / RagQualityData，
+ * RagPanel 零改（设计 §8 Q7）。
+ *
+ * 返回：
+ *   run:   { reorderP95Ms(+delta), recallDocs(+delta), triggerRate(+delta),
+ *            retrieveErrRate(+delta), reorderErrRate(+delta),
+ *            trend:{categories, series:[{name,data,color,yAxisIndex}]} }
+ *   quality: { topK:{categories,top1,top3,top5},
+ *              table:[{dim,current,target,verdict:'good'|'warn',label}] } }
+ *
+ *   delta: 各运行态指标副文案（KPI k-sub，对齐 DEMO L822–826）。
+ *   yAxisIndex: 趋势双 Y 轴映射（0=ms/篇，1=%），对齐 DEMO L1110。
+ *   verdict/label: 质量判定（good→green 达标 / warn→gold 偏低·临界），对齐 DEMO L835–839。
+ */
+export const getRagMock = () => ({
+  run: {
+    reorderP95Ms: 45, // 重排时延 P95 (ms)
+    reorderP95Delta: '↓ 12.4% 较昨日',
+    recallDocs: 8.2, // 平均召回文档数
+    recallDocsDelta: '↑ 0.6 篇',
+    triggerRate: 64, // RAG 触发率 (%)
+    triggerRateDelta: '↑ 3.1% 会话含检索',
+    retrieveErrRate: 0.4, // 检索错误率 (%)
+    retrieveErrRateDelta: '↓ 0.1% 网络/超时',
+    reorderErrRate: 0.1, // 重排错误率 (%)
+    reorderErrRateDelta: '→ 持平',
+    trend: {
+      categories: ['10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00'],
+      series: [
+        { name: '重排时延P95', data: [52, 49, 47, 46, 45, 44, 45], color: '#08979c', yAxisIndex: 0 },
+        { name: '召回文档数', data: [7.4, 7.8, 8.0, 8.1, 8.2, 8.3, 8.2], color: '#13c2c2', yAxisIndex: 0 },
+        { name: 'RAG触发率', data: [58, 60, 61, 62, 63, 63, 64], color: '#722ed1', yAxisIndex: 1 },
+        { name: '检索错误率', data: [0.6, 0.5, 0.5, 0.4, 0.4, 0.4, 0.4], color: '#ff4d4f', yAxisIndex: 1 },
+        { name: '重排错误率', data: [0.2, 0.2, 0.1, 0.1, 0.1, 0.1, 0.1], color: '#faad14', yAxisIndex: 1 },
+      ],
+    },
+  },
+  quality: {
+    // Top-K 相关性 / 命中率分布 (%)
+    topK: {
+      categories: ['07-04', '07-06', '07-08', '07-10'],
+      top1: [44, 47, 50, 52],
+      top3: [55, 58, 61, 63],
+      top5: [58, 61, 63, 64],
+    },
+    // 质量判定表（对齐 DEMO L835–839：5 行，verdict good|warn，NDCG@5 改相对增益 +0.11）
+    table: [
+      { dim: 'Top-1 命中率', current: '52%', target: '≥60%', verdict: 'warn', label: '偏低' },
+      { dim: 'Top-5 命中率', current: '64%', target: '≥70%', verdict: 'warn', label: '偏低' },
+      { dim: '平均相关性评分', current: '0.82', target: '≥0.85', verdict: 'warn', label: '临界' },
+      { dim: '空召回率（无文档）', current: '1.2%', target: '≤2%', verdict: 'good', label: '达标' },
+      { dim: '重排提升度（NDCG@5）', current: '+0.11', target: '≥+0.08', verdict: 'good', label: '达标' },
+    ],
+  },
 });

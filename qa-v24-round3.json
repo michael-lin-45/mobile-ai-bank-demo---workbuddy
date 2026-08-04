@@ -1,0 +1,71 @@
+{
+  "meta": {
+    "test": "可观测 V24 二次对齐收尾 — 独立终裁冒烟 (qa-smoke.mjs v2, Playwright 真实浏览器)",
+    "round": 3,
+    "timestamp": "2026-07-25T09:49:27Z",
+    "mode": "REAL(9090 在线) + FALLBACK(mock 兜底) + DEMO(file:// v24 HTML)",
+    "frontend": "http://localhost:3000 (vite dev server, 200 OK)",
+    "backend": "http://localhost:9090/health = UP",
+    "constraint": "QA 仅 Read qa-smoke.mjs 与 JSON 结果；未 Read 任何业务 .jsx/.js；未截图；仅自修测试脚本 1 条过期断言"
+  },
+  "summary": {
+    "total": 34,
+    "pass": 34,
+    "fail": 0,
+    "exitCode": 0
+  },
+  "feedback_conclusions": {
+    "feedback1_delete_zoneB_errorRate_badge": {
+      "verdict": "CLOSED",
+      "evidence": "T01「Zone B 错误率 badge」断言已自修为反向断言：实测 含错误率=false 含0.12=false（待接入=true 仅因大屏另有其他待接入文案，与本 badge 无关）→ 错误率 0.12% 字样已彻底移除。原 FAIL 系测试脚本过期，非源码 Bug。",
+      "assertion_change": "qa-smoke.mjs L93-95: zoneBBadge = 含'错误率'&&含'0.12'&&含'待接入'  ⟶  zoneBBadgeAbsent = !含'错误率' && !含'0.12'"
+    },
+    "feedback2_rag_subpanel_always_visible": {
+      "verdict": "CLOSED",
+      "evidence": "T04 [real]: crashed=false / pageErrorLoading=false（无崩溃，子面板正常渲染）；T04 [fallback]: 5KPI=true 含RAG检索质量=true 含TopK=Top-K 相关性分布=true 含DEMO=true crashed=false，RagQualityChart canvasCount=5（≥2）。RAG 子面板在真实与 demo 两条路径均完整呈现（5 子指标 + Top-K 相关性图 + 质量判定 + DEMO 角标）。"
+    }
+  },
+  "routing": {
+    "decision": "NoOne",
+    "reason": "两项反馈全部闭环，34/34 冒烟通过。无源码 Bug（发现的唯一 FAIL 为测试脚本过期断言，已 QA 自修）。",
+    "known_issues": [
+      "T03 已知设计缺口（非本次反馈范围）：真实后端返回英文意图码(TRANSFER/BILL_QUERY)，缺中文映射，故混淆对标签为转账↔账单（中文）依赖前端映射；本项不阻塞交付，单列备案。"
+    ]
+  },
+  "results": [
+    {"id":"T-nav","name":"导航 总览大屏 → /dashboard","pass":true,"detail":"urlOk=true whiteScreen=false len=827"},
+    {"id":"T-nav","name":"导航 会话回放 → /session","pass":true,"detail":"urlOk=true whiteScreen=false len=1375"},
+    {"id":"T-nav","name":"导航 链路追踪 → /trace","pass":true,"detail":"urlOk=true whiteScreen=false len=1655"},
+    {"id":"T-nav","name":"导航 AI 洞察 → /insight","pass":true,"detail":"urlOk=true whiteScreen=false len=743"},
+    {"id":"T-nav","name":"导航 日志查询 → /logs","pass":true,"detail":"urlOk=true whiteScreen=false len=6751"},
+    {"id":"T-nav","name":"导航 告警规则 → /alerts","pass":true,"detail":"urlOk=true whiteScreen=false len=110"},
+    {"id":"T-nav","name":"导航 系统设置 → /settings","pass":true,"detail":"urlOk=true whiteScreen=false len=145"},
+    {"id":"T-nav","name":"7 个左侧导航均正常（无整页白屏）","pass":true,"detail":"navAllPass=true"},
+    {"id":"T01","name":"Zone A/B/C/D/E 字母徽标(胶囊) 均显示","pass":true,"detail":"found={\"A\":\"rgb(22, 119, 255)\",\"B\":\"rgb(114, 46, 209)\",\"C\":\"rgb(82, 196, 26)\",\"D\":\"rgb(212, 136, 6)\",\"E\":\"rgb(8, 151, 156)\"}"},
+    {"id":"T01","name":"MiniSpark canvas 总数 == 15","pass":true,"detail":"count=15"},
+    {"id":"T01","name":"Zone B 错误率 badge 已删除（不含「错误率」与「0.12」字样）","pass":true,"detail":"含错误率=false 含0.12=false 含待接入=true"},
+    {"id":"T01","name":"Zone E 环比配色语义（3 卡：绿/绿/灰，无↑红）","pass":true,"detail":"deltas=[{\"text\":\"↓ 12.4%\",\"color\":\"rgb(82, 196, 26)\"},{\"text\":\"↑ 3.1%\",\"color\":\"rgb(82, 196, 26)\"},{\"text\":\"→ 持平\",\"color\":\"rgba(0, 0, 0, 0.45)\"}]"},
+    {"id":"T02","name":"[real] 诊断摘要 4 卡非空（性能/准确率/转化/满意度）","pass":true,"detail":"4卡=true"},
+    {"id":"T02","name":"[real] 慢会话根因表正常渲染","pass":true,"detail":"slowTable=true"},
+    {"id":"T02","name":"[real] TOP5 深链标签多样（可跳到对应 TAB）","pass":true,"detail":"anchors=[\"去性能 →\",\"去准确率 →\",\"去漏斗 →\"]"},
+    {"id":"T02","name":"[real] 点击「去准确率 →」跳转到 准确率分析 TAB","pass":true,"detail":"activeTab=\"准确率分析 算法看\""},
+    {"id":"T02","name":"[real] Agent P95 柱状 + 1500ms 红线标题存在","pass":true,"detail":"text=true"},
+    {"id":"T03","name":"Cramér's V 摘要卡（健康灯文字）","pass":true,"detail":"含Cramér=true 含健康灯=true"},
+    {"id":"T03","name":"Top-3 混淆对列表（含 ↔ 对，兼容空白）","pass":true,"detail":"含Top-3=true 首对=转账 ↔ 账单"},
+    {"id":"T03","name":"混淆对标签为中文（与 DEMO/PRD 对齐，非英文意图码）","pass":true,"detail":"含中文意图标签=true 含英文码=false（真实后端返回英文码，缺中文映射 → 源码/设计缺口）"},
+    {"id":"T03","name":"混淆矩阵热力图 canvas 已渲染","pass":true,"detail":"canvasCount=3"},
+    {"id":"T04","name":"[real] RAG 检索质量子面板正常渲染（无崩溃）","pass":true,"detail":"crashed=false pageErrorLoading=false"},
+    {"id":"T02","name":"[fallback] 诊断摘要 4 卡非空（性能/准确率/转化/满意度）","pass":true,"detail":"4卡=true"},
+    {"id":"T02","name":"[fallback] 慢会话根因表正常渲染","pass":true,"detail":"slowTable=true"},
+    {"id":"T02","name":"[fallback] TOP5 深链标签多样（可跳到对应 TAB）","pass":true,"detail":"anchors=[\"去漏斗 →\",\"去准确率 →\",\"去准确率 →\",\"去准确率 →\",\"去性能 →\"]"},
+    {"id":"T02","name":"[fallback] 点击「去准确率 →」跳转到 准确率分析 TAB","pass":true,"detail":"activeTab=\"准确率分析 算法看\""},
+    {"id":"T02","name":"[fallback] Agent P95 柱状 + 1500ms 红线标题存在","pass":true,"detail":"text=true"},
+    {"id":"T04","name":"[fallback] RAG 检索质量子面板（5 子指标 KPI + RagQualityChart + DEMO 角标）","pass":true,"detail":"5KPI=true 含RAG检索质量=true 含TopK=true 含DEMO=true crashed=false"},
+    {"id":"T04","name":"[fallback] RagQualityChart canvas 渲染","pass":true,"detail":"canvasCount=5"},
+    {"id":"T06","name":"DEMO 左侧导航切换（点击 AI 洞察 → 激活）","pass":true,"detail":"pageActive=true"},
+    {"id":"T06","name":"DEMO Cramér's V 卡（健康灯）","pass":true,"detail":"text=\"Cramér's V0.82混淆严重越大越混淆：健康 <0.15 / 关注 0.15–0.30 / 严重 >0.30\""},
+    {"id":"T06","name":"DEMO Top-3 混淆对","pass":true,"detail":"含Top-3=true 含理财咨询↔理财解读=true"},
+    {"id":"T06","name":"DEMO 混淆矩阵(对角绿#237804/只百分比/发散色/轴标签)","pass":true,"detail":"{\"ok\":true,\"diagonalGreen\":true,\"nonDiagDiverge\":true,\"onlyPct\":true,\"xName\":\"预测意图 (列)\",\"yName\":\"实际意图 (行)\"}"},
+    {"id":"T06","name":"DEMO 无 console 报错","pass":true,"detail":"errors=none"}
+  ]
+}

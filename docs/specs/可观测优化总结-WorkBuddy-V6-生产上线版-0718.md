@@ -108,7 +108,9 @@ flowchart TB
     end
 
     subgraph STORE["标准可观测栈 (P2)"]
-        TEMPO["Tempo"]  VM["VictoriaMetrics 集群"]  LOKI["Loki + Vector"]
+        TEMPO["Tempo"]
+        VM["VictoriaMetrics 集群"]
+        LOKI["Loki + Vector"]
     end
 
     subgraph LANG["Langfuse (自托管, P2)"]
@@ -122,9 +124,13 @@ flowchart TB
         SYNC["RedisH2SyncService 30s"]
         AI["InsightsEngineService — 6 TAB + 诊断驾驶舱"]
         ALERT["AlertEngineService → P2 迁 Grafana"]
-        API --> REDIS  API --> PG
-        REDIS -.30s.-> SYNC --> PG
-        PG --> AI  PG --> ALERT  REDIS --> ALERT
+        API --> REDIS
+        API --> PG
+        REDIS -.30s.-> SYNC
+        SYNC --> PG
+        PG --> AI
+        PG --> ALERT
+        REDIS --> ALERT
     end
 
     subgraph OBS2["看板 / 告警 / 前端"]
@@ -132,13 +138,23 @@ flowchart TB
         FE["React 前端 v20 (8 页)"]
     end
 
-    OTEL --> RECV   SESS --> API
+    OTEL --> RECV
+    SESS --> API
     BATCH --> K
-    K --> TEMPO  K --> VM  K --> LOKI  K --> API
+    K --> TEMPO
+    K --> VM
+    K --> LOKI
+    K --> API
     BATCH -.OTel OTLP.-> LF
     ALERT -.P0自研→P2迁.-> GRAF
-    REDIS --> GRAF  PG --> GRAF  VM --> GRAF  TEMPO --> GRAF  LOKI --> GRAF
-    AI --> FE  PG --> FE  REDIS --> FE
+    REDIS --> GRAF
+    PG --> GRAF
+    VM --> GRAF
+    TEMPO --> GRAF
+    LOKI --> GRAF
+    AI --> FE
+    PG --> FE
+    REDIS --> FE
 ```
 
 ### 2.2 架构决策记录

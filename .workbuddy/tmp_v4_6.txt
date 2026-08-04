@@ -1,0 +1,44 @@
+### 6.2 链路追踪
+
+| # | 字段 | 状态 | 说明 |
+|---|---|---|---|
+| T1 | LLM 置信度 `llm.confidence` | ✅ 已闭环(0718, T27/T28) | Core span 已写 + SessionService 解析 |
+| T2 | L0/L1/L2 分层意图 | ✅ 已闭环(0718, 方案A) | Span attrs + sessions 已补 |
+| T3 | traceId/sessionId/ioInput | ✅ | — |
+| T4 | durationMs/ttftMs/tokenTotal | ✅ | — |
+| T5 | spanTree/ioOutput | ✅ | — |
+
+### 6.3 AI 洞察 6 TAB
+
+| # | 指标 | 状态 | 说明 |
+|---|---|---|---|
+| I1 | 准确率趋势（按 intent 分组） | 🟢 | `/ai/accuracy-report` 统一端点 |
+| I2 | 混淆矩阵（分层） | 🟢 已闭环(0718) | Core 已写 intent_predicted/actual 到 span |
+| I3 | 改写准确率 | 🟢 | — |
+| I4 | 根因 TOP3 | 🟢 | — |
+| I5 | L2 意图识别 | 🔴 | 占位，待 L2 链路数据 |
+
+### 6.4 维度规范与基数预算（Codex §6.5，纳入 V3）
+
+#### 允许做 Metric Tag 的字段（基数 < 200）
+
+| Tag Key | 示例值 | 基数估算 |
+|---|---|---|
+| `model.name` | qwen-turbo, qwen-plus | < 10 |
+| `agent.level` | L0, L1, L2 | 3 |
+| `agent.name` | DomainRouter, ContextRouter, TransferAgent | < 30 |
+| `intent` | TRANSFER, WEALTH, BILL, GENERAL | < 20 |
+| `state` | correct, fuzzy, error, disambiguated | 4 |
+| `error_type` | timeout, auth_error, rate_limit | < 10 |
+| `outcome` | success, fail, partial | 3 |
+
+#### 禁止作为 Metric Tag 的字段（基数 > 1000）
+
+| 字段 | 存放位置 | 原因 |
+|---|---|---|
+| `user_id` | Span attributes / Log | 用户数可无限增长 |
+| `session_id` | Span attributes | 每次会话新 ID |
+| `trace_id` | Span 主键 | 每次请求新 ID |
+| `prompt` / `response` | Span attributes (ai.io.*) | 文本无限 |
+| `timestamp` | Span start/end | 每毫秒新值 |
+

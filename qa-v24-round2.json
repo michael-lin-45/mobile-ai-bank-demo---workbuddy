@@ -1,0 +1,61 @@
+{
+  "round": "round-2 (final regression / 终裁)",
+  "verifier": "software-qa-engineer-3 (Edward / 严过关)",
+  "timestamp": "2026-07-25T07:54:49Z",
+  "method": "independent Playwright smoke via qa-smoke.mjs (REAL/FALLBACK/DEMO), no source reading, no screenshots",
+  "environment": {
+    "backend": "http://localhost:9090/health -> UP (observability-backend v0.1.0)",
+    "frontend": "http://localhost:3000 -> HTTP 200 (vite preview serving dist built 07-25 15:44, reflects HMR fixes 15:43)",
+    "smoke_log": "qa-round2-smoke.log"
+  },
+  "summary": {
+    "TOTAL": 34,
+    "PASS": 34,
+    "FAIL": 0,
+    "console_error_REAL": 9,
+    "console_error_FALLBACK": 6,
+    "pageerror_REAL": 0,
+    "pageerror_FALLBACK": 0
+  },
+  "defect_verification": [
+    {
+      "id": "D1-T04-RAG-panel",
+      "first_round_fail": "RAG 子面板 REAL 下崩溃 (loading is not defined)",
+      "expect": "REAL/FALLBACK crashed=false, 无 pageerror, 无 'loading is not defined'",
+      "evidence": {
+        "REAL": "crashed=false; pageErrorLoading=false; pageerror=0",
+        "FALLBACK": "crashed=false (5KPI+RagQualityChart+DEMO); pageerror=0"
+      },
+      "grep_residual": "qa-round2-smoke.log & frontend.log: NO 'loading is not defined' / NO ReferenceError",
+      "result": "PASS",
+      "note": "console.error=9(REAL)/6(FALLBACK) 为非致命日志(如接口告警)，非未捕获异常"
+    },
+    {
+      "id": "D2-T02-TOP5-deeplink",
+      "first_round_fail": "REAL 下 TOP5 深链锚文本全为「去智能诊断 →」",
+      "expect": "REAL 出现「去性能→/去准确率→/去漏斗→」且点击跳转对应 TAB",
+      "evidence": {
+        "REAL": "anchors=[\"去性能 →\",\"去准确率 →\"]; 点击「去准确率 →」-> activeTab=\"准确率分析\"",
+        "FALLBACK": "anchors=[\"去漏斗 →\",\"去准确率 →\",\"去准确率 →\",\"去准确率 →\",\"去性能 →\"]"
+      },
+      "result": "PASS"
+    },
+    {
+      "id": "D3-T03-confusion-chinese",
+      "first_round_fail": "REAL 混淆矩阵轴标签/Top-3 混淆对为英文意图码",
+      "expect": "REAL 轴标签与 Top-3 混淆对必须为中文；含英文码计数=0",
+      "evidence": {
+        "Top3_first_pair": "转账 ↔ 账单 (中文)",
+        "含中文意图标签": true,
+        "含英文码": false,
+        "DEMO_axisLabels": "x=预测意图 (列) / y=实际意图 (行)"
+      },
+      "grep_residual": "qa-round2-smoke.log: NO raw English intent codes (TRANSFER/BILL_QUERY/WEALTH_CONSULT/...)",
+      "result": "PASS",
+      "note": "后端仍返回英文码，前端已补齐中文映射表，渲染层无英文码"
+    }
+  ],
+  "residual_issues": [],
+  "routing": "NoOne",
+  "conclusion": "修复闭环，3 个源码缺陷全部通过独立第二轮回归验证 (TOTAL=34 PASS=34 FAIL=0)，可交付。"
+}

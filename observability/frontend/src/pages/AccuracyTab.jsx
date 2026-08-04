@@ -36,7 +36,7 @@ function normalizeOverallStats(raw) {
  * @returns {Array<{label:string,value:string,unit:string}>}
  */
 function buildSummaryItems(stats) {
-  return (stats || []).map((s) => {
+  const items = (stats || []).map((s) => {
     let label = s.label != null ? `${s.label}` : '';
     let value = s.value != null ? `${s.value}` : '-';
     let unit = s.unit != null ? `${s.unit}` : '';
@@ -48,8 +48,15 @@ function buildSummaryItems(stats) {
       value = n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
       unit = '';
     }
+    // (h) 混淆率容错：后端 overallStats 未提供「混淆率」（value 为空）时跳过该项，
+    // 不自行从矩阵反算（口径可能不一致），并 warn 提示补字段（设计 §8 Q2）。
+    if (label.includes('混淆') && (value === '-' || value === '')) {
+      console.warn('[AccuracyTab] overallStats 缺「混淆率」字段，已隐藏该项（不前端反算）');
+      return null;
+    }
     return { label, value, unit };
   });
+  return items.filter(Boolean);
 }
 
 /**
@@ -172,9 +179,11 @@ function AccuracyTab() {
               yLabels={confusionData.labels || ['转账', '账单', '理财咨询', '理财解读', '闲聊']}
               matrix={confusionData.matrix || []}
               height={280}
+              showCramers
+              showTopPairs
             />
           ) : (
-            <HeatmapChart height={280} />
+            <HeatmapChart height={280} showCramers showTopPairs />
           )}
         </Card>
       </div>

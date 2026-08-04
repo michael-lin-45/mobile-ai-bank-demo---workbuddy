@@ -1,0 +1,62 @@
+{
+  "generatedAt": "2026-07-25T11:00:13.495Z",
+  "mode": "playwright chromium (headless) vs live :3000 vite dev server",
+  "smokeSummary": {
+    "total": 34,
+    "pass": 34,
+    "fail": 0,
+    "t04": [
+      "✅ [T04] [real] RAG 检索质量子面板正常渲染（无崩溃） — crashed=false pageErrorLoading=false",
+      "✅ [T04] [fallback] RAG 检索质量子面板（5 子指标 KPI + RagQualityChart + DEMO 角标） — 5KPI=true 含RAG检索质量=true 含TopK=true 含DEMO=true crashed=false",
+      "✅ [T04] [fallback] RagQualityChart canvas 渲染 — canvasCount=5"
+    ]
+  },
+  "t04Rag": [
+    {
+      "name": "T04 三块结构（运行指标/趋势图/检索质量子面板）",
+      "pass": true,
+      "detail": "blockTitles=3/3"
+    },
+    {
+      "name": "T04 质量判定表 5 行",
+      "pass": true,
+      "detail": "rows=5 dims=[\"Top-1 命中率\",\"Top-5 命中率\",\"平均相关性评分\",\"空召回率（无文档）\",\"重排提升度（NDCG@5）\"]"
+    },
+    {
+      "name": "T04 质量表配色 good→green(2)/warn→gold(3)/无红(0)",
+      "pass": true,
+      "detail": "green=2 gold=3 red=0"
+    },
+    {
+      "name": "T04 KPI delta 副文案（5 条均渲染）",
+      "pass": true,
+      "detail": "deltas=5/5"
+    },
+    {
+      "name": "T04 底部 note（运行态/效果态/不重叠）",
+      "pass": true,
+      "detail": "note=true"
+    },
+    {
+      "name": "T04 3 块 DemoBadge",
+      "pass": true,
+      "detail": "demoSpans=3"
+    },
+    {
+      "name": "T04 RagQualityChart canvas ≥ 2（趋势图 + Top-K 图）",
+      "pass": true,
+      "detail": "canvas=2"
+    },
+    {
+      "name": "T04 RAG 面板真实渲染（无崩溃 / 无 pageerror）",
+      "pass": true,
+      "detail": "hasPanel=true pageErrors=0"
+    }
+  ],
+  "summary": {
+    "total": 8,
+    "pass": 8,
+    "fail": 0
+  },
+  "pageErrors": []
+}

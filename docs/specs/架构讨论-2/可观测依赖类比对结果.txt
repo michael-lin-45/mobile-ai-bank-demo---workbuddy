@@ -1,0 +1,62 @@
+# 已确认当前试点项目中包含的类及版本：
+com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:1.1.2.2
+org.springframework.boot:spring-boot：3.4.3
+org.springframework.boot:spring-boot-starter:3.4.3(*)
+org.springframework.boot:spring-boot-starter-actuator:3.4.3
+org.springframework.boot:spring-aop：6.2.18
+
+io.micrometer:micrometer-observation:1.15.11(*)
+io.micrometer:micrometer-registry-prometheus:1.14.4
+
+io.opentelemetry:opentelemetry-api:1.49.0
+io.opentelemetry:opentelemetry-context:1.49.096+
+
+- 问题1：以上有哪些类和可观测并没有直接关系，不需要特别关注？
+- 问题2：以上哪些类之间存在包含关系，然后上一层父类就不需要特别关注？比如要求同时引入A和B，然后B在开源框架里，是从属于A的；那么A的引入是否需要显示说明。
+- 问题3：micrometer-registry-prometheus必须吗？
+- 问题4：ObservationConvention、ObservationHandler 两个接口是什么类的能力？
+- 问题5：Graph Observation这个方法是否必须？它依赖于什么类？是否已经在上述列表里。
+
+
+# 以下类在文档里有提到，但是在实际项目代码中目前未引入：
+无spring-ai-alibaba-starter-dashscope
+无spring-ai-core
+有spring-ai-starter，无spring-ai-alibaba-starter
+有spring-ai-model，无spring-ai-model-starter
+有spring-aop，无spring-boot-starter-aop
+
+- 问题6：以上状态标识为“无”的类，是否需要显示引入？
+
+
+# 以下类看起来和可观测好像有点关系，但是在前边的描述里没有提到。
+org.springframework.ai:spring-ai-autoconfigure-model-chat-observation:1.1.6
+org.springframework.ai:spring-ai-autoconfigure-model-embedding-observation:1.1.6
+org.springframework.ai:spring-ai-autoconfigure-model-image-observation:1.1.6
+org.springframework.ai:spring-ai-client-chat:1.1.6(*)
+org.springframework.ai:spring-ai-model:1.1.6(*)
+
+io.micrometer:micrometer-common:1.15.11(*)
+io.micrometer:micrometer-core:1.15.11(*)
+io.micrometer:micrometer-jakarta9:1.14.4
+
+io.prometheus:simpleclient_tracer_otel:0.16.0
+io.prometheus:simpleclient_tracer_common:0.16.0
+io.prometheus:simpleclient_tracer_otel_agent:0.16.0
+
+- 问题7：以上哪些类和可观测有关系，可以显示补充到需引入的依赖列表里？
+- 问题8：是否需要引入spring-ai-autoconfigure-model-graph-observation？
+- 问题9：simpleclient_tracer* 开头的几个类必须吗？
+
+
+# OTel桥接层：打通Spring AI Alibaba Observation与标准OTel
+micrometer-tracing-bridge-otel
+micrometer-registry-otlp
+opentelemetry-exporter-otlp
+opentelemetry-sdk
+opentelemetry-agent
+
+- 问题10：opentelemetry-javaagent.jar和上方3个OpenTelemetry类是什么关系？
+- 问题11：OTel Collector和上述几个类是什么关系？是否必须？该怎么引入？
+
+
+

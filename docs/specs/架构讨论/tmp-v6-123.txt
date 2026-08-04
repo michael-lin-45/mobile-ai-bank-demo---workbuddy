@@ -1,0 +1,145 @@
+## 1. 双方案组件选型
+
+> 0728 刷新：本节以双方案结构替换原 0718 的单一方案（Alloy+Tempo+VM+Loki+Langfuse）。
+
+### 1.1 双方案总览
+
+| | 方案 A：全栈标准版 ⭐ | 方案 B：国产化务实版 |
+|---|---|---|
+| **定位** | 业界最佳实践，功能最全 | 最小引入，存储全复用 |
+| **新增独立组件** | 5~6 个 | **2 个** |
+| **审批难度** | ⭐⭐⭐ | ⭐⭐ |
+| **适合银行** | 无国产硬约束 + 可观测独立部署 + SRE 团队 | 国产约束严格 + 审批优先"不引入新存储" |
+| **关系** | **A↔B 递进，B→A 迁移零业务代码改动** | |
+
+### 1.2 方案 A 组件选型（全栈标准版）
+
+| 信号 | 组件 | 许可 | 说明 |
+|---|---|---|---|
+| 采集 | **OTel Java Agent + OTel Collector** | Apache 2.0 | CNCF 毕业 |
+| Trace | **Grafana Tempo** | Apache 2.0 | 对象存储后端，与 Loki 同源可关联 |
+| Metrics | **VictoriaMetrics** 或 Mimir | Apache 2.0 | PromQL 兼容，压缩率 10× |
+| Log | **Grafana Loki** | AGPLv3 | 标签索引，对象存储，便宜 |
+| 看板/告警 | **Grafana + Alerting** | AGPLv3 | 统一 Tempo+VM+Loki+信创DB |
+| 业务真相源 | **信创 DB**（OceanBase/GaussDB 等） | — | sessions + 业务指标 |
+| LLM 工程 | **MLflow**（替代 Langfuse，MySQL 兼容） | Apache 2.0 | 见 §17 |
+
+### 1.3 方案 B 组件选型（国产化务实版，仅 2 个新增）
+
+| 信号 | 组件 | 说明 |
+|---|---|---|
+| 采集 | **OTel Java Agent + OTel Collector** | **仅此 2 个新组件** |
+| Trace | 信创 DB spans 表 + 自研查询 | 复用已有 |
+| Metrics | 信创 DB metrics_agg 表（首选），VM 可选增强 | 量级小时信创 DB 够用 |
+| Log | 信创 DB logs 表 + 大数据系统归档 | 复用已有 |
+| Session | 信创 DB sessions + session_turns 表 | 复用已有 |
+| 展示 | 自研前端 v24 为主，Grafana 可选 | 已有 |
+| LLM 工程 | MLflow（MySQL 兼容）或 自研 | 见 §17 |
+
+> **Langfuse 在 V6 中排除**：银行信创后无 PG，Langfuse 强依赖 PG（Prisma ORM），生产不可行。LLM 工程改用 MLflow + 自研 + DeepEval。详见 FAQ §五。
+
+## 2. 系统目标架构
+
+### 2.1 方案 A 架构（全栈标准版）
+
+```mermaid
+flowchart TB
+    subgraph CORE["Core 应用 — L1+L2+L3 三层埋码"]
+        APP["BankController / Router / L0~L2 Agent"]
+        AGENT["OTel Java Agent (L1)"]
+        SAI["Spring AI Observation (L2)"]
+        BIZ["业务指标 Micrometer (L3)"]
+        APP --> AGENT; APP --> SAI; APP --> BIZ
+    end
+
+    subgraph COLL["OTel Collector (集群, 按需)"]
+        RECV["otlp receiver"]
+        PROC["memory_limiter → tail_sampling → filter → batch"]
+        RECV --> PROC
+    end
+
+    subgraph STORE["标准可观测栈"]
+        TEMPO["Tempo (trace)"]
+        VM["VictoriaMetrics (metrics)"]
+        LOKI["Loki (log)"]
+    end
+
+    subgraph BACK["自研 Backend / 信创 DB"]
+        OB["OceanBase / GaussDB — 业务真相源"]
+    end
+
+    subgraph UI["前端"]
+        GRAF["Grafana (运维看板)"]
+        FE["自研前端 v24 (业务洞察)"]
+    end
+
+    AGENT --> RECV; SAI --> RECV; BIZ --> RECV
+    PROC --> TEMPO; PROC --> VM; PROC --> LOKI; PROC --> OB
+    TEMPO --> GRAF; VM --> GRAF; LOKI --> GRAF
+    OB --> FE; OB --> GRAF
+```
+
+### 2.2 方案 B 架构（国产化务实版）
+
+```mermaid
+flowchart TB
+    subgraph CORE["Core 应用 — L1+L2+L3"]
+        APP["BankController / Router"]
+        AGENT["OTel Java Agent (L1)"]
+        SAI["Spring AI Observation (L2)"]
+        BIZ["业务指标 Micrometer (L3)"]
+        APP --> AGENT; APP --> SAI; APP --> BIZ
+    end
+
+    subgraph COLL["OTel Collector (单实例 → 集群按需)"]
+        RECV["otlp receiver"]
+        PROC["memory_limiter → tail_sampling → filter → batch"]
+        RECV --> PROC
+    end
+
+    subgraph BACK["自研 Backend"]
+        API["OTLP Receiver + 查询 API"]
+        OB[("信创 DB — spans / metrics_agg / logs / sessions")]
+        REDIS[("Redis — 实时热层")]
+        API --> OB; API --> REDIS
+    end
+
+    subgraph UI["前端"]
+        FE["自研前端 v24 — 7页"]
+        GRAF["Grafana (可选, SRE 排障)"]
+    end
+
+    AGENT --> RECV; SAI --> RECV; BIZ --> RECV
+    PROC --> API
+    OB --> FE; REDIS --> FE
+    GRAF -.可选.-> FE
+```
+
+### 2.3 架构设计决策
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D1 | P0 即用信创 DB，不引入新存储 | 银行已有 OceanBase/GaussDB 等，复用即可 |
+| D2 | 方案 A 保留原 V6 设计的 LGTM 栈 | 允许引入新开源 DB 的银行可选，业界标准 |
+| D3 | 方案 B 仅 OTel Agent + Collector | 国产化约束严格的银行底线方案 |
+| D4 | 自研前端专注 B+C 类 AI 业务洞察 | A 类基础指标交 Grafana（方案A）或自研（方案B） |
+| D5 | Langfuse 排除 | 银行无 PG，MLflow 替代 |
+| D6 | 三层埋码互补 | L1(Agent)+L2(SAI Observation)+L3(业务手工) |
+
+## 3. 分阶段实施计划
+
+### 方案 B 实施（任何银行适用）
+
+| 阶段 | 目标 | 关键任务 |
+|---|---|---|
+| **P0** | OTLP 打通 + 信创 DB 就位 | ① OTel Agent 挂载 ② Collector 单实例 ③ 按银行 DB 选 SQL 建表 ④ Backend OTLP Receiver |
+| **P1** | 采样 + 归档 | ① tail_sampling 分级 ② 物化视图 ③ 大数据系统归档 ④ TLS+RBAC |
+| **P2** | LLM 工程 | ① MLflow 接入 ② 自研 prompt_versions 表 ③ DeepEval 评估 |
+| **P3** | HA + 合规 | ① Collector 双实例 ② 3 年冷归档 ③ VM（按需） |
+
+### 方案 A 实施（条件成熟的银行）
+
+| 阶段 | 额外任务（在方案 B 基础上） |
+|---|---|
+| **P1** | 部署 Tempo + VM + Loki + Grafana docker compose |
+| **P2** | Collector 加 Tempo/VM/Loki exporter + 告警迁 Grafana |

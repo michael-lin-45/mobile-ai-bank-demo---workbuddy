@@ -1,5 +1,7 @@
 import React, { useState, useCallback } from 'react';
+import { Tag } from 'antd';
 import MetricCard from '../components/MetricCard';
+import ZoneBadge from '../components/dashboard/ZoneBadge';
 import { fetchRealtimeMetrics } from '../api/client';
 import usePolling from '../hooks/usePolling';
 import DiagnosisSummary4Cards from '../components/dashboard/DiagnosisSummary4Cards';
@@ -8,11 +10,13 @@ import ZoneDBusiness from '../components/dashboard/ZoneDBusiness';
 import ZoneERag from '../components/dashboard/ZoneERag';
 
 /**
- * 总览大屏（V23 M6 / 任务分解 B3 重构）。
+ * 总览大屏（V24 二次对齐 · 任务 T01/T05）。
  *
- * 结构：诊断摘要 4 卡 + Zone A-E，吃 B2 实时指标与业务埋点数据。
- * 删除冗余：数据健康 health-pill、请求 Token 趋势、Agent 分布、
- * 性能瓶颈详情、底部慢调用 TopN（M6④）。
+ * 本次对齐项（docs/specs/可观测V24-对齐差距分析）：
+ *   - (b) Zone 字母徽标 A/B/C/D/E 统一渲染（sectionHeaderStyle 现消费 <ZoneBadge>）
+ *   - (T05) 各 Zone 接入状态徽标 + Zone A DAU「待接入」标注
+ *   - (反馈1) Zone B「P95 系统时延」移除错误率 badge（后端不发射该字段，原 0.12 为占位兜底）
+ * 删除冗余：数据健康 health-pill、请求 Token 趋势、Agent 分布、性能瓶颈详情、底部慢调用 TopN。
  */
 function DashboardPage() {
   const [metrics, setMetrics] = useState(null);
@@ -35,8 +39,6 @@ function DashboardPage() {
   usePolling(loadMetrics, 3000, true);
 
   // 诊断摘要 4 卡数据源（风险计数卡，对齐 DEMO V23）。
-  // 优先从 insights 聚合取数（后端就绪后替换）；未就绪用 mock 形状兜底，
-  // 不再从 RealtimeMetricsVO 取 KPI 渲染此卡。
   const risks = {
     perf: 2,
     accuracy: 3,
@@ -97,10 +99,12 @@ function DashboardPage() {
       {/* 诊断摘要 4 卡（风险卡，下钻「智能诊断」/「满意度」） */}
       <DiagnosisSummary4Cards risks={risks} />
 
-      {/* Zone A — 系统健康 */}
+      {/* Zone A — 系统健康（已接通） */}
       <div>
-        <div style={sectionHeaderStyle('#1677ff', 'A')}>
+        <div style={sectionHeaderStyle('#1677ff')}>
+          <ZoneBadge letter="A" color="#1677ff" />
           系统健康
+          <ZoneStatusBadge text="已接通" tone="success" />
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
           <MetricCard
@@ -111,7 +115,12 @@ function DashboardPage() {
             delta={metrics.activeSessionsDelta || null}
             deltaUp={metrics.activeSessionsDeltaUp}
             deltaNote="较昨日"
-            sub={`实时在线 ${metrics.realTimeOnline != null ? metrics.realTimeOnline + ' 人' : '-'}`}
+            sub={(
+              <span>
+                实时在线 {metrics.realTimeOnline != null ? metrics.realTimeOnline + ' 人' : '-'}
+                <Tag color="default" style={{ marginLeft: 6, fontSize: 10, lineHeight: '16px' }}>DAU 待接入</Tag>
+              </span>
+            )}
             sparkColor="#1677ff"
             sparkData={[1180, 1205, 1220, 1240, 1260, 1275, 1284]}
           />
@@ -141,10 +150,12 @@ function DashboardPage() {
         </div>
       </div>
 
-      {/* Zone B — AI 性能 */}
+      {/* Zone B — AI 性能（已接通） */}
       <div>
-        <div style={sectionHeaderStyle('#722ed1', 'B')}>
+        <div style={sectionHeaderStyle('#722ed1')}>
+          <ZoneBadge letter="B" color="#722ed1" />
           AI 性能
+          <ZoneStatusBadge text="已接通" tone="success" />
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
           <MetricCard
@@ -198,7 +209,7 @@ function DashboardPage() {
   );
 }
 
-function sectionHeaderStyle(color, tag) {
+function sectionHeaderStyle(color) {
   return {
     fontSize: 13,
     fontWeight: 600,
@@ -210,6 +221,30 @@ function sectionHeaderStyle(color, tag) {
     paddingLeft: 10,
     borderLeft: `3px solid ${color}`,
   };
+}
+
+/** Zone 接入状态徽标（T05：A/B 已接通 / C/D 部分待接入 / E 待 Core RAG 链路接入） */
+function ZoneStatusBadge({ text, tone }) {
+  const toneMap = {
+    success: { color: '#52c41a', bg: '#f6ffed', border: '#b7eb8f' },
+    warning: { color: '#d48806', bg: '#fffbe6', border: '#ffe7ba' },
+  };
+  const t = toneMap[tone] || toneMap.warning;
+  return (
+    <span
+      style={{
+        marginLeft: 'auto',
+        fontSize: 11,
+        color: t.color,
+        background: t.bg,
+        border: `1px solid ${t.border}`,
+        borderRadius: 4,
+        padding: '1px 8px',
+      }}
+    >
+      {text}
+    </span>
+  );
 }
 
 /** 格式化大数字 */

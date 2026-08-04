@@ -1,0 +1,138 @@
+{
+  "dashboardNavHrefs": [],
+  "accuracy": {
+    "title": "Mobile AI Bank — Observability",
+    "url": "http://localhost:3000/accuracy",
+    "canvas": 0,
+    "snippet": "BA Bank AI observability 监控 总览大屏 会话回放 链路追踪 AI 洞察 日志查询 管理 告警规则 系统设置 mobile-ai-demo · v0.1 总览大屏 DEV 数据健康：健康 最近6小时",
+    "hasCramers": false,
+    "hasTop3": false,
+    "hasAxis": false,
+    "hasRag": false
+  },
+  "insightDeepLinks": [
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "BABank AIobservability监控总览大屏会话",
+      "cls": ""
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "BABank AIobservability监控总览大屏会话",
+      "cls": "ant-layout ant-layout-has-sider css-dev-"
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "总览大屏DEV数据健康：健康最近6小时home / AI 洞",
+      "cls": "ant-layout css-dev-only-do-not-override-"
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "home / AI 洞察LIVE智能诊断诊断看准确率分析算法",
+      "cls": ""
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "智能诊断诊断看准确率分析算法看Agent 性能开发看Toke",
+      "cls": "ant-card ant-card-bordered css-dev-only-"
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "智能诊断诊断看准确率分析算法看Agent 性能开发看Toke",
+      "cls": "ant-card-body"
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "智能诊断诊断看准确率分析算法看Agent 性能开发看Toke",
+      "cls": "ant-tabs ant-tabs-top ant-tabs-large css"
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "🧠智能诊断摘要更新于 2 分钟前 · 基于近 6h 数据 ",
+      "cls": "ant-tabs-content-holder"
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "🧠智能诊断摘要更新于 2 分钟前 · 基于近 6h 数据 ",
+      "cls": "ant-tabs-content ant-tabs-content-top"
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "🧠智能诊断摘要更新于 2 分钟前 · 基于近 6h 数据 ",
+      "cls": "ant-tabs-tabpane ant-tabs-tabpane-active"
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "🧠智能诊断摘要更新于 2 分钟前 · 基于近 6h 数据 ",
+      "cls": ""
+    },
+    {
+      "tag": "DIV",
+      "href": null,
+      "text": "诊断摘要查看智能诊断 →性能瓶颈2理财咨询 P95 超标准确",
+      "cls": ""
+    }
+  ],
+  "demo": {
+    "title": "Bank AI Observability — v23 · WorkBuddy 设计稿（智能诊断 TAB1 + 外部调用 + RAG）",
+    "url": "file:///D:/GitHub/mobile-ai-bank-demo%20-%20workbuddy/docs/specs/%E5%8F%AF%E8%A7%82%E6%B5%8BDEMO-v24-WorkBuddy.html",
+    "canvas": 32,
+    "snippet": "BA Bank AI 可观测 监控 📊 总览大屏 💬 会话回放 🔗 链路追踪 🧠 AI 洞察 📋 日志查询 管理 🔔 告警规则 ⚙️ 系统设置 Collector Online · v17 总览大屏 DEV 最近 1h 最近 6h 最近 24h ↻ 刷新 📊 诊断摘要 自动跨 TAB 聚合 · 近 6h 窗口 性能瓶颈 2 理财咨询 P95 超标 准确率风险 3 低置信度意图 转化流失 1 参数提取阶段 满意度 4.1 ↑ 0.2 较昨日 A 系统健康 已接通 访问用户量(DAU) 待接入 1,284人 ↑ 12.3% DAU 由 SessionBridge 上报 userId 去重 访问次数 / QPS 📈 45.2req/s ↑ 8.7% 6h 累计 976,128 次（Redis 6h 窗口） Agent 调用 L0/L1/L2 🤖 3,842次 ↑ 6.5% H2 spans 真实计数（L0≥L1≥L2） B AI 性能 已接通 Token 调用量 🪙 2.34M ↑ 23.1% 输入 1.82M · 输出 0.52M 首 Token 时延 P95 ⏱ 48",
+    "navTexts": [
+      "BABank AI 可观测",
+      "BA",
+      "监控",
+      "📊 总览大屏",
+      "💬 会话回放",
+      "🔗 链路追踪",
+      "🧠 AI 洞察",
+      "📋 日志查询",
+      "管理",
+      "🔔 告警规则",
+      "⚙️ 系统设置",
+      "总览大屏DEV",
+      "↻ 刷新",
+      "📊 诊断摘要",
+      "性能瓶颈",
+      "2",
+      "理财咨询 P95 超标",
+      "准确率风险",
+      "3",
+      "低置信度意图",
+      "转化流失",
+      "1",
+      "参数提取阶段",
+      "满意度",
+      "4.1",
+      "↑ 0.2 较昨日",
+      "A 系统健康 已接通",
+      "访问用户量(DAU)待接入",
+      "1,284人",
+      "↑ 12.3%",
+      "访问次数 / QPS📈",
+      "45.2req/s",
+      "↑ 8.7%",
+      "Agent 调用 L0/L1/L2🤖",
+      "3,842次",
+      "↑ 6.5%",
+      "B AI 性能 已接通",
+      "Token 调用量🪙",
+      "2.34M",
+      "↑ 23.1%"
+    ],
+    "hasCramers": false,
+    "hasTop3": false,
+    "hasAxis": false
+  }
+}

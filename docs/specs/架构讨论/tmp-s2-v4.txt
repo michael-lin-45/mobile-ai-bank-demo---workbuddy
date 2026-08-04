@@ -1,0 +1,79 @@
+## 2. 系统目标架构（0728 Demo 版）
+
+### 2.1 方案 B 目标架构（推荐版）
+
+```mermaid
+flowchart TB
+    subgraph CORE["Core 应用 (8080) — L1+L2+L3 三层埋码"]
+        APP["BankController / Router / L0~L2 Agent"]
+        AGENT["OTel Java Agent (L1, 零代码)"]
+        SAI["Spring AI Observation (L2, 自动 gen_ai.*)"]
+        OBS["ObsChatModel 补 TTFT (L2 补充, 不是第4层)"]
+        BIZ["业务指标 Micrometer (L3, deepflux.*)"]
+        APP --> AGENT
+        APP --> SAI
+        APP --> OBS
+        APP --> BIZ
+    end
+
+    subgraph COLL["OTel Collector (4318, 单实例, 不采样)"]
+        RECV["otlp receiver"]
+        PROC["memory_limiter -> filter -> batch"]
+        RECV --> PROC
+    end
+
+    subgraph BACK["自研 Backend (9090)"]
+        API["OTLP Receiver + 查询 API"]
+        H2[("H2 文件库 — spans / metrics_agg / logs / sessions / session_turns")]
+        REDIS[("Redis (可选) — 实时热层")]
+        API --> H2
+        API --> REDIS
+    end
+
+    subgraph LANG["Langfuse (可选, docker compose)"]
+        LF["Web:3001 + Worker + PG + ClickHouse + Redis + MinIO"]
+    end
+
+    subgraph UI["前端"]
+        FE["自研前端 v24 — 7页: 总览/会话回放/链路追踪/AI洞察(7TAB)/日志/告警/设置"]
+    end
+
+    AGENT --> RECV
+    SAI --> RECV
+    OBS --> RECV
+    BIZ --> RECV
+    PROC --> API
+    PROC -.OTLP 第二消费者.-> LANG
+    H2 --> FE
+    REDIS --> FE
+    LANG -.deeplink 跳转.-> FE
+```
+
+### 2.2 架构设计决策
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D1 | Demo 用 H2 嵌入式文件库 | 零配置，10 分钟启动 |
+| D2 | 不引入 VM/Tempo/Loki | 生产级专用存储，Demo 不需要。V6 方案A中保留 |
+| D3 | 方案 B Langfuse docker compose | 容器内全自动，零外部依赖 |
+| D4 | 自研前端 v24 主入口 | 7 页 + AI 洞察 7 TAB，Grafana 可选 |
+| D5 | OTel Collector 单实例不采样 | Demo 全量采集 |
+| D6 | 三层埋码互补 | L1(Agent)+L2(SAI Observation)+L3(业务手工) |
+
+### 2.3 组件对接关系
+
+- **Core -> Collector**：OTLP HTTP `:4318`，三信号（traces + metrics + logs）
+- **Collector -> Backend**：OTLP HTTP `:9090/v1`，所有遥测写入 H2
+- **Collector -> Langfuse（可选）**：OTLP HTTP `:3001`，trace 第二消费者
+- **Backend -> 前端**：REST API，H2 查 spans/sessions/metrics_agg/logs
+- **Langfuse -> 前端（可选）**：deeplink 跳转
+
+### 2.4 Demo 与生产差异
+
+| 维度 | Demo (方案B) | 生产 (V6方案A) |
+|---|---|---|
+| 存储 | H2 嵌入式 | Tempo + VM + Loki + 信创DB |
+| LLM 工程 | Langfuse docker compose | MLflow + 自研 |
+| Collector | 单实例，不采样 | 集群，tail_sampling |
+| Kafka | 不需要 | 按需 |
+| 前端 | 自研 v24 | 自研 + Grafana |

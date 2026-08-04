@@ -1,75 +1,87 @@
-%% ============ 6.1 TC-E-002 死 key 自动核查调用链（W3 新增） ============
 sequenceDiagram
-    participant T as test_dead_keys.py (TC-E-002)
-    participant AC as AdminController
-    participant REPO as RedisMetricsSnapshotRepository
-    participant H2 as H2 (redis_metrics_snapshot)
+    participant U as 用户
+    participant AT as AccuracyTab
+    participant API as fetchAIAccuracyReport
+    participant MK as mockInsights(兜底)
+    participant HC as HeatmapChart
+    participant CS as confusionStats
 
-    T->>AC: GET /api/v1/admin/diagnostics/dead-keys
-    AC->>REPO: countDeadKeys(DEAD_KEYS)
-    REPO->>H2: SELECT COUNT(*) WHERE metric_key IN (5 keys)
-    H2-->>REPO: totalDead (期望 0)
-    REPO-->>AC: long
-    AC-->>T: ApiResponse{data:{deadKeys,totalDead,allClear}}
-    alt totalDead == 0
-        T->>T: runner.pass_("TC-E-002")
-    else 端点不可达 / 非 200
-        T->>T: runner.skip("TC-E-002", 优雅降级)
-    else totalDead > 0
-        T->>T: runner.fail("TC-E-002")
+    U->>AT: 进入「准确率分析」TAB
+    AT->>API: GET /ai/accuracy-report
+    alt 成功且非空
+        API-->>AT: {overallStats, confusion:{labels,matrix}, ...}
+    else 空/失败
+        AT->>MK: getAccuracyReportMock()
+        MK-->>AT: 同形状(含 confusion)
     end
+    AT->>HC: <HeatmapChart matrix=confusion.matrix labels=confusion.labels/>
+    HC->>CS: rowNormalize(matrix)
+    HC->>CS: computeCramersV(matrix)
+    HC->>CS: computeTopConfusionPairs(labels, matrix, 3)
+    CS-->>HC: rowNormalized / cramersV / topPairs
+    HC-->>U: 对角线深绿热力图 + 只标百分比 + 发散色板 + Cramér's V 摘要卡 + 下方 Top-3 混淆对
 
-%% ============ 6.2 TC-J-002 pending_approval ±1 语义集成测试步骤链（W3 新增） ============
+    Note over AT: 准确率概览条 buildSummaryItems(overallStats)<br/>若"混淆率"字段缺失则跳过该项(h)
+
+---
+
 sequenceDiagram
-    participant T as test_metrics.py (TC-J-002)
-    participant CORE as Core /actuator/metrics
-    participant BC as BankController (8080)
-    participant GES as GraphExecutionEngine
-    participant MR as MetricsRegistry
+    participant U as 用户
+    participant DP as DashboardPage
+    participant API as fetchRealtimeMetrics
+    participant ZC as ZoneCSemantic
+    participant ZD as ZoneDBusiness
+    participant ZE as ZoneERag
+    participant MS as MiniSpark
+    participant ZB as ZoneBadge
 
-    T->>CORE: GET .../pending_approval?tag=intent:TRANSFER
-    CORE-->>T: B (baseline, 如 0)
-    T->>BC: POST /api/bank/chat?sessionId=TCJ2_TFR_01 {"message":"转账给李四"}
-    BC->>GES: executeGraph(TRANSFER)
-    GES->>GES: checkGraphResult → INTERRUPTED
-    GES->>MR: addUpDown(+1, intent=TRANSFER)
-    BC-->>T: {status: INTERRUPTED}
-    T->>CORE: GET .../pending_approval?tag=intent:TRANSFER
-    CORE-->>T: V1 (断言 V1 - B == 1)
-    T->>BC: POST /api/bank/chat?sessionId=TCJ2_TFR_01 {"message":"500"}
-    BC->>GES: resumeGraph(TRANSFER)
-    GES->>GES: checkGraphResult → COMPLETED
-    GES->>MR: addUpDown(-1, intent=TRANSFER)
-    BC-->>T: {status: COMPLETED}
-    T->>CORE: GET .../pending_approval?tag=intent:TRANSFER
-    CORE-->>T: V2 (断言 V2 - V1 == -1 且 V2 == B)
+    U->>DP: 进入总览大屏
+    DP->>API: GET /metrics/realtime (3s 轮询)
+    API-->>DP: RealtimeMetricsVO
+    DP->>ZB: 各 Zone header 渲染字母徽标 A/B/C/D/E(b)
+    DP->>ZC: metrics → Zone C 3 卡
+    DP->>ZD: metrics → Zone D 3 卡
+    DP->>ZE: metrics → Zone E 3 卡
+    ZC->>MS: 每卡 sparkData(a)
+    ZD->>MS: 每卡 sparkData(a)
+    ZE->>MS: 每卡 sparkData(a)
+    ZE->>ZE: 按 goodWhenUp 修正环比配色(g)
+    DP->>DP: Zone B「P95 系统时延」sub 补错误率 badge(c, 取 metrics.systemErrorRate ?? 0.12)
 
-%% ============ 6.3 P13 / P20 单测链（W3 新增 JUnit） ============
+---
+
 sequenceDiagram
-    participant UT as PromptVersionServiceTest
-    participant SVC as PromptVersionService
-    participant REPO as PromptVersionRepository
-    participant H2 as 内嵌 H2
+    participant U as 用户
+    participant ET as ExternalCallTab
+    participant RP as RagPanel
+    participant API as fetchInvocations('rag')
+    participant MK as mockInsights(RAG 兜底)
+    participant RQ as RagQualityChart
 
-    Note over UT: T-D P20 单测
-    UT->>SVC: create(key, c1, m)
-    SVC->>REPO: maxVersion(key)=0 → save(v1)
-    REPO->>H2: INSERT v1(version=1, ACTIVE)
-    UT->>SVC: create(key, c2, m)
-    SVC->>REPO: maxVersion(key)=1 → save(v2)
-    REPO->>H2: INSERT v2(version=2, DRAFT)
-    UT->>SVC: getActive(key)
-    SVC->>REPO: findByPromptKeyAndStatusOrderByVersionDesc(ACTIVE)
-    REPO-->>SVC: v1 (max ACTIVE)
-    UT->>SVC: activate(v2.id)
-    SVC->>REPO: 归档 v1→ARCHIVED, v2→ACTIVE
-    UT->>REPO: findById(v1.id)
-    REPO-->>UT: status==ARCHIVED ✔
+    U->>ET: 切到「RAG」Segmented
+    ET->>RP: <RagPanel/>
+    RP->>API: GET /invocations?category=rag
+    alt 后端未接入(404/空)
+        RP->>MK: getRagMock() → 5 子指标 + 质量分布(带 DEMO 角标)
+    else 成功
+        API-->>RP: 真实 RAG 指标
+    end
+    RP-->>U: 5 子指标 KPI + 趋势 + 检索质量子面板(Top-K 相关性分布图 RQ)
 
-    participant RT as InsightsEngineReadonlyTest
-    participant IES as InsightsEngineService
-    Note over RT: T-C P13 单测
-    RT->>IES: 反射 set readOnly=false
-    RT->>IES: generateReport()
-    IES->>IES: assertReadOnly() → throw
-    IES-->>RT: UnsupportedOperationException ✔
+---
+
+sequenceDiagram
+    participant U as 用户
+    participant DU as DiagnosisUnified
+    participant API as fetchInsightsActions
+    participant AL as ActionList
+    participant N as utils/nav(itab)
+
+    U->>DU: 进入智能诊断 TAB
+    DU->>API: GET /ai/insights/actions
+    API-->>DU: ActionItem[](含 tab 字段)
+    DU->>AL: actions
+    AL-->>U: 每条行动渲染「去{对应TAB} →」深链
+    U->>AL: 点击深链
+    AL->>N: itab(action.tab)
+    N-->>U: 跳转到对应 AI 洞察 TAB

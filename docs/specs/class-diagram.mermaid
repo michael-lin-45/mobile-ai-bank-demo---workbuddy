@@ -1,73 +1,98 @@
 classDiagram
-    %% ===== Q1 死 key 诊断（后端，新增/修改） =====
-    class AdminController {
-        - RedisMetricsSnapshotRepository snapshotRepository
-        - List~String~ DEAD_KEYS
-        + deadKeys() : ApiResponse~DeadKeyDiagnostics~
+    class ConfusionMatrixData {
+        +string[] labels
+        +number[][] matrix
     }
-    class RedisMetricsSnapshotRepository {
-        + countDeadKeys(List~String~ keys) : long
-        + findDeadKeyHits(List~String~ keys) : List~String~
+    class ConfusionStats {
+        +number[][] rowNormalized
+        +number cramersV
+        +number total
+        +ConfusionPair[] topPairs
     }
-    class RedisMetricsSnapshot {
-        + Long id
-        + String metricKey
-        + String metricType
-        + Double metricValue
-        + String tags
-        + Instant timestamp
+    class ConfusionPair {
+        +string actual
+        +string predicted
+        +number pct
     }
-    AdminController --> RedisMetricsSnapshotRepository : 查询
-    RedisMetricsSnapshotRepository ..> RedisMetricsSnapshot : 映射
+    class confusionStats {
+        +rowNormalize(m: number[][]) number[][]
+        +computeCramersV(m: number[][]) number
+        +computeTopConfusionPairs(labels, m, topN) ConfusionPair[]
+    }
+    class HeatmapChart {
+        +string[] xLabels
+        +string[] yLabels
+        +number[][] matrix
+        +boolean showCramers
+        +boolean showTopPairs
+        +boolean narrow
+        +render()
+    }
+    class AccuracyTab {
+        +loadData()
+        +buildSummaryItems(stats) items
+    }
+    class ZoneMetric {
+        +string title
+        +value: string|number
+        +string color
+        +string delta
+        +boolean deltaUp
+        +boolean goodWhenUp
+        +number[] sparkData
+        +badge
+    }
+    class MiniSpark {
+        +number[] data
+        +string color
+    }
+    class ZoneBadge {
+        +string letter
+        +string color
+    }
+    class ActionItem {
+        +string title
+        +string severity
+        +InsightTabKey tab
+    }
+    class ActionList {
+        +ActionItem[] actions
+        +renderDeepLink()
+    }
+    class RagRunMetrics {
+        +number reorderP95Ms
+        +number recallDocs
+        +number triggerRate
+        +number retrieveErrRate
+        +number reorderErrRate
+    }
+    class RagQualityData {
+        +topK
+        +table
+    }
+    class RagPanel {
+        +RagRunMetrics run
+        +RagQualityData quality
+        +render()
+    }
+    class RagQualityChart {
+        +render()
+    }
 
-    %% ===== Q2 pending_approval（Core，已存在，仅测试契约） =====
-    class BankController {
-        + chat(sessionId, message) : ResponseEntity
-    }
-    class AbstractDomainService {
-        + executeNewAgent(sessionId, intent, input)
-        + resumeActiveAgent(sessionId, input, active)
-    }
-    class GraphExecutionEngine {
-        + executeGraph(...) : Flux~StreamChunk~
-        + resumeGraph(...) : Flux~StreamChunk~
-    }
-    class MetricsRegistry {
-        + addUpDown(measure, delta, tags...)
-        + getUpDown(measure, tags...) : long
-    }
-    BankController --> AbstractDomainService : 分发
-    AbstractDomainService --> GraphExecutionEngine : execute/resume
-    GraphExecutionEngine --> MetricsRegistry : +1 / -1 (pending_approval)
-
-    %% ===== P13 只读闸门（已存在，补 JUnit 验证） =====
-    class InsightsEngineService {
-        - boolean readOnly
-        + generateReport() : Map
-        + refresh() : Map
-        - assertReadOnly() : void
-    }
-    InsightsEngineService ..> UnsupportedOperationException : readOnly=false 时抛出
-
-    %% ===== P20 提示词版本化（已存在，补 JUnit 验证） =====
-    class PromptVersionService {
-        + create(key, content, model) : PromptVersion
-        + getActive(key) : PromptVersion
-        + activate(id) : PromptVersion
-        + listByPromptKey(key) : List~PromptVersion~
-    }
-    class PromptVersionRepository {
-        + maxVersion(key) : int
-        + findByPromptKeyAndStatusOrderByVersionDesc(key, status) : List~PromptVersion~
-        + findById(id) : Optional~PromptVersion~
-    }
-    class PromptVersion {
-        + Long id
-        + String promptKey
-        + int version
-        + String content
-        + String model
-        + String status
-    }
-    PromptVersionService --> PromptVersionRepository
-    PromptVersionRepository ..> PromptVersion
+    ConfusionMatrixData ..> ConfusionStats : compute
+    confusionStats ..> ConfusionStats : builds
+    ConfusionStats *-- ConfusionPair
+    HeatmapChart ..> ConfusionMatrixData : consumes
+    HeatmapChart ..> confusionStats : derives stats
+    AccuracyTab ..> HeatmapChart : renders
+    ZoneCSemantic ..> ZoneMetric : builds
+    ZoneDBusiness ..> ZoneMetric : builds
+    ZoneERag ..> ZoneMetric : builds(goodWhenUp)
+    ZoneMetric ..> MiniSpark : sparkData
+    ZoneBadge <.. ZoneCSemantic : header
+    ZoneBadge <.. ZoneDBusiness : header
+    ZoneBadge <.. ZoneERag : header
+    ActionList ..> ActionItem : renders deep link
+    RagPanel ..> RagRunMetrics : shows 5 KPIs
+    RagPanel ..> RagQualityData : quality panel
+    RagPanel ..> RagQualityChart : distribution

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { itab } from '../utils/nav';
 import {
   Card,
   Table,
@@ -271,6 +272,62 @@ export const SEVERITY_CONFIG = {
   LOW: { color: '#52c41a', bg: '#f6ffed', text: '低' },
 };
 
+/** AI 洞察 TAB 键 → 中文标签（深链文案，键域对齐 InsightTabKey） */
+export const TAB_LABEL = {
+  diagnosis: '智能诊断',
+  accuracy: '准确率',
+  rag: 'RAG',
+  funnel: '漏斗',
+  satisfaction: '满意度',
+  agent: 'Agent 性能',
+  perf: '性能',
+};
+
+/**
+ * 解析单条行动的「去对应 TAB」深链目标。
+ * - 优先用行动自带 tab（mock 已带 / 真实数据若下发）；
+ * - 真实后端未下发 tab 时（QA 缺陷2），先尝试把 type/category/metric 直接当 TAB 键，
+ *   否则按关键词从 title/description/impact 推断（funnel/accuracy/rag/satisfaction/agent/perf）。
+ * - 仍无法判定才兜底到 diagnosis（不阻断跳转）。
+ */
+function resolveActionTab(action) {
+  if (!action) return 'diagnosis';
+  // 1) 行动自带 tab（mock 已带 / 真实数据若下发）
+  if (action.tab && TAB_LABEL[action.tab]) return action.tab;
+
+  // 2) 真实后端 category（PERFORMANCE/ACCURACY/CONVERSION/RAG，大写）确定性映射到 TAB 键
+  //    避免依赖关键词猜测（如「检索」+「准确率」误路由）。其余小写键仍由 rule 3/4 兜底。
+  const ACTION_CATEGORY_TAB = { PERFORMANCE: 'perf', ACCURACY: 'accuracy', CONVERSION: 'funnel', RAG: 'rag' };
+  if (action.category && ACTION_CATEGORY_TAB[action.category]) return ACTION_CATEGORY_TAB[action.category];
+
+  // 3) type/category/metric 直接命中 TAB 键（小写键兜底）
+  const directKey = [action.category, action.type, action.metric]
+    .filter((k) => k && TAB_LABEL[k])
+    .shift();
+  if (directKey) return directKey;
+
+  // 3) 关键词启发式（优先级：rag > funnel > accuracy > satisfaction > agent > perf）
+  const text = [action.category, action.type, action.metric, action.title, action.description, action.impact, action.name]
+    .filter(Boolean)
+    .map((s) => String(s).toLowerCase())
+    .join(' ');
+
+  const RULES = [
+    ['rag', ['rag', '检索', '召回', '重排', '知识库', '向量', 'embedding', 'knowledge']],
+    ['funnel', ['漏斗', '表单', '放弃', '流失', '转化', 'form', 'abandon', 'funnel', 'conversion']],
+    ['accuracy', ['准确率', '改写', '实体', '意图', '识别', '命中', '相关性', 'accuracy', 'ner', 'rewrite', 'intent', 'recall']],
+    ['satisfaction', ['满意', '满意度', '投诉', 'nps', 'satisfaction', 'csat']],
+    ['agent', ['agent', '智能体', '助手', 'copilot', '助理', 'bot']],
+    ['perf', ['性能', '时延', '延迟', '扩容', '响应', 'p95', 'p99', 'ttft', 'tpot', 'latency', 'perf', 'slow', '耗时']],
+  ];
+  for (const [tab, kws] of RULES) {
+    if (kws.some((kw) => text.includes(kw))) return tab;
+  }
+
+  // 4) 兜底（仍保证可跳转，避免全部指向「智能诊断」的不可用态）
+  return 'diagnosis';
+}
+
 export function ActionList({ actions }) {
   if (!actions || actions.length === 0) {
     return <Empty description="暂无优化建议" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
@@ -280,12 +337,14 @@ export function ActionList({ actions }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {top5.map((a, idx) => {
         const sev = SEVERITY_CONFIG[a.severity] || SEVERITY_CONFIG.LOW;
+        const tabKey = resolveActionTab(a);
         return (
           <div
             key={a.id || idx}
             style={{
               display: 'flex',
               gap: 12,
+              alignItems: 'center',
               padding: '10px 14px',
               borderRadius: 6,
               border: `1px solid ${sev.bg === '#fff2f0' ? '#ffccc7' : '#f0f0f0'}`,
@@ -300,11 +359,12 @@ export function ActionList({ actions }) {
                 color: 'rgba(0,0,0,.4)',
                 width: 20,
                 textAlign: 'center',
+                flexShrink: 0,
               }}
             >
               {idx + 1}
             </div>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{a.title}</span>
                 <Tag color={sev.color} style={{ margin: 0, lineHeight: '18px' }}>
@@ -320,6 +380,22 @@ export function ActionList({ actions }) {
               </div>
               <div style={{ fontSize: 12, color: 'rgba(0,0,0,.65)' }}>{a.description}</div>
             </div>
+            {/* 去对应 TAB 深链（T02）：点击经 utils/nav.itab 跳转对应 AI 洞察 TAB */}
+            <a
+              onClick={(e) => {
+                e.stopPropagation();
+                itab(tabKey);
+              }}
+              style={{
+                fontSize: 12,
+                color: '#1677ff',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
+              去{TAB_LABEL[tabKey]} →
+            </a>
           </div>
         );
       })}

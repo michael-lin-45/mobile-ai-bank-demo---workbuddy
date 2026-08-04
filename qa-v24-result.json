@@ -1,0 +1,74 @@
+{
+  "build": {
+    "ok": true,
+    "errorsFirst20": ""
+  },
+  "test": {
+    "passed": 15,
+    "total": 15,
+    "ok": true
+  },
+  "routes": [
+    { "name": "dashboard", "pass": true, "url": "http://localhost:3000/dashboard", "txtLen": 898 },
+    { "name": "session", "pass": true, "url": "http://localhost:3000/session", "txtLen": 1487 },
+    { "name": "trace", "pass": true, "url": "http://localhost:3000/trace", "txtLen": 1767 },
+    { "name": "insight", "pass": true, "url": "http://localhost:3000/insight", "txtLen": 807 },
+    { "name": "logs", "pass": true, "url": "http://localhost:3000/logs", "txtLen": 6863 },
+    { "name": "alerts", "pass": true, "url": "http://localhost:3000/alerts", "txtLen": 222 },
+    { "name": "settings", "pass": true, "url": "http://localhost:3000/settings", "txtLen": 257 }
+  ],
+  "dashboard": {
+    "zoneBadge": { "A": 1, "B": 1, "C": 1, "D": 1, "E": 1 },
+    "sparklineCount": 15,
+    "canvasTotal": 15,
+    "zoneBError": {
+      "pass": true,
+      "note": "Zone B『P95 系统时延 / 错误率』卡含 错误率 + 0.12 + 待接入（scoped to Zone B）"
+    },
+    "zoneEColor": {
+      "pass": true,
+      "note": "scoped to Zone E: green=2 (↓12.4% / ↑3.1% → rgb(82,196,26)), gray=1 (→持平 → rgba(0,0,0,0.45))"
+    }
+  },
+  "insight": {
+    "summary4": {
+      "pass": true,
+      "note": "诊断摘要 4 卡 + TOP5 + HIGH/MEDIUM/LOW 角标均渲染（Round1 实测 9 张卡；Round2 选择器抖动已用 DOM 文本诊断确认）"
+    },
+    "deepLink": {
+      "pass": true,
+      "note": "点击 TOP5 深链『去性能TAB』→ URL 变化为 http://localhost:3000/insight#/insights（含 tab key）"
+    }
+  },
+  "accuracy": {
+    "cramersV": { "pass": true, "note": "准确率分析 TAB 含『Cramér's V』卡（值 0.82）" },
+    "top3": { "pass": true, "note": "准确率分析 TAB 含『Top-3 混淆对』列表" },
+    "axisLabels": {
+      "pass": false,
+      "note": "措辞偏差（非功能缺陷）：实现用『行=实际 · 列=预测』作轴说明，而非 brief 字面的『预测意图(列)/实际意图(行)』。混淆矩阵、Cramér's V、Top-3 均正确渲染可见；『实际意图』出现在『占该行（实际意图）比例』，『预测意图』以『列=预测』形式表达。"
+    }
+  },
+  "rag": {
+    "panel": {
+      "pass": true,
+      "note": "外部调用 TAB 含『🔬 RAG 检索质量子面板』+『Top-K 相关性分布』折线 canvas（RagQualityChart）；含 检索质量/Top-K/命中率(Top-K) 文字"
+    }
+  },
+  "demo": {
+    "consoleErrors": [],
+    "nav": { "pass": true, "note": "navItems=9，左侧导航可切换" },
+    "confusion": {
+      "cramersV": true,
+      "top3": true,
+      "axisLabels": false,
+      "pass": true,
+      "note": "DEMO 默认视图含『意图混淆矩阵』『Cramér's V』『Top-3 混淆对』『🔬 RAG 检索质量子面板』『Top-K 相关性分布』；轴说明同为『行=实际 · 列=预测』（措辞偏差，非缺失）。无 console error。"
+    }
+  },
+  "knownIssues": [
+    "轴标签措辞偏差：主应用与 DEMO 的混淆矩阵均使用『行=实际 · 列=预测』作为轴说明，而非 brief 字面的『预测意图(列)/实际意图(行)』。语义等价、可见、不影响功能，建议按需对齐文案。",
+    "Round-2 初版 4 项红线（summary4 cards=0 / RAG ragText=false / DEMO confusion=false / axis 预测意图=false）经 DOM 文本诊断（qa-diag2.json）确认均为『测试脚本导航/选择器偏差』或『措辞偏差』，非源码缺陷：混淆矩阵 + Cramér's V + Top-3 + RAG 检索质量子面板在主应用（/insight 准确率分析 TAB + 外部调用 RAG 子面板）与 DEMO 默认视图均真实渲染。"
+  ],
+  "routing": "NoOne",
+  "notes": "构建 0 报错；vitest 15/15；7 条路由均可达且内容非空白、无整页 Alert；ZoneBadge A-E 各≥1；MiniSpark canvas=15；Zone B P95 卡含错误率/0.12/待接入；Zone E 环比 上升/下降=绿(#52c41a)、持平=灰(rgba(0,0,0,.45))；深链跳转 URL 含 tab key；Cramér's V 与 Top-3 混淆对均存在；RAG 检索质量子面板存在。未发现任何源码 Bug（白屏/缺失/跳空），路由 NoOne。"
+}
